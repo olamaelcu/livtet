@@ -313,9 +313,9 @@ pub fn is_sync_pool_initialized() -> bool {
 /// or Late Night).
 #[uniffi::export]
 pub fn get_greeting() -> Greeting {
-    // TBD: the `livtet_core::Greeting` type and the quote source
-    // (`data/quotes/`) are not yet wired in `livtet-core`. Restore the
-    // real implementation once the greeting literal pool lands.
+    // TBD: the `livtet_core::Greeting` type and the quote source are not
+    // yet wired in `livtet-core`. Restore the real implementation once
+    // the greeting literal pool lands.
     panic!("TBD: Greeting/EmptyMessage quote source not in livtet-core")
 }
 
