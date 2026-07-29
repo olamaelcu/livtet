@@ -1,11 +1,11 @@
 use std::collections::BTreeMap;
 
-use camino::{Utf8Path, Utf8PathBuf};
-use ed25519_dalek::{Signer, SigningKey};
+use camino::Utf8PathBuf;
+use ed25519_dalek::Signer;
 use fs_err as fs;
 use livtet_plugins::{
     archive::{install::install, pack::pack},
-    keys::{TrustStore, fingerprint, keyfile::keygen, signing::parse_pubkey_text},
+    keys::{TrustStore, fingerprint, keyfile::keygen},
     repository::{
         client::{RepositoryClient, search_index},
         config::RepositoriesFile,
@@ -13,14 +13,12 @@ use livtet_plugins::{
         index::{Index, IndexPlugin, IndexVersionEntry, render_index_json, verify_index_signature},
         repo_toml::{RepoSection, RepoToml, SigningSection, render_repo_toml},
     },
-    types::{KeygenReport, Repository, RepositoryUpdateResult},
+    types::{Repository, RepositoryUpdateResult},
 };
 mod common;
 use common::verifying_key_from_keygen_report;
-use livtet_test_utils::{
-    TestServer, build_response, http_response, parse_request_path, spawn_server,
-};
-use rand::{Rng as _, rng};
+use livtet_test_utils::spawn_server;
+use rand::Rng as _;
 use camino_tempfile::Utf8TempDir as TempDir;
 
 fn sample_repo_toml() -> RepoToml {

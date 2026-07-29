@@ -52,8 +52,6 @@ pub async fn init_inner(db_path: &str) -> Result<(), MobileError> {
     init_logger();
     tracing::info!(db_path = %db_path, "Initializing database");
 
-    let db_path_str = db_path.to_string();
-
     tracing::info!("File deletion complete, creating new pool");
 
     let pool = state::init_db_pool(db_path).await.map_err(|e| {

@@ -6,7 +6,6 @@ use std::{
 };
 
 use camino::Utf8Path;
-use common::as_utf8;
 use livtet_plugins::{
     manifest::PluginManifest,
     protocol::{HostToMain, MainToHost, MainToHostCallback},

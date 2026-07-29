@@ -108,22 +108,9 @@ pub struct CommandEnv {
 /// low-level [`HostManager::spawn_with_db_emitter_log_dir`]
 /// signature stays at six arguments. Callers that don't care about
 /// Lua use [`HostSpawnConfig::default`].
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct HostSpawnConfig {
-    pub http_client: reqwest::Client,
     pub command_env: CommandEnv,
-}
-
-impl Default for HostSpawnConfig {
-    fn default() -> Self {
-        Self {
-            http_client: reqwest::Client::builder()
-                .timeout(Duration::from_secs(300))
-                .build()
-                .unwrap_or_else(|_| reqwest::Client::new()),
-            command_env: CommandEnv::default(),
-        }
-    }
 }
 
 struct PluginVersion {
@@ -177,19 +164,12 @@ pub struct PluginHostManager {
     loaded_plugins: HashMap<String, LoadedPlugin>,
     pending_calls: HashMap<String, PendingCall>,
     runtime: String,
-    http_client: reqwest::Client,
     /// Pool used to answer host-side requests for library data
     /// (`host.resolve_identifier`, `host.get_edition_info`,
     /// etc.). `None` for callers that don't need DB-backed
     /// answers — the request handlers return an error instead of
     /// hanging the host function on a SQL query.
     db: Option<SqlitePool>,
-    /// Sink for the `"reading-progress-updated"` (and future)
-    /// Tauri events. The dispatcher hands it a JSON payload
-    /// after a successful write; the Tauri wiring translates
-    /// that into an `app.emit(...)` call. `None` is a no-op
-    /// fallback (legacy spawn, unit tests).
-    event_emitter: Option<SharedEventEmitter>,
     /// Plugin ids the user has disabled. Applies to both
     /// bundled and disk-installed plugins. Persisted to
     /// `installed.json` by the Tauri command layer; the manager
@@ -292,7 +272,7 @@ impl PluginHostManager {
         db: Option<SqlitePool>,
         hmac_key: Arc<HmacKey>,
     ) -> PluginResult<Self> {
-        Self::spawn_with_db_and_emitter(binary, plugin_dir, db, None, hmac_key).await
+        Self::spawn_with_db_and_emitter(binary, plugin_dir, db, hmac_key).await
     }
 
     /// Like [`Self::spawn_with_db`] but also installs the
@@ -310,14 +290,12 @@ impl PluginHostManager {
         binary: &Utf8Path,
         plugin_dir: Utf8PathBuf,
         db: Option<SqlitePool>,
-        event_emitter: Option<SharedEventEmitter>,
         hmac_key: Arc<HmacKey>,
     ) -> PluginResult<Self> {
         Self::spawn_with_db_emitter_log_dir(
             binary,
             plugin_dir,
             db,
-            event_emitter,
             None,
             hmac_key,
             HostSpawnConfig::default(),
@@ -335,7 +313,6 @@ impl PluginHostManager {
         binary: &Utf8Path,
         plugin_dir: Utf8PathBuf,
         db: Option<SqlitePool>,
-        event_emitter: Option<SharedEventEmitter>,
         log_dir: Option<Utf8PathBuf>,
         hmac_key: Arc<HmacKey>,
         config: HostSpawnConfig,
@@ -362,9 +339,7 @@ impl PluginHostManager {
             loaded_plugins: HashMap::new(),
             pending_calls: HashMap::new(),
             runtime: String::new(),
-            http_client: config.http_client,
             db,
-            event_emitter,
             disabled: HashSet::new(),
             plugin_dir: plugin_dir.clone(),
             hmac_key,
@@ -1653,14 +1628,6 @@ impl PluginHostManager {
         }
     }
 
-    /// TBD: `handle_http_request` was the host-side bridge that proxied
-    /// plugin HTTP requests through the parent process. It was deleted
-    /// alongside `livtet_core::crud`. Restore once a replacement
-    /// IPC-bridge channel lands.
-    async fn handle_http_request(&self, _msg: HostToMain) {
-        panic!("TBD: handle_http_request host bridge removed; see livtet-plugins/src/host_manager.rs")
-    }
-
     /// TBD: `handle_get_edition_info` was the last DB-backed host
     /// bridge left after the CRUD module was deleted. Restore once a
     /// replacement bridge ships.
@@ -1705,39 +1672,6 @@ fn callback_request_id(msg: &HostToMain) -> Option<&str> {
         | HostToMain::ReadAssetRequest { id, .. } => Some(id.as_str()),
         _ => None,
     }
-}
-
-async fn execute_http_request(
-    client: &reqwest::Client,
-    method: &str,
-    url: &str,
-    body: Option<String>,
-    headers: Vec<(String, String)>,
-) -> Result<(u16, Option<String>, Vec<(String, String)>), String> {
-    let method = reqwest::Method::from_bytes(method.as_bytes())
-        .map_err(|e| format!("invalid http method: {e}"))?;
-    let mut request = client.request(method, url);
-    for (name, value) in headers {
-        request = request.header(name, value);
-    }
-    if let Some(b) = body {
-        request = request.body(b);
-    }
-    let response = request
-        .send()
-        .await
-        .map_err(|e| format!("http send failed: {e}"))?;
-    let status = response.status().as_u16();
-    let response_headers: Vec<(String, String)> = response
-        .headers()
-        .iter()
-        .map(|(k, v)| (k.to_string(), v.to_str().unwrap_or("").to_string()))
-        .collect();
-    let body = response
-        .text()
-        .await
-        .map_err(|e| format!("http read body failed: {e}"))?;
-    Ok((status, Some(body), response_headers))
 }
 
 #[cfg(test)]

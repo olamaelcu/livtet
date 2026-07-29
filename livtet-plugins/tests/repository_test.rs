@@ -1,7 +1,7 @@
 use std::{assert_matches, collections::BTreeMap};
 
-use camino::{Utf8Path, Utf8PathBuf};
-use ed25519_dalek::{Signer, SigningKey, VerifyingKey};
+use camino::Utf8PathBuf;
+use ed25519_dalek::{Signer, VerifyingKey};
 use fs_err as fs;
 use livtet_plugins::{
     archive::{install::install, pack::pack, verify::verify},
@@ -18,7 +18,7 @@ use livtet_plugins::{
     },
     types::{Repository, RepositoryAddResult, RepositoryUpdateResult},
 };
-use rand::{Rng as _, rng};
+use rand::Rng as _;
 use camino_tempfile::Utf8TempDir as TempDir;
 
 fn test_pubkey() -> VerifyingKey {

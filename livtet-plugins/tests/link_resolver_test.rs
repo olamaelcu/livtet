@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use camino::{Utf8Path, Utf8PathBuf};
+use camino::Utf8Path;
 use common::{copy_test_provider, test_hmac_key};
 use livtet_plugins::{
     host_manager::PluginHostManager,

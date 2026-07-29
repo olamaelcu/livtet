@@ -38,7 +38,6 @@ use livtet_plugins::{
         HostHttp, HostHttpResponse, HostLog, HostOAuth, HostSecrets, HostSettings,
         HostSystemSecrets, SimilarEdition, StoreEmbeddingResponse,
     },
-    manifest::PluginManifest,
     permissions::{PluginGrant, ResolvedGrant},
     protocol::HostToMain,
     system_secrets::PluginSystemSecret,

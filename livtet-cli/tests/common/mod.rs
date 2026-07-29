@@ -19,9 +19,7 @@ use livtet_plugins::{
         repo_toml::{RepoSection, RepoToml, SigningSection, render_repo_toml},
     },
 };
-pub use livtet_test_utils::{
-    TestServer, build_response, http_response, parse_request_path, spawn_server,
-};
+pub use livtet_test_utils::{TestServer, spawn_server};
 use camino_tempfile::Utf8TempDir as TempDir;
 
 /// A test environment with a temporary directory and a running mock

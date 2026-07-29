@@ -1,4 +1,4 @@
-use camino::{Utf8Path, Utf8PathBuf};
+use camino::Utf8PathBuf;
 use fs_err as fs;
 use livtet_plugins::repository::{
     hmac::HmacKey,

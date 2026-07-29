@@ -59,9 +59,3 @@ pub async fn init_db_pool(database_path: &str) -> Result<Arc<SqlitePool>, crate:
 pub fn is_initialized() -> bool {
     !POOL_REGISTRY.lock().unwrap().is_empty()
 }
-
-/// Clear all pools. Used for tests.
-#[cfg(test)]
-pub fn clear_pools() {
-    POOL_REGISTRY.lock().unwrap().clear();
-}

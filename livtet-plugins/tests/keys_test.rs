@@ -1,7 +1,6 @@
 mod common;
 use std::{assert_matches, env};
 
-use common::as_utf8;
 use livtet_plugins::keys::passphrase::{PassphraseSource, resolve_passphrase};
 
 #[test]
@@ -35,7 +34,7 @@ fn test_no_tty_no_env_returns_passphrase_required() {
 
 use ed25519_dalek::SigningKey;
 use livtet_plugins::keys::TrustStore;
-use rand::{Rng as _, rng};
+use rand::Rng as _;
 use sha2::{Digest, Sha256};
 
 fn make_key() -> (SigningKey, String) {

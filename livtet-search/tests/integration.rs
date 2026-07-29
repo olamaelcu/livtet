@@ -22,7 +22,6 @@
 //! `livtet-migration` Migrator, then seed the rows needed for
 //! each scenario.
 
-use camino::Utf8Path;
 use livtet_data::orm::{ActiveModelTrait, DatabaseConnection, Set};
 use livtet_data::sql::{AssertSqlSafe, sqlite::SqlitePoolOptions};
 use livtet_data::{
@@ -431,7 +430,6 @@ async fn empty_index_returns_no_hits() {
 #[allow(clippy::too_many_arguments)]
 struct Seed {
     work_id: DbId,
-    work2_id: DbId,
     edition_a_id: DbId,
     edition_b_id: DbId,
     edition_c_id: DbId,
@@ -439,15 +437,10 @@ struct Seed {
     author2_id: DbId,
     series_id: DbId,
     tag_id: DbId,
-    tag2_id: DbId,
     genre_id: DbId,
     subject_id: DbId,
     publisher_id: DbId,
     publisher2_id: DbId,
-    format_id: DbId,
-    format2_id: DbId,
-    language_id: DbId,
-    language2_id: DbId,
 }
 
 /// Seed a richer fixture: two works (one with three editions), two
@@ -829,7 +822,6 @@ async fn seed_comprehensive(db: &DatabaseConnection) -> Seed {
 
     Seed {
         work_id,
-        work2_id,
         edition_a_id,
         edition_b_id,
         edition_c_id,
@@ -837,15 +829,10 @@ async fn seed_comprehensive(db: &DatabaseConnection) -> Seed {
         author2_id,
         series_id,
         tag_id,
-        tag2_id,
         genre_id,
         subject_id,
         publisher_id,
         publisher2_id,
-        format_id,
-        format2_id,
-        language_id,
-        language2_id,
     }
 }
 

@@ -6,9 +6,8 @@
 
 mod common;
 
-use camino::Utf8Path;
-use common::{TestContext, sample_index, setup_test_env, write_signed_repo, *};
-use ed25519_dalek::{Signer, SigningKey, VerifyingKey};
+use common::{sample_index, setup_test_env, write_signed_repo, TestContext};
+use ed25519_dalek::{SigningKey, VerifyingKey};
 use fs_err as fs;
 use livtet_plugins::{
     keys::{TrustStore, fingerprint},
@@ -21,7 +20,7 @@ use livtet_plugins::{
     },
     types::RepositoryAddResult,
 };
-use rand::{Rng as _, rng};
+use rand::Rng as _;
 use tokio::net::TcpListener;
 
 fn make_client(ctx: &TestContext) -> (RepositoryClient, SigningKey, VerifyingKey) {

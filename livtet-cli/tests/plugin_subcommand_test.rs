@@ -12,7 +12,7 @@ use livtet_plugins::{
     },
     types::Repository,
 };
-use rand::{Rng as _, rng};
+use rand::Rng as _;
 use camino_tempfile::Utf8TempDir as TempDir;
 
 fn trust_store_with(label: &str, pubkey_path: &Utf8Path) -> TrustStore {

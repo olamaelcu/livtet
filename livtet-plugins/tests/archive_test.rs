@@ -2,7 +2,6 @@ mod common;
 use std::io::Write as _;
 
 use common::verifying_key_from_keygen_report;
-use ed25519_dalek::VerifyingKey;
 use fs_err as fs;
 use livtet_plugins::{
     archive::{
@@ -12,7 +11,7 @@ use livtet_plugins::{
         pack::pack,
         verify::verify,
     },
-    keys::{TrustStore, keyfile::keygen, signing::parse_pubkey_text},
+    keys::{TrustStore, keyfile::keygen},
     types::KeygenReport,
 };
 use camino_tempfile::Utf8TempDir as TempDir;

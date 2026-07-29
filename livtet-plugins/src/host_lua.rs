@@ -1044,7 +1044,7 @@ where
         let require_cache = Arc::clone(&self.require_cache);
         let require =
             self.lua
-                .create_function(move |lua, (target,): (String,)| -> mlua::Result<Value> {
+                .create_function(move |_lua, (target,): (String,)| -> mlua::Result<Value> {
                     if let Some(cached) = require_cache
                         .lock()
                         .ok()

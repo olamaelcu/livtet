@@ -16,22 +16,22 @@
 
 mod common;
 
-use std::{collections::BTreeMap, os::unix::fs::PermissionsExt as _};
+use std::os::unix::fs::PermissionsExt as _;
 
 use assert_cmd::Command;
 use camino::{Utf8Path, Utf8PathBuf};
-use common::{TestContext, sample_index, setup_test_env, write_signed_repo};
-use ed25519_dalek::{Signer, SigningKey, VerifyingKey};
+use common::{sample_index, setup_test_env, write_signed_repo};
+use ed25519_dalek::{Signer, VerifyingKey};
 use fs_err as fs;
 use livtet_plugins::{
     keys::{fingerprint, keyfile::keygen},
     repository::{
-        index::{Index, IndexPlugin, IndexVersionEntry, render_index_json},
+        index::{Index, render_index_json},
         repo_toml::{RepoSection, RepoToml, SigningSection, render_repo_toml},
     },
 };
 use predicates::prelude::*;
-use rand::{Rng as _, rng};
+use rand::Rng as _;
 use camino_tempfile::Utf8TempDir as TempDir;
 use tokio::net::TcpListener;
 
