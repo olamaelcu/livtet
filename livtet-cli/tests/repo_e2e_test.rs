@@ -20,6 +20,7 @@ use std::os::unix::fs::PermissionsExt as _;
 
 use assert_cmd::Command;
 use camino::{Utf8Path, Utf8PathBuf};
+use camino_tempfile::Utf8TempDir as TempDir;
 use common::{sample_index, setup_test_env, write_signed_repo};
 use ed25519_dalek::{Signer, VerifyingKey};
 use fs_err as fs;
@@ -32,7 +33,6 @@ use livtet_plugins::{
 };
 use predicates::prelude::*;
 use rand::Rng as _;
-use camino_tempfile::Utf8TempDir as TempDir;
 use tokio::net::TcpListener;
 
 fn isolated_cmd(tmp: &TempDir) -> Command {

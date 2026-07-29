@@ -10,6 +10,7 @@ use std::collections::BTreeMap;
 
 use assert_cmd::Command;
 use camino::{Utf8Path, Utf8PathBuf};
+use camino_tempfile::Utf8TempDir as TempDir;
 use ed25519_dalek::{Signer, SigningKey, VerifyingKey};
 use fs_err as fs;
 use livtet_plugins::{
@@ -20,7 +21,6 @@ use livtet_plugins::{
     },
 };
 pub use livtet_test_utils::{TestServer, spawn_server};
-use camino_tempfile::Utf8TempDir as TempDir;
 
 /// A test environment with a temporary directory and a running mock
 /// HTTP server.  The server root is at `tmp/www/`.

@@ -122,7 +122,9 @@ mod tests {
     #[test]
     fn dberr_converts_via_from_into_db_variant() {
         fn returns_dberr() -> std::result::Result<(), livtet_data::orm::DbErr> {
-            Err(livtet_data::orm::DbErr::RecordNotFound("missing".to_string()))
+            Err(livtet_data::orm::DbErr::RecordNotFound(
+                "missing".to_string(),
+            ))
         }
         fn propagate() -> std::result::Result<(), SyncError> {
             returns_dberr()?;

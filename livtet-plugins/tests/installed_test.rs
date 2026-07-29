@@ -1,10 +1,10 @@
 use camino::Utf8PathBuf;
+use camino_tempfile::Utf8TempDir as TempDir;
 use fs_err as fs;
 use livtet_plugins::repository::{
     hmac::HmacKey,
     installed::{InstalledEntry, InstalledFile},
 };
-use camino_tempfile::Utf8TempDir as TempDir;
 
 fn test_key() -> HmacKey {
     HmacKey::from_bytes([0x44u8; 32])
@@ -13,8 +13,7 @@ fn test_key() -> HmacKey {
 #[test]
 fn test_installed_file_round_trip() {
     let tmp = TempDir::new().unwrap();
-    let path = tmp.path()
-        .join("installed.json");
+    let path = tmp.path().join("installed.json");
 
     let mut file = InstalledFile::default();
     file.entries.push(InstalledEntry {
@@ -41,8 +40,7 @@ fn test_installed_file_round_trip() {
 #[test]
 fn test_installed_file_tamper_detected() {
     let tmp = TempDir::new().unwrap();
-    let path = tmp.path()
-        .join("installed.json");
+    let path = tmp.path().join("installed.json");
 
     let mut file = InstalledFile::default();
     file.entries.push(InstalledEntry {
@@ -62,8 +60,7 @@ fn test_installed_file_tamper_detected() {
 #[test]
 fn test_installed_file_missing_returns_empty() {
     let tmp = TempDir::new().unwrap();
-    let path = tmp.path()
-        .join("installed.json");
+    let path = tmp.path().join("installed.json");
     let loaded = InstalledFile::load(&path, &test_key()).unwrap();
     assert_eq!(loaded.entries.len(), 0);
 }
@@ -95,8 +92,7 @@ fn test_installed_file_rejects_invalid_utf8() {
     use sha2::Sha256;
 
     let tmp = TempDir::new().unwrap();
-    let path = tmp.path()
-        .join("installed.json");
+    let path = tmp.path().join("installed.json");
     let key = test_key();
 
     // Build a "JSON-looking" byte buffer that is NOT valid

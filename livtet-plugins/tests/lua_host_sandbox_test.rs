@@ -1131,10 +1131,7 @@ fn host_fs_copy_happy_path_returns_true() {
         &mut host,
         "fs-copy-ok",
         "copy",
-        vec![
-            src.to_string().to_string(),
-            dst.to_string().to_string(),
-        ],
+        vec![src.to_string().to_string(), dst.to_string().to_string()],
     );
     assert!(ok, "call should succeed, got error {error:?}");
     assert_eq!(value, Some(serde_json::json!(true)));
@@ -1163,10 +1160,7 @@ fn host_fs_copy_src_outside_read_paths_returns_permission_denied() {
         &mut host,
         "fs-copy-no-read",
         "copy",
-        vec![
-            src.to_string().to_string(),
-            dst.to_string().to_string(),
-        ],
+        vec![src.to_string().to_string(), dst.to_string().to_string()],
     );
     assert!(ok, "Lua call returned without raising, got error {error:?}");
     let v = value.expect("expected __livtet_error envelope");
@@ -1207,10 +1201,7 @@ fn host_fs_copy_dst_outside_write_paths_returns_permission_denied() {
         &mut host,
         "fs-copy-no-write",
         "copy",
-        vec![
-            src.to_string().to_string(),
-            dst.to_string().to_string(),
-        ],
+        vec![src.to_string().to_string(), dst.to_string().to_string()],
     );
     assert!(ok, "Lua call returned without raising, got error {error:?}");
     let v = value.expect("expected __livtet_error envelope");
@@ -1240,10 +1231,7 @@ fn host_fs_copy_missing_source_returns_file_not_found() {
         &mut host,
         "fs-copy-missing",
         "copy",
-        vec![
-            src.to_string().to_string(),
-            dst.to_string().to_string(),
-        ],
+        vec![src.to_string().to_string(), dst.to_string().to_string()],
     );
     assert!(ok, "Lua call returned without raising, got error {error:?}");
     let v = value.expect("expected __livtet_error envelope");

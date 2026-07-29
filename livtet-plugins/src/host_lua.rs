@@ -5,12 +5,12 @@ use std::{
 };
 
 use hex;
+use livtet_data::sql::AssertSqlSafe;
 use mlua::{
     Function, HookTriggers, Lua, LuaOptions, LuaSerdeExt, StdLib, Table, UserData, UserDataMethods,
     Value, VmState,
 };
 use scraper::{Html as ScraperHtml, Selector};
-use livtet_data::sql::AssertSqlSafe;
 
 use crate::{
     error::PluginError,
@@ -1653,8 +1653,11 @@ fn run_sqlite_query(
         }
     };
 
-    let rows_result: Result<Vec<SqliteRow>, _> =
-        rt.block_on(async { livtet_data::sql::query(AssertSqlSafe(sql)).fetch_all(&pool).await });
+    let rows_result: Result<Vec<SqliteRow>, _> = rt.block_on(async {
+        livtet_data::sql::query(AssertSqlSafe(sql))
+            .fetch_all(&pool)
+            .await
+    });
     let rows = match rows_result {
         Ok(r) => r,
         Err(e) => {

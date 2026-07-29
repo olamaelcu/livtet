@@ -88,17 +88,21 @@ pub fn parse_request_path(request: &str) -> String {
 /// Build a response for `path` rooted at `root`. Serves files
 /// directly; returns 404 for missing paths and 400 for path
 /// traversal attempts.
-pub fn build_response(
-    root: &camino::Utf8Path,
-    path: String,
-) -> (String, Vec<u8>, &'static str) {
+pub fn build_response(root: &camino::Utf8Path, path: String) -> (String, Vec<u8>, &'static str) {
     use camino::Utf8Path;
     let clean = Utf8Path::new(&path);
     if clean.components().any(|c| {
-        matches!(c, camino::Utf8Component::ParentDir | camino::Utf8Component::CurDir)
+        matches!(
+            c,
+            camino::Utf8Component::ParentDir | camino::Utf8Component::CurDir
+        )
     }) || path.contains("..")
     {
-        return ("HTTP/1.1 400 Bad Request".to_string(), Vec::new(), "text/plain");
+        return (
+            "HTTP/1.1 400 Bad Request".to_string(),
+            Vec::new(),
+            "text/plain",
+        );
     }
     let full = root.join(clean.as_str().trim_start_matches('/'));
     match fs_err::read(&full) {

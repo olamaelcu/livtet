@@ -8,6 +8,7 @@
 use std::sync::Arc;
 
 use futures_util::StreamExt;
+use livtet_data::orm::EntityTrait;
 use poem::{
     EndpointExt, Error, IntoResponse, Route, Server, get, handler,
     http::StatusCode,
@@ -16,7 +17,6 @@ use poem::{
     post,
     web::{Data, Json, Path, Query, sse},
 };
-use livtet_data::orm::EntityTrait;
 use tokio::sync::{Mutex, RwLock, watch};
 
 type DynError = Box<dyn std::error::Error + Send + Sync>;
@@ -93,8 +93,8 @@ async fn post_pair(
     let inner = engine.read().await;
 
     use livtet_data::client_entities::pending_pairings;
-    use livtet_types::{DbId, DeviceType, PairingStatus};
     use livtet_data::orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, Set};
+    use livtet_types::{DbId, DeviceType, PairingStatus};
 
     let pending_id = DbId::from(PairingStatus::Pending);
     let now = time::OffsetDateTime::now_utc();

@@ -11,8 +11,8 @@ use aes_gcm::{
 };
 use camino::{Utf8Path, Utf8PathBuf};
 use fs_err as fs;
-use rand::{Rng as _, rng};
 use livtet_data::sql::{self, AssertSqlSafe, SqlitePool};
+use rand::{Rng as _, rng};
 use tokio::{
     io::AsyncWriteExt,
     process::{Child, ChildStdin, ChildStdout, Command},
@@ -1636,7 +1636,9 @@ impl PluginHostManager {
         _request_id: &str,
         _edition_id: &str,
     ) -> MainToHostCallback {
-        panic!("TBD: handle_get_edition_info host bridge removed; see livtet-plugins/src/host_manager.rs")
+        panic!(
+            "TBD: handle_get_edition_info host bridge removed; see livtet-plugins/src/host_manager.rs"
+        )
     }
 }
 

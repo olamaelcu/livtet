@@ -3,8 +3,8 @@
 //! and the FFI — the desktop uses it for the HTTP layer's local
 //! queries, and the FFI uses it for the same on the mobile device.
 
-use livtet_types::DbId;
 use livtet_data::orm::{ConnectionTrait, TransactionTrait};
+use livtet_types::DbId;
 
 use crate::types::{Conflict, FullDump, PullResponse, PushResponse, SyncChange, SyncError};
 

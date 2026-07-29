@@ -6,7 +6,7 @@
 
 mod common;
 
-use common::{sample_index, setup_test_env, write_signed_repo, TestContext};
+use common::{TestContext, sample_index, setup_test_env, write_signed_repo};
 use ed25519_dalek::{SigningKey, VerifyingKey};
 use fs_err as fs;
 use livtet_plugins::{

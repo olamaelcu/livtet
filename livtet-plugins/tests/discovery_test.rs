@@ -1,5 +1,6 @@
 mod common;
 use camino::Utf8PathBuf;
+use camino_tempfile::Utf8TempDir as TempDir;
 use common::fixture_path;
 use fs_err as fs;
 #[cfg(feature = "bundled")]
@@ -8,7 +9,6 @@ use livtet_plugins::{
     discovery::{PluginSource, scan_plugins},
     manifest::{PluginRuntime, PluginType},
 };
-use camino_tempfile::Utf8TempDir as TempDir;
 
 #[test]
 fn test_scan_finds_folder_plugin() {

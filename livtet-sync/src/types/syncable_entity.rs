@@ -359,12 +359,11 @@ impl SyncableEntityKind {
                 "series_entry",
             )
             .await?,
-            digital_inventory:
-                fetch_all_json::<livtet_data::entities::digital_inventory::Entity>(
-                    db,
-                    "digital_inventory",
-                )
-                .await?,
+            digital_inventory: fetch_all_json::<livtet_data::entities::digital_inventory::Entity>(
+                db,
+                "digital_inventory",
+            )
+            .await?,
             owned_editions: fetch_all_json::<livtet_data::entities::owned_edition::Entity>(
                 db,
                 "owned_edition",
@@ -385,18 +384,16 @@ impl SyncableEntityKind {
                 "reading_list",
             )
             .await?,
-            reading_list_book:
-                fetch_all_json::<livtet_data::entities::reading_list_book::Entity>(
-                    db,
-                    "reading_list_book",
-                )
-                .await?,
-            reading_progress:
-                fetch_all_json::<livtet_data::entities::reading_progress::Entity>(
-                    db,
-                    "reading_progress",
-                )
-                .await?,
+            reading_list_book: fetch_all_json::<livtet_data::entities::reading_list_book::Entity>(
+                db,
+                "reading_list_book",
+            )
+            .await?,
+            reading_progress: fetch_all_json::<livtet_data::entities::reading_progress::Entity>(
+                db,
+                "reading_progress",
+            )
+            .await?,
         })
     }
 }

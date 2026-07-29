@@ -6,6 +6,7 @@
 use std::collections::HashMap;
 
 // ── SeaORM entity aliases ───────────────────────────────────────────────────
+use crate::entities;
 use entities::{
     annotations::{ActiveModel as AnnotationActiveModel, Entity as AnnotationsEntity},
     authors::{ActiveModel as AuthorActiveModel, Entity as AuthorsEntity},
@@ -59,7 +60,6 @@ use entities::{
     works::{ActiveModel as WorkActiveModel, Entity as WorksEntity},
 };
 use fake::Fake;
-use crate::entities;
 use livtet_types::{
     CommonLanguages, DbId, KnownFormats, KnownGenres, KnownReadingSources, KnownSubjects,
     WorkStatus,

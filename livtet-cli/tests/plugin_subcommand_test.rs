@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 
 use camino::Utf8Path;
+use camino_tempfile::Utf8TempDir as TempDir;
 use ed25519_dalek::Signer;
 use fs_err as fs;
 use livtet_plugins::{
@@ -13,7 +14,6 @@ use livtet_plugins::{
     types::Repository,
 };
 use rand::Rng as _;
-use camino_tempfile::Utf8TempDir as TempDir;
 
 fn trust_store_with(label: &str, pubkey_path: &Utf8Path) -> TrustStore {
     let text = fs::read_to_string(pubkey_path.as_std_path()).unwrap();

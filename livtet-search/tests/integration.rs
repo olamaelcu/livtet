@@ -22,6 +22,7 @@
 //! `livtet-migration` Migrator, then seed the rows needed for
 //! each scenario.
 
+use camino_tempfile::Utf8TempDir as TempDir;
 use livtet_data::orm::{ActiveModelTrait, DatabaseConnection, Set};
 use livtet_data::sql::{AssertSqlSafe, sqlite::SqlitePoolOptions};
 use livtet_data::{
@@ -39,7 +40,6 @@ use livtet_search::{
 };
 use livtet_types::{DbId, WorkFilters};
 use tantivy::schema::Value;
-use camino_tempfile::Utf8TempDir as TempDir;
 async fn fresh_db() -> DatabaseConnection {
     let pool = SqlitePoolOptions::new()
         .max_connections(1)

@@ -1,6 +1,7 @@
 use std::{assert_matches, collections::BTreeMap};
 
 use camino::Utf8PathBuf;
+use camino_tempfile::Utf8TempDir as TempDir;
 use ed25519_dalek::{Signer, VerifyingKey};
 use fs_err as fs;
 use livtet_plugins::{
@@ -19,7 +20,6 @@ use livtet_plugins::{
     types::{Repository, RepositoryAddResult, RepositoryUpdateResult},
 };
 use rand::Rng as _;
-use camino_tempfile::Utf8TempDir as TempDir;
 
 fn test_pubkey() -> VerifyingKey {
     let mut csprng = rand::rng();
@@ -146,8 +146,7 @@ fn test_index_signature_mismatch() {
 #[test]
 fn test_repositories_file_round_trip() {
     let tmp = TempDir::new().unwrap();
-    let config_path = tmp.path()
-        .join("repositories.toml");
+    let config_path = tmp.path().join("repositories.toml");
     let key = HmacKey::from_bytes([0x11u8; 32]);
 
     let mut file = RepositoriesFile::default();
@@ -170,8 +169,7 @@ fn test_repositories_file_round_trip() {
 #[test]
 fn test_repositories_file_tamper_detected() {
     let tmp = TempDir::new().unwrap();
-    let config_path = tmp.path()
-        .join("repositories.toml");
+    let config_path = tmp.path().join("repositories.toml");
     let key = HmacKey::from_bytes([0x11u8; 32]);
     let mut file = RepositoriesFile::default();
     file.repositories.push(Repository {
@@ -194,8 +192,7 @@ fn test_repositories_file_tamper_detected() {
 #[test]
 fn test_repositories_file_missing_returns_empty() {
     let tmp = TempDir::new().unwrap();
-    let config_path = tmp.path()
-        .join("nonexistent.toml");
+    let config_path = tmp.path().join("nonexistent.toml");
     let key = HmacKey::from_bytes([0x11u8; 32]);
     let file = RepositoriesFile::load(&config_path, &key).unwrap();
     assert!(file.repositories.is_empty());
@@ -204,8 +201,7 @@ fn test_repositories_file_missing_returns_empty() {
 #[test]
 fn test_installed_file_round_trip() {
     let tmp = TempDir::new().unwrap();
-    let installed_path = tmp.path()
-        .join("installed.json");
+    let installed_path = tmp.path().join("installed.json");
     let key = HmacKey::from_bytes([0x55u8; 32]);
 
     let mut file = livtet_plugins::repository::installed::InstalledFile::default();
@@ -238,8 +234,7 @@ fn test_installed_file_round_trip() {
 #[test]
 fn test_installed_file_tamper_detected() {
     let tmp = TempDir::new().unwrap();
-    let installed_path = tmp.path()
-        .join("installed.json");
+    let installed_path = tmp.path().join("installed.json");
     let key = HmacKey::from_bytes([0x55u8; 32]);
 
     let mut file = livtet_plugins::repository::installed::InstalledFile::default();
@@ -267,8 +262,7 @@ fn test_installed_file_tamper_detected() {
 #[test]
 fn test_installed_file_missing_returns_empty() {
     let tmp = TempDir::new().unwrap();
-    let installed_path = tmp.path()
-        .join("missing-installed.json");
+    let installed_path = tmp.path().join("missing-installed.json");
     let key = HmacKey::from_bytes([0x55u8; 32]);
     let file =
         livtet_plugins::repository::installed::InstalledFile::load(&installed_path, &key).unwrap();
@@ -459,8 +453,7 @@ fn test_init_repo_creates_skeleton() {
 fn test_publish_archive_writes_pool_and_index() {
     let tmp = camino_tempfile::Utf8TempDir::new().unwrap();
     let repo_dir = tmp.path().join("repo");
-    let archive_path = tmp.path()
-        .join("myplugin-1.0.0.ltp");
+    let archive_path = tmp.path().join("myplugin-1.0.0.ltp");
     fs::write(&archive_path, b"fake archive bytes").unwrap();
 
     let mut csprng = rand::rng();
@@ -810,8 +803,7 @@ fn test_publish_archive_creates_index_when_missing() {
     // auto-create, not an error.)
     let tmp = camino_tempfile::Utf8TempDir::new().unwrap();
     let repo_dir = tmp.path().join("repo");
-    let archive_path = tmp.path()
-        .join("autocreate-1.0.0.ltp");
+    let archive_path = tmp.path().join("autocreate-1.0.0.ltp");
     fs::write(&archive_path, b"x").unwrap();
     let mut csprng = rand::rng();
     let signing_key = {

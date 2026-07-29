@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 
 use camino::{Utf8Path, Utf8PathBuf};
+use camino_tempfile::Utf8TempDir as TempDir;
 use ed25519_dalek::Signer;
 use fs_err as fs;
 use livtet_plugins::{
@@ -16,7 +17,6 @@ use livtet_plugins::{
         repo_toml::{RepoSection, RepoToml, SigningSection, render_repo_toml},
     },
 };
-use camino_tempfile::Utf8TempDir as TempDir;
 
 mod common;
 

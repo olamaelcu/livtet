@@ -45,13 +45,13 @@ pub use error::{CoreError, Result as CoreResult};
 pub use index::NamedIndex;
 pub use migrator::{Kind, connect_with_migrations, run_kinds};
 pub use primary_key::PrimaryKey;
-pub use state::{
-    SharedState, apply_optimizations, get_state, init_state, is_initialized,
-    optimize_and_close, sqlite_pool_options,
-};
-pub use test_db::TestDb;
 #[cfg(feature = "fake")]
 pub use seed::{SeedConfig, SeedResult, seed_database};
+pub use state::{
+    SharedState, apply_optimizations, get_state, init_state, is_initialized, optimize_and_close,
+    sqlite_pool_options,
+};
+pub use test_db::TestDb;
 
 pub use sea_orm as orm;
 pub use sqlx as sql;

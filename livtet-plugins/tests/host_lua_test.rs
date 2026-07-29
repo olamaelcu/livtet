@@ -6,13 +6,13 @@ use std::{
 };
 
 use camino::Utf8Path;
+use camino_tempfile::Utf8TempDir as TempDir;
+use livtet_data::sql::{AssertSqlSafe, Connection};
 use livtet_plugins::{
     manifest::PluginManifest,
     protocol::{HostToMain, MainToHost, MainToHostCallback},
 };
 use serde_json::json;
-use livtet_data::sql::{AssertSqlSafe, Connection};
-use camino_tempfile::Utf8TempDir as TempDir;
 
 const TEST_SOURCE: &str = include_str!("../fixtures/test-provider/init.lua");
 const TEST_MANIFEST_TOML: &str = include_str!("../fixtures/test-provider/livtet.toml");
@@ -862,12 +862,7 @@ fn host_read_file_absolute_outside_allowed_dir_rejected() {
     // Grant a glob that only covers `/tmp/allowed/**`; the test
     // asks for `/etc/passwd` and expects the canonical
     // "outside glob" error string.
-    write_grant_json(
-        perms.path(),
-        "host-probe",
-        &["/tmp/allowed/**"],
-        &[],
-    );
+    write_grant_json(perms.path(), "host-probe", &["/tmp/allowed/**"], &[]);
     let (mut host, _keep) = load_probe_with_perms_dir(perms.path());
     let v = call_capability(&mut host, "rf2", "read_file", vec![json!("/etc/passwd")]);
     let err = v["error"]

@@ -1,6 +1,6 @@
+use camino_tempfile::Utf8TempDir as TempDir;
 use fs_err as fs;
 use livtet_plugins::repository::hmac::{HmacKey, read_protected, write_protected};
-use camino_tempfile::Utf8TempDir as TempDir;
 
 fn test_key() -> HmacKey {
     HmacKey::from_bytes([0x42u8; 32])

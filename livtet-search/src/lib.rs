@@ -32,8 +32,8 @@ use std::{collections::HashMap, ops::Range, sync::Arc};
 
 use camino::Utf8Path;
 use fs_err as fs;
-use rayon::prelude::*;
 use livtet_data::orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter};
+use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use specta::Type;
 use tantivy::{
@@ -947,9 +947,7 @@ impl SearchIndex {
             Vec::new()
         } else {
             WorkAuthors::find()
-                .filter(
-                    livtet_data::entities::work_authors::Column::WorkId.is_in(work_ids.clone()),
-                )
+                .filter(livtet_data::entities::work_authors::Column::WorkId.is_in(work_ids.clone()))
                 .all(db)
                 .await?
         };
@@ -1094,19 +1092,17 @@ impl SearchIndex {
         };
         let ident_pk_ids: Vec<livtet_types::DbId> =
             edition_id_rows.iter().map(|r| r.identifier_id).collect();
-        let identifiers: Vec<livtet_data::entities::identifiers::Model> =
-            if ident_pk_ids.is_empty() {
-                Vec::new()
-            } else {
-                Identifiers::find()
-                    .filter(livtet_data::entities::identifiers::Column::Id.is_in(ident_pk_ids))
-                    .all(db)
-                    .await?
-            };
-        let ident_by_id: HashMap<
-            livtet_types::DbId,
-            &livtet_data::entities::identifiers::Model,
-        > = identifiers.iter().map(|i| (i.id, i)).collect();
+        let identifiers: Vec<livtet_data::entities::identifiers::Model> = if ident_pk_ids.is_empty()
+        {
+            Vec::new()
+        } else {
+            Identifiers::find()
+                .filter(livtet_data::entities::identifiers::Column::Id.is_in(ident_pk_ids))
+                .all(db)
+                .await?
+        };
+        let ident_by_id: HashMap<livtet_types::DbId, &livtet_data::entities::identifiers::Model> =
+            identifiers.iter().map(|i| (i.id, i)).collect();
 
         let mut edition_isbns: HashMap<livtet_types::DbId, Vec<String>> = HashMap::new();
         let mut edition_ident_kinds: HashMap<livtet_types::DbId, Vec<String>> = HashMap::new();

@@ -16,10 +16,10 @@ use livtet_plugins::{
     types::{Repository, RepositoryUpdateResult},
 };
 mod common;
+use camino_tempfile::Utf8TempDir as TempDir;
 use common::verifying_key_from_keygen_report;
 use livtet_test_utils::spawn_server;
 use rand::Rng as _;
-use camino_tempfile::Utf8TempDir as TempDir;
 
 fn sample_repo_toml() -> RepoToml {
     RepoToml {
@@ -440,11 +440,7 @@ async fn test_e2e_live_http_round_trip() {
         .expect("add_user_key");
 
     let server = spawn_server(server_root.clone()).await;
-    let client = RepositoryClient::new(
-        cache_dir,
-        config_dir,
-        HmacKey::from_bytes([0x55u8; 32]),
-    );
+    let client = RepositoryClient::new(cache_dir, config_dir, HmacKey::from_bytes([0x55u8; 32]));
 
     let (repo_toml, raw_repo_toml) = client
         .fetch_repo_toml(&server.base_url)
@@ -566,11 +562,7 @@ async fn test_confirm_add_falls_back_to_fingerprint_lookup() {
         .expect("add_user_key");
 
     let server = spawn_server(server_root).await;
-    let client = RepositoryClient::new(
-        cache_dir,
-        config_dir,
-        HmacKey::from_bytes([0x66u8; 32]),
-    );
+    let client = RepositoryClient::new(cache_dir, config_dir, HmacKey::from_bytes([0x66u8; 32]));
 
     // Without the fix, this returns Err(Keyring("trusted key with label
     // \"fake_label_does_not_exist\" not found")). With the fix, it succeeds
@@ -648,11 +640,7 @@ async fn test_confirm_add_rejects_unknown_fingerprint() {
         .expect("add_user_key");
 
     let server = spawn_server(server_root).await;
-    let client = RepositoryClient::new(
-        cache_dir,
-        config_dir,
-        HmacKey::from_bytes([0x77u8; 32]),
-    );
+    let client = RepositoryClient::new(cache_dir, config_dir, HmacKey::from_bytes([0x77u8; 32]));
 
     let result = client.confirm_add(&server.base_url, &trust).await;
     match result {

@@ -25,9 +25,9 @@
 use std::os::unix::fs::PermissionsExt as _;
 
 use assert_cmd::Command;
+use camino_tempfile::Utf8TempDir as TempDir;
 use fs_err as fs;
 use predicates::prelude::*;
-use camino_tempfile::Utf8TempDir as TempDir;
 
 /// Configure a freshly-built `Command` for the `livtet` binary with
 /// state-isolating env vars. Mirrors `assert_cmd_tests::isolated_cmd`

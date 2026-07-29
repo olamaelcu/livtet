@@ -91,22 +91,17 @@ fn test_trust_store_revoke_adds_to_revoked_list() {
     assert!(store.is_revoked(&fp));
 }
 
+use camino_tempfile::Utf8TempDir as TempDir;
 use livtet_plugins::keys::{
     keyfile::keygen,
     signing::{sign_bytes, verify_bytes},
 };
-use camino_tempfile::Utf8TempDir as TempDir;
 
 #[test]
 fn test_keygen_creates_keypair_files() {
     let tmp = TempDir::new().unwrap();
     let label = "test-keygen";
-    let report = keygen(
-        tmp.path(),
-        label,
-        true,
-    )
-    .unwrap();
+    let report = keygen(tmp.path(), label, true).unwrap();
     assert!(report.key_path.exists());
     assert!(report.pubkey_path.exists());
     assert!(!report.encrypted);
@@ -119,12 +114,7 @@ fn test_keygen_writes_minisign_box_format() {
 
     let tmp = TempDir::new().unwrap();
     let label = "minisign-box-format";
-    let report = keygen(
-        tmp.path(),
-        label,
-        true,
-    )
-    .expect("keygen should succeed");
+    let report = keygen(tmp.path(), label, true).expect("keygen should succeed");
 
     let sk_text = std::fs::read_to_string(&report.key_path).expect("read secret key");
     assert!(
@@ -188,12 +178,7 @@ use livtet_plugins::keys::signing::parse_pubkey_text;
 #[test]
 fn test_parse_pubkey_text_auto_parses_livtet_custom_format() {
     let tmp = TempDir::new().unwrap();
-    let report = keygen(
-        tmp.path(),
-        "auto-custom",
-        true,
-    )
-    .unwrap();
+    let report = keygen(tmp.path(), "auto-custom", true).unwrap();
     let text = std::fs::read_to_string(&report.pubkey_path).unwrap();
     assert!(
         text.starts_with("untrusted comment:"),
@@ -235,12 +220,7 @@ fn test_parse_pubkey_rejects_garbage() {
 #[test]
 fn test_trust_store_load_from_dir_with_valid_pub() {
     let tmp = TempDir::new().unwrap();
-    let report = keygen(
-        tmp.path(),
-        "my-key",
-        true,
-    )
-    .unwrap();
+    let report = keygen(tmp.path(), "my-key", true).unwrap();
     let pubkey_text = std::fs::read_to_string(&report.pubkey_path).unwrap();
     let key_dir = tmp.path().join("trust");
     fs_err::create_dir_all(&key_dir).unwrap();
@@ -310,12 +290,7 @@ fn test_keygen_encrypted_creates_encrypted_file() {
     unsafe {
         env::set_var("LIVTET_KEY_PASSPHRASE", "test-passphrase-123");
     }
-    let report = keygen(
-        tmp.path(),
-        "enc-key",
-        false,
-    )
-    .unwrap();
+    let report = keygen(tmp.path(), "enc-key", false).unwrap();
     unsafe {
         env::remove_var("LIVTET_KEY_PASSPHRASE");
     }
@@ -331,12 +306,7 @@ fn test_load_encrypted_key_with_correct_passphrase() {
     unsafe {
         env::set_var("LIVTET_KEY_PASSPHRASE", "correct-password");
     }
-    let report = keygen(
-        tmp.path(),
-        "enc-load",
-        false,
-    )
-    .unwrap();
+    let report = keygen(tmp.path(), "enc-load", false).unwrap();
     assert!(report.encrypted);
     let result = livtet_plugins::keys::signing::load_minisign_signing_key(&report.key_path);
     assert!(
@@ -355,12 +325,7 @@ fn test_load_encrypted_key_with_wrong_passphrase_fails() {
     unsafe {
         env::set_var("LIVTET_KEY_PASSPHRASE", "right-password");
     }
-    let report = keygen(
-        tmp.path(),
-        "enc-wrong",
-        false,
-    )
-    .unwrap();
+    let report = keygen(tmp.path(), "enc-wrong", false).unwrap();
     unsafe {
         env::set_var("LIVTET_KEY_PASSPHRASE", "wrong-password");
     }
@@ -375,12 +340,7 @@ fn test_load_encrypted_key_with_wrong_passphrase_fails() {
 fn test_load_unencrypted_key_succeeds() {
     let _guard = PASSPHRASE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let tmp = TempDir::new().unwrap();
-    let report = keygen(
-        tmp.path(),
-        "unenc-load",
-        true,
-    )
-    .unwrap();
+    let report = keygen(tmp.path(), "unenc-load", true).unwrap();
     assert!(
         !report.encrypted,
         "keygen with no_passphrase=true should create unencrypted key"
@@ -405,12 +365,7 @@ fn test_load_unencrypted_key_succeeds() {
 #[allow(clippy::disallowed_methods)]
 fn test_keygen_secret_key_file_permissions() {
     let tmp = TempDir::new().unwrap();
-    let report = keygen(
-        tmp.path(),
-        "perm-check",
-        true,
-    )
-    .unwrap();
+    let report = keygen(tmp.path(), "perm-check", true).unwrap();
     use std::os::unix::fs::PermissionsExt;
     let meta = std::fs::metadata(&report.key_path).unwrap();
     let mode = meta.permissions().mode() & 0o777;

@@ -1,8 +1,8 @@
 use camino::Utf8Path;
+use camino_tempfile::Utf8TempDir as TempDir;
 use fs_err as fs;
 use livtet_cli::plugin::{resolve_pack_label, run_pack};
 use livtet_plugins::keys::keyfile::keygen;
-use camino_tempfile::Utf8TempDir as TempDir;
 
 fn make_plugin_source(src: &Utf8Path, id: &str, version: &str) {
     fs::create_dir_all(src.as_std_path()).unwrap();

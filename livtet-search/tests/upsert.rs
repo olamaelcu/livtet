@@ -4,13 +4,12 @@
 //! [`SearchIndex::upsert_author`] against a fresh Tantivy index
 //! on a tempdir. No SQLite database is involved.
 
-use livtet_search::{AuthorDoc, EditionDoc, SearchIndex, SearchOptions};
 use camino_tempfile::Utf8TempDir as TempDir;
+use livtet_search::{AuthorDoc, EditionDoc, SearchIndex, SearchOptions};
 
 fn fresh_index() -> (SearchIndex, TempDir) {
     let dir = camino_tempfile::tempdir().expect("tempdir");
-    let idx = SearchIndex::open(dir.path())
-        .expect("open fresh index");
+    let idx = SearchIndex::open(dir.path()).expect("open fresh index");
     (idx, dir)
 }
 

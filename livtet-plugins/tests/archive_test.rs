@@ -1,6 +1,7 @@
 mod common;
 use std::io::Write as _;
 
+use camino_tempfile::Utf8TempDir as TempDir;
 use common::verifying_key_from_keygen_report;
 use fs_err as fs;
 use livtet_plugins::{
@@ -14,7 +15,6 @@ use livtet_plugins::{
     keys::{TrustStore, keyfile::keygen},
     types::KeygenReport,
 };
-use camino_tempfile::Utf8TempDir as TempDir;
 
 #[test]
 fn test_generate_checksums_basic() {
@@ -24,8 +24,7 @@ fn test_generate_checksums_basic() {
     fs::write(plugin_dir.join("a.lua"), b"a").unwrap();
     fs::write(plugin_dir.join("b.lua"), b"bb").unwrap();
 
-    let entries =
-        generate_checksums(plugin_dir.as_path(), &[]).unwrap();
+    let entries = generate_checksums(plugin_dir.as_path(), &[]).unwrap();
 
     assert_eq!(entries[0].path, "plugin/a.lua");
     assert_eq!(entries[1].path, "plugin/b.lua");
@@ -142,11 +141,7 @@ fn test_verify_reports_missing_meta_inf_files() {
         zip.finish().unwrap();
     }
     drop(zipf);
-    let report = verify(
-        bogus.as_path(),
-        Some(&TrustStore::empty()),
-    )
-    .unwrap();
+    let report = verify(bogus.as_path(), Some(&TrustStore::empty())).unwrap();
     assert!(!report.valid);
     assert!(
         report
@@ -171,12 +166,7 @@ fn test_pack_then_verify_round_trip() {
     fs::write(plugin_dir.join("init.lua"), b"-- test plugin\n").unwrap();
 
     let key_dir = tmp.path().join("keys");
-    let keygen_report = keygen(
-        key_dir.as_path(),
-        "test-key",
-        true,
-    )
-    .unwrap();
+    let keygen_report = keygen(key_dir.as_path(), "test-key", true).unwrap();
 
     let ltp_path = pack(
         plugin_dir.as_path(),
@@ -210,12 +200,7 @@ fn test_install_extracts_to_providers_dir() {
     fs::write(plugin_dir.join("init.lua"), b"-- test\n").unwrap();
 
     let key_dir = tmp.path().join("keys");
-    let keygen_report = keygen(
-        key_dir.as_path(),
-        "install-test-key",
-        true,
-    )
-    .unwrap();
+    let keygen_report = keygen(key_dir.as_path(), "install-test-key", true).unwrap();
     let ltp_path = pack(
         plugin_dir.as_path(),
         &keygen_report.key_path,
@@ -231,12 +216,7 @@ fn test_install_extracts_to_providers_dir() {
         .unwrap();
 
     let providers_dir = tmp.path().join("providers");
-    let report = install(
-        &ltp_path,
-        providers_dir.as_path(),
-        Some(&store),
-    )
-    .unwrap();
+    let report = install(&ltp_path, providers_dir.as_path(), Some(&store)).unwrap();
     assert_eq!(report.id, "install-test");
     assert_eq!(report.version, "0.1.0");
     assert!(report.install_path.exists());
@@ -257,12 +237,7 @@ fn test_install_to_existing_version_is_idempotent() {
     fs::write(plugin_dir.join("init.lua"), b"-- v1\n").unwrap();
 
     let key_dir = tmp.path().join("keys");
-    let keygen_report = keygen(
-        key_dir.as_path(),
-        "idem-key",
-        true,
-    )
-    .unwrap();
+    let keygen_report = keygen(key_dir.as_path(), "idem-key", true).unwrap();
     let ltp_path = pack(
         plugin_dir.as_path(),
         &keygen_report.key_path,
@@ -324,12 +299,7 @@ fn test_install_replaces_existing_same_version_with_warning() {
     .unwrap();
     fs::write(plugin_dir.join("init.lua"), b"-- v1\n").unwrap();
     let key_dir = tmp.path().join("keys");
-    let keygen_report = keygen(
-        key_dir.as_path(),
-        "rw-key",
-        true,
-    )
-    .unwrap();
+    let keygen_report = keygen(key_dir.as_path(), "rw-key", true).unwrap();
     let ltp_path = pack(
         plugin_dir.as_path(),
         &keygen_report.key_path,
@@ -375,12 +345,7 @@ fn test_install_different_version_does_not_warn_or_replace_existing_version() {
     // differ by version segment.
     let tmp = TempDir::new().unwrap();
     let key_dir = tmp.path().join("keys");
-    let keygen_report = keygen(
-        key_dir.as_path(),
-        "diff-v-key",
-        true,
-    )
-    .unwrap();
+    let keygen_report = keygen(key_dir.as_path(), "diff-v-key", true).unwrap();
     let verifying_key = verifying_key_from_keygen_report(&keygen_report);
     let mut store = TrustStore::empty();
     store.add_user_key("diff-v-key", verifying_key).unwrap();
@@ -494,12 +459,7 @@ fn pack_minimal(
     fs::write(plugin_dir.join("init.lua"), b"-- minimal plugin\n").unwrap();
 
     let key_dir = tmp.path().join("keys");
-    let keygen_report = keygen(
-        key_dir.as_path(),
-        "atk-key",
-        true,
-    )
-    .unwrap();
+    let keygen_report = keygen(key_dir.as_path(), "atk-key", true).unwrap();
     let ltp_path = pack(
         plugin_dir.as_path(),
         &keygen_report.key_path,
@@ -839,11 +799,7 @@ fn test_install_rejects_archive_with_dotdot_path() {
     );
 
     let providers_dir = tmp.path().join("providers");
-    let result = install(
-        &out,
-        providers_dir.as_path(),
-        Some(&store),
-    );
+    let result = install(&out, providers_dir.as_path(), Some(&store));
     // Either verify rejects (unsigned file) OR install
     // rejects (path traversal). Both are valid defenses;
     // we accept either.
@@ -884,11 +840,7 @@ fn test_install_rejects_absolute_path() {
         write_zip_with_extra_entry(&ltp_path, "abspath", "plugin//etc/escape.lua", b"escape\n");
 
     let providers_dir = tmp.path().join("providers");
-    let result = install(
-        &out,
-        providers_dir.as_path(),
-        Some(&store),
-    );
+    let result = install(&out, providers_dir.as_path(), Some(&store));
     // Verify the error is from the path-safety check, not just unsigned file
     let err = result.expect_err("install with absolute path must fail");
     let msg = err.to_string();
@@ -916,11 +868,7 @@ fn test_install_rejects_path_over_255_bytes() {
     let out = write_zip_with_extra_entry(&ltp_path, "longpath", &full, b"x\n");
 
     let providers_dir = tmp.path().join("providers");
-    let result = install(
-        &out,
-        providers_dir.as_path(),
-        Some(&store),
-    );
+    let result = install(&out, providers_dir.as_path(), Some(&store));
     match result {
         Err(_) => {}
         Ok(report) => panic!("install with 256-byte path must fail, got {report:?}"),
@@ -950,12 +898,7 @@ fn test_install_accepts_path_at_255_byte_boundary() {
     fs::write(plugin_dir.join(&long_name), b"x\n").unwrap();
 
     let key_dir = tmp.path().join("keys");
-    let keygen_report = keygen(
-        key_dir.as_path(),
-        "longpath-key",
-        true,
-    )
-    .unwrap();
+    let keygen_report = keygen(key_dir.as_path(), "longpath-key", true).unwrap();
     let ltp_path = pack(
         plugin_dir.as_path(),
         &keygen_report.key_path,
@@ -969,12 +912,8 @@ fn test_install_accepts_path_at_255_byte_boundary() {
     store.add_user_key("longpath-key", verifying_key).unwrap();
 
     let providers_dir = tmp.path().join("providers");
-    let report = install(
-        &ltp_path,
-        providers_dir.as_path(),
-        Some(&store),
-    )
-    .expect("255-byte path is the exact boundary and must install");
+    let report = install(&ltp_path, providers_dir.as_path(), Some(&store))
+        .expect("255-byte path is the exact boundary and must install");
     assert!(report.install_path.join(&long_name).exists());
 }
 
@@ -1001,12 +940,7 @@ fn test_install_rejects_per_file_over_20mb() {
     fs::write(plugin_dir.join("init.lua"), &big).unwrap();
 
     let key_dir = tmp.path().join("keys");
-    let keygen_report = keygen(
-        key_dir.as_path(),
-        "big-key",
-        true,
-    )
-    .unwrap();
+    let keygen_report = keygen(key_dir.as_path(), "big-key", true).unwrap();
     let ltp_path = pack(
         plugin_dir.as_path(),
         &keygen_report.key_path,
@@ -1020,11 +954,7 @@ fn test_install_rejects_per_file_over_20mb() {
     store.add_user_key("big-key", verifying_key).unwrap();
 
     let providers_dir = tmp.path().join("providers");
-    let result = install(
-        &ltp_path,
-        providers_dir.as_path(),
-        Some(&store),
-    );
+    let result = install(&ltp_path, providers_dir.as_path(), Some(&store));
     let err = result.expect_err("install of 20 MiB+1 file must fail");
     let msg = err.to_string();
     assert!(
@@ -1062,12 +992,7 @@ fn test_install_rejects_total_extraction_over_100mb() {
     }
 
     let key_dir = tmp.path().join("keys");
-    let keygen_report = keygen(
-        key_dir.as_path(),
-        "total-big-key",
-        true,
-    )
-    .unwrap();
+    let keygen_report = keygen(key_dir.as_path(), "total-big-key", true).unwrap();
     let ltp_path = pack(
         plugin_dir.as_path(),
         &keygen_report.key_path,
@@ -1081,11 +1006,7 @@ fn test_install_rejects_total_extraction_over_100mb() {
     store.add_user_key("total-big-key", verifying_key).unwrap();
 
     let providers_dir = tmp.path().join("providers");
-    let result = install(
-        &ltp_path,
-        providers_dir.as_path(),
-        Some(&store),
-    );
+    let result = install(&ltp_path, providers_dir.as_path(), Some(&store));
     let err = result.expect_err("install of >100 MiB total must fail");
     let msg = err.to_string();
     assert!(

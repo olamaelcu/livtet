@@ -19,8 +19,8 @@
 // =====================================================================
 
 mod common;
-use livtet_plugins::keys::revocation::RevocationList;
 use camino_tempfile::Utf8TempDir as TempDir;
+use livtet_plugins::keys::revocation::RevocationList;
 
 // ---- `load_or_default` on a missing file ---------------------------
 

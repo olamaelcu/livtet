@@ -18,9 +18,9 @@
 use std::os::unix::fs::PermissionsExt as _;
 
 use assert_cmd::Command;
+use camino_tempfile::Utf8TempDir as TempDir;
 use fs_err as fs;
 use predicates::prelude::*;
-use camino_tempfile::Utf8TempDir as TempDir;
 
 fn isolated_cmd(tmp: &TempDir) -> Command {
     let hmac_hex = "00".repeat(32);

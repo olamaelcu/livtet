@@ -16,12 +16,12 @@ pub mod seed;
 pub mod user_agent;
 
 pub use livtet_covers as covers;
-pub use livtet_data as data;
-pub use livtet_search as search;
 pub use livtet_covers::{
     CacheKey, CachedCover, CoverError, CoverFetcher, CoverResult, CoverStorage, FetchError,
     FetchedCover,
 };
+pub use livtet_data as data;
+pub use livtet_search as search;
 pub use livtet_types::{Address, DbId, DiskPath, Urn, now_primitive};
 #[cfg(feature = "fake")]
 pub use seed::{SeedConfig, SeedResult, seed_database};
