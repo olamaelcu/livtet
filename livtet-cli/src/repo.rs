@@ -1,7 +1,7 @@
 use camino::{Utf8Path, Utf8PathBuf};
 use ed25519_dalek::SigningKey;
 use fs_err as fs;
-use livtet_plugin::{
+use livtet_plugins::{
     archive::verify::verify,
     keys::{keyfile::keygen as plugin_keygen, signing::load_minisign_signing_key},
     repository::{client::RepositoryClient, hmac::HmacKey, index::parse_index_json, publisher},

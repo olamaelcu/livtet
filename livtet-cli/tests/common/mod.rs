@@ -12,7 +12,7 @@ use assert_cmd::Command;
 use camino::{Utf8Path, Utf8PathBuf};
 use ed25519_dalek::{Signer, SigningKey, VerifyingKey};
 use fs_err as fs;
-use livtet_plugin::{
+use livtet_plugins::{
     keys::fingerprint,
     repository::{
         index::{Index, IndexPlugin, IndexVersionEntry, render_index_json},

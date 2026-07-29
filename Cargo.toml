@@ -4,18 +4,17 @@ members = [
   "livtet-core",
   "livtet-ffi",
   "livtet-cli",
-  "livtet-database",
+  "livtet-data",
   "livtet-search",
   "livtet-sync",
   "livtet-types",
-  "livtet-cover",
-  "livtet-plugin",
-  "livtet-lua-plugins",
-  "livtet-lua-stdlib",
+  "livtet-covers",
+  "livtet-plugins",
+  "livtet-plugins-lua",
   "livtet-test-utils",
 ]
 default-members = [
-  "livtet-database",
+  "livtet-data",
   "livtet-types",
   "livtet-core",
   "livtet-search",
@@ -35,9 +34,13 @@ futures-util = "0.3"
 hex = "0.4"
 jsonschema = { version = "0.49.2" }
 livtet-core = { path = "livtet-core" }
-livtet-database = { path = "livtet-database" }
-livtet-plugin = { path = "livtet-plugin" }
+livtet-covers = { path = "livtet-covers" }
+livtet-data = { path = "livtet-data" }
+livtet-plugins = { path = "livtet-plugins" }
+livtet-plugins-lua = { path = "livtet-plugins-lua" }
+livtet-search = { path = "livtet-search" }
 livtet-sync = { path = "livtet-sync" }
+livtet-test-utils = { path = "livtet-test-utils" }
 livtet-types = { path = "livtet-types" }
 miette = "7"
 mutants = "0"

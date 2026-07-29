@@ -62,11 +62,11 @@ pub async fn init_inner(db_path: &str) -> Result<(), MobileError> {
     })?;
 
     tracing::info!("Running migrations...");
-    livtet_database::sql::query("PRAGMA journal_mode = WAL")
+    livtet_data::sql::query("PRAGMA journal_mode = WAL")
         .execute(&*pool)
         .await
         .map_err(|e| MobileError::Database(format!("PRAGMA: {e}")))?;
-    livtet_database::sql::query("PRAGMA synchronous = NORMAL")
+    livtet_data::sql::query("PRAGMA synchronous = NORMAL")
         .execute(&*pool)
         .await
         .map_err(|e| MobileError::Database(format!("PRAGMA: {e}")))?;

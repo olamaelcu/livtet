@@ -51,7 +51,7 @@ impl SeedArgs {
         }
 
         let db_url = format!("sqlite:{}?mode=rwc", db_path);
-        let sea_conn = livtet_database::orm::Database::connect(&db_url)
+        let sea_conn = livtet_data::orm::Database::connect(&db_url)
             .await
             .into_diagnostic()?;
 

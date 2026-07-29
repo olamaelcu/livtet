@@ -1,1 +1,1 @@
-pub use livtet_database::error::{CoreError, Result, Result as CoreResult};
+pub use livtet_data::error::{CoreError, Result, Result as CoreResult};

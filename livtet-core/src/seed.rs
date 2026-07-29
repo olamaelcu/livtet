@@ -1,1 +1,1 @@
-pub use livtet_database::seed::{SeedConfig, SeedResult, seed_database};
+pub use livtet_data::seed::{SeedConfig, SeedResult, seed_database};

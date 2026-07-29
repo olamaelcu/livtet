@@ -100,7 +100,7 @@ fn plugin_trust_copies_pubkey_into_trust_store() {
     // minisign pubkey box. (We re-parse it through the same parser
     // the rest of the CLI uses.)
     let trusted_text = fs::read_to_string(&trusted_dest).expect("read trusted text");
-    let _vk = livtet_plugin::keys::signing::parse_pubkey_text(&trusted_text)
+    let _vk = livtet_plugins::keys::signing::parse_pubkey_text(&trusted_text)
         .expect("trusted pubkey must round-trip through parse_pubkey_text");
 }
 

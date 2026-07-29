@@ -13,7 +13,7 @@ use std::io::Read;
 
 use camino::Utf8Path;
 use fs_err::{self as fs, os::unix::fs::OpenOptionsExt};
-use livtet_plugin::repository::hmac::{HmacKey, PASSPHRASE_SALT};
+use livtet_plugins::repository::hmac::{HmacKey, PASSPHRASE_SALT};
 
 use crate::{Result, cli::KeyringRecoverArgs, error::CliError, output, repo::default_config_dir};
 

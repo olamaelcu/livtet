@@ -1,4 +1,4 @@
-use livtet_database::orm::{ConnectionTrait, DatabaseConnection, DbErr, Statement};
+use livtet_data::orm::{ConnectionTrait, DatabaseConnection, DbErr, Statement};
 
 pub const CHANGE_LOG_TABLE: &str = r#"
 CREATE TABLE IF NOT EXISTS change_log (

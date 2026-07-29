@@ -3,8 +3,8 @@
 //! Extracts all SeaORM entities from the original `livtet-tauri/src/db/` module
 //! so they can be used by both the Tauri app and the Kobo sync binaries.
 
-pub use livtet_database::migration::{Migrator, MigratorTrait};
-pub use livtet_database::sql::{Error as DbErr, SqlitePool as DatabaseConnection};
+pub use livtet_data::migration::{Migrator, MigratorTrait};
+pub use livtet_data::sql::{Error as DbErr, SqlitePool as DatabaseConnection};
 
 pub mod core;
 pub mod cover;
@@ -15,7 +15,10 @@ pub mod paths;
 pub mod seed;
 pub mod user_agent;
 
-pub use livtet_cover::{
+pub use livtet_covers as covers;
+pub use livtet_data as data;
+pub use livtet_search as search;
+pub use livtet_covers::{
     CacheKey, CachedCover, CoverError, CoverFetcher, CoverResult, CoverStorage, FetchError,
     FetchedCover,
 };

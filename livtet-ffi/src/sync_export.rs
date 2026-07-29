@@ -35,7 +35,7 @@ pub enum SyncState {
     },
 }
 
-fn get_db_conn() -> Result<livtet_database::orm::DatabaseConnection, crate::MobileError> {
+fn get_db_conn() -> Result<livtet_data::orm::DatabaseConnection, crate::MobileError> {
     let state = crate::get_state()?;
     Ok(state.db_conn())
 }

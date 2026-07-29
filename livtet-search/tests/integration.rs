@@ -23,9 +23,9 @@
 //! each scenario.
 
 use camino::Utf8Path;
-use livtet_database::orm::{ActiveModelTrait, DatabaseConnection, Set};
-use livtet_database::sql::{AssertSqlSafe, sqlite::SqlitePoolOptions};
-use livtet_database::{
+use livtet_data::orm::{ActiveModelTrait, DatabaseConnection, Set};
+use livtet_data::sql::{AssertSqlSafe, sqlite::SqlitePoolOptions};
+use livtet_data::{
     entities::{
         authors, edition_authors, edition_genres, edition_identifiers, edition_publishers,
         edition_subjects, edition_tags, editions, formats, genres, identifiers, languages,
@@ -47,12 +47,12 @@ async fn fresh_db() -> DatabaseConnection {
         .connect("sqlite::memory:?cache=private")
         .await
         .expect("connect to in-memory sqlite");
-    livtet_database::sql::query(AssertSqlSafe("PRAGMA foreign_keys=ON"))
+    livtet_data::sql::query(AssertSqlSafe("PRAGMA foreign_keys=ON"))
         .execute(&pool)
         .await
         .expect("enable foreign keys");
     Migrator::run(&pool).await.expect("run migrations");
-    livtet_database::orm::SqlxSqliteConnector::from_sqlx_sqlite_pool(pool)
+    livtet_data::orm::SqlxSqliteConnector::from_sqlx_sqlite_pool(pool)
 }
 
 fn now_p() -> time::PrimitiveDateTime {

@@ -10,7 +10,7 @@ use camino::Utf8Path;
 use common::{TestContext, sample_index, setup_test_env, write_signed_repo, *};
 use ed25519_dalek::{Signer, SigningKey, VerifyingKey};
 use fs_err as fs;
-use livtet_plugin::{
+use livtet_plugins::{
     keys::{TrustStore, fingerprint},
     repository::{
         client::RepositoryClient,
@@ -177,7 +177,7 @@ async fn repo_confirm_add_caches_repo_toml_and_index() {
         cached_sig
     );
 
-    let parsed = livtet_plugin::repository::repo_toml::parse_repo_toml(
+    let parsed = livtet_plugins::repository::repo_toml::parse_repo_toml(
         &fs::read_to_string(cached_toml.as_std_path()).unwrap(),
     )
     .expect("cached repo.toml must parse");

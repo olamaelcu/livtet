@@ -42,7 +42,7 @@ pub struct SyncClient {
 }
 
 impl SyncClient {
-    pub fn new(db: &livtet_database::orm::DatabaseConnection, device_id: &str) -> Self {
+    pub fn new(db: &livtet_data::orm::DatabaseConnection, device_id: &str) -> Self {
         Self::with_http(
             db,
             device_id,
@@ -55,7 +55,7 @@ impl SyncClient {
 
     /// Build a client with an externally supplied `reqwest::Client`.
     pub fn with_http(
-        db: &livtet_database::orm::DatabaseConnection,
+        db: &livtet_data::orm::DatabaseConnection,
         device_id: &str,
         http: reqwest::Client,
     ) -> Self {

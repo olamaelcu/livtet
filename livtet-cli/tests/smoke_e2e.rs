@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use camino::{Utf8Path, Utf8PathBuf};
 use ed25519_dalek::Signer;
 use fs_err as fs;
-use livtet_plugin::{
+use livtet_plugins::{
     archive::pack::pack as archive_pack,
     keys::{
         TrustStore, fingerprint,

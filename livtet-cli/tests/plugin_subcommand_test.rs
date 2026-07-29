@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use camino::Utf8Path;
 use ed25519_dalek::Signer;
 use fs_err as fs;
-use livtet_plugin::{
+use livtet_plugins::{
     archive::pack::pack,
     keys::{TrustStore, keyfile::keygen, signing::parse_pubkey_text},
     repository::{
@@ -148,7 +148,7 @@ fn seed_signed_index(
     ed25519_dalek::SigningKey,
     std::collections::BTreeMap<String, String>,
 ) {
-    use livtet_plugin::keys::fingerprint;
+    use livtet_plugins::keys::fingerprint;
     let mut versions = BTreeMap::new();
     let mut fingerprints = BTreeMap::new();
     for (plugin_id, version_archives) in plugins {
@@ -264,13 +264,13 @@ fn run_search_with_repo_filter_only_searches_named_repo() {
         csprng.fill_bytes(&mut __ed25519_seed);
         ed25519_dalek::SigningKey::from_bytes(&__ed25519_seed)
     };
-    let alpha_fp = livtet_plugin::keys::fingerprint(&alpha_signing.verifying_key());
+    let alpha_fp = livtet_plugins::keys::fingerprint(&alpha_signing.verifying_key());
     let beta_signing = {
         let mut __ed25519_seed = [0u8; 32];
         csprng.fill_bytes(&mut __ed25519_seed);
         ed25519_dalek::SigningKey::from_bytes(&__ed25519_seed)
     };
-    let beta_fp = livtet_plugin::keys::fingerprint(&beta_signing.verifying_key());
+    let beta_fp = livtet_plugins::keys::fingerprint(&beta_signing.verifying_key());
 
     for (name, signing, plugin, version, archive) in [
         (

@@ -21,7 +21,7 @@ camino.workspace = true
 fs-err = { workspace = true }
 livtet-types = { workspace = true }
 livtet-core = { workspace = true }
-livtet-database = { workspace = true, features = ["server", "backup"] }
+livtet-data = { workspace = true, features = ["server", "backup"] }
 sea-query = "1.0"
 serde = { workspace = true }
 serde_json = { workspace = true }

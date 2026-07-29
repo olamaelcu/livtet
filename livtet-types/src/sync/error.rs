@@ -3,10 +3,10 @@
 //! `SyncError` is returned by `SyncEngine` and `SyncClient` in place
 //! of `sea_orm::DbErr`.  The `Db` variant carries the human-readable
 //! error message (FK and composite primary-key violations are
-//! pre-enhanced by `livtet_database::ConstraintViolation::enhance_db_err`)
+//! pre-enhanced by `livtet_data::ConstraintViolation::enhance_db_err`)
 //! plus the optional [`ConstraintViolation`] value when one is recognised.
 
-use livtet_database::ConstraintViolation;
+use livtet_data::ConstraintViolation;
 use miette::Diagnostic;
 use thiserror::Error;
 

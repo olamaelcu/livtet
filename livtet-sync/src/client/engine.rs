@@ -4,19 +4,19 @@
 //! queries, and the FFI uses it for the same on the mobile device.
 
 use livtet_types::DbId;
-use livtet_database::orm::{ConnectionTrait, TransactionTrait};
+use livtet_data::orm::{ConnectionTrait, TransactionTrait};
 
 use crate::types::{Conflict, FullDump, PullResponse, PushResponse, SyncChange, SyncError};
 
 /// All push/pull/full-dump logic against the local DB.
 #[derive(Clone)]
 pub struct SyncEngine {
-    db: livtet_database::orm::DatabaseConnection,
+    db: livtet_data::orm::DatabaseConnection,
     device_id: String,
 }
 
 impl SyncEngine {
-    pub fn new(db: livtet_database::orm::DatabaseConnection, device_id: String) -> Self {
+    pub fn new(db: livtet_data::orm::DatabaseConnection, device_id: String) -> Self {
         Self { db, device_id }
     }
 
@@ -24,13 +24,13 @@ impl SyncEngine {
         &self.device_id
     }
 
-    pub fn db(&self) -> &livtet_database::orm::DatabaseConnection {
+    pub fn db(&self) -> &livtet_data::orm::DatabaseConnection {
         &self.db
     }
 
     pub async fn get_latest_version(&self) -> Result<i64, SyncError> {
-        let stmt = livtet_database::orm::Statement::from_string(
-            livtet_database::orm::DatabaseBackend::Sqlite,
+        let stmt = livtet_data::orm::Statement::from_string(
+            livtet_data::orm::DatabaseBackend::Sqlite,
             "SELECT MAX(version) AS max_ver FROM change_log",
         );
         let row = self.db.query_one_raw(stmt).await?;
@@ -44,8 +44,8 @@ impl SyncEngine {
         since_version: i64,
         limit: i64,
     ) -> Result<PullResponse, SyncError> {
-        let stmt = livtet_database::orm::Statement::from_sql_and_values(
-            livtet_database::orm::DatabaseBackend::Sqlite,
+        let stmt = livtet_data::orm::Statement::from_sql_and_values(
+            livtet_data::orm::DatabaseBackend::Sqlite,
             "SELECT id, entity_type, entity_id, operation, version, payload, changed_at, device_id \
              FROM change_log WHERE version > ? ORDER BY version ASC LIMIT ?",
             [since_version.into(), limit.into()],
@@ -89,14 +89,14 @@ impl SyncEngine {
         let version = self.get_latest_version().await.unwrap_or(0);
 
         async fn query_table(
-            db: &livtet_database::orm::DatabaseConnection,
+            db: &livtet_data::orm::DatabaseConnection,
             table: &str,
             cols: &[&str],
         ) -> Result<Vec<serde_json::Value>, SyncError> {
             let col_list: Vec<String> = cols.iter().map(|s| (*s).to_string()).collect();
             let query = format!("SELECT {} FROM {}", col_list.join(", "), table);
-            let stmt = livtet_database::orm::Statement::from_sql_and_values(
-                livtet_database::orm::DatabaseBackend::Sqlite,
+            let stmt = livtet_data::orm::Statement::from_sql_and_values(
+                livtet_data::orm::DatabaseBackend::Sqlite,
                 &query,
                 [],
             );
@@ -289,8 +289,8 @@ impl SyncEngine {
                 }
             })?;
 
-            let check = livtet_database::orm::Statement::from_sql_and_values(
-                livtet_database::orm::DatabaseBackend::Sqlite,
+            let check = livtet_data::orm::Statement::from_sql_and_values(
+                livtet_data::orm::DatabaseBackend::Sqlite,
                 "SELECT version, payload FROM change_log WHERE entity_type = ? AND entity_id = ? ORDER BY version DESC LIMIT 1",
                 [
                     change.entity_type.clone().into(),
@@ -305,8 +305,8 @@ impl SyncEngine {
                     .unwrap_or_default();
 
                 if local_version > change.version {
-                    let insert_conflict = livtet_database::orm::Statement::from_sql_and_values(
-                        livtet_database::orm::DatabaseBackend::Sqlite,
+                    let insert_conflict = livtet_data::orm::Statement::from_sql_and_values(
+                        livtet_data::orm::DatabaseBackend::Sqlite,
                         "INSERT INTO conflicts (entity_type, entity_id, local_payload, remote_payload, detected_at) \
                          VALUES (?, ?, ?, ?, datetime('now'))",
                         [
@@ -318,8 +318,8 @@ impl SyncEngine {
                     );
                     txn.execute_raw(insert_conflict).await?;
 
-                    let fetch = livtet_database::orm::Statement::from_sql_and_values(
-                        livtet_database::orm::DatabaseBackend::Sqlite,
+                    let fetch = livtet_data::orm::Statement::from_sql_and_values(
+                        livtet_data::orm::DatabaseBackend::Sqlite,
                         "SELECT id, entity_type, entity_id, local_payload, remote_payload, \
                                 resolved, resolution, merged_payload, detected_at \
                          FROM conflicts \
@@ -339,16 +339,16 @@ impl SyncEngine {
 
             match change.operation.as_str() {
                 "INSERT" => {
-                    txn.execute_raw(livtet_database::orm::Statement::from_sql_and_values(
-                        livtet_database::orm::DatabaseBackend::Sqlite,
+                    txn.execute_raw(livtet_data::orm::Statement::from_sql_and_values(
+                        livtet_data::orm::DatabaseBackend::Sqlite,
                         format!("INSERT OR IGNORE INTO {} (id) VALUES (?)", table),
                         [hex::decode(&change.entity_id).unwrap_or_default().into()],
                     ))
                     .await?;
                 }
                 "DELETE" => {
-                    txn.execute_raw(livtet_database::orm::Statement::from_sql_and_values(
-                        livtet_database::orm::DatabaseBackend::Sqlite,
+                    txn.execute_raw(livtet_data::orm::Statement::from_sql_and_values(
+                        livtet_data::orm::DatabaseBackend::Sqlite,
                         format!("DELETE FROM {} WHERE id = ?", table),
                         [hex::decode(&change.entity_id).unwrap_or_default().into()],
                     ))
@@ -363,8 +363,8 @@ impl SyncEngine {
                 }
             }
 
-            use livtet_database::client_entities::change_log;
-            use livtet_database::orm::{ActiveModelTrait, Set};
+            use livtet_data::client_entities::change_log;
+            use livtet_data::orm::{ActiveModelTrait, Set};
             let now = time::OffsetDateTime::now_utc()
                 .format(
                     &time::format_description::parse_borrowed::<2>(
@@ -397,8 +397,8 @@ impl SyncEngine {
     }
 
     pub async fn list_conflicts(&self) -> Result<Vec<Conflict>, SyncError> {
-        let stmt = livtet_database::orm::Statement::from_string(
-            livtet_database::orm::DatabaseBackend::Sqlite,
+        let stmt = livtet_data::orm::Statement::from_string(
+            livtet_data::orm::DatabaseBackend::Sqlite,
             "SELECT id, entity_type, entity_id, local_payload, remote_payload, \
                     resolved, resolution, merged_payload, detected_at \
              FROM conflicts WHERE resolved = 0 ORDER BY id DESC",
@@ -414,14 +414,14 @@ impl SyncEngine {
         merged_payload: Option<&str>,
     ) -> Result<bool, SyncError> {
         let stmt = match merged_payload {
-            Some(merged) => livtet_database::orm::Statement::from_sql_and_values(
-                livtet_database::orm::DatabaseBackend::Sqlite,
+            Some(merged) => livtet_data::orm::Statement::from_sql_and_values(
+                livtet_data::orm::DatabaseBackend::Sqlite,
                 "UPDATE conflicts SET resolved = 1, resolution = ?, merged_payload = ? \
                      WHERE id = ? AND resolved = 0",
                 [resolution.into(), merged.into(), conflict_id.into()],
             ),
-            None => livtet_database::orm::Statement::from_sql_and_values(
-                livtet_database::orm::DatabaseBackend::Sqlite,
+            None => livtet_data::orm::Statement::from_sql_and_values(
+                livtet_data::orm::DatabaseBackend::Sqlite,
                 "UPDATE conflicts SET resolved = 1, resolution = ?, merged_payload = NULL \
                      WHERE id = ? AND resolved = 0",
                 [resolution.into(), conflict_id.into()],
@@ -436,7 +436,7 @@ pub fn entity_type_to_table(entity_type: &str) -> Option<&'static str> {
     crate::types::syncable_entity::entity_type_to_table(entity_type)
 }
 
-fn row_to_conflict(row: &livtet_database::orm::QueryResult) -> Conflict {
+fn row_to_conflict(row: &livtet_data::orm::QueryResult) -> Conflict {
     Conflict {
         id: row.try_get::<DbId>("", "id").unwrap_or_default(),
         entity_type: row.try_get::<String>("", "entity_type").unwrap_or_default(),

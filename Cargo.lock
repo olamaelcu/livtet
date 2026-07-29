@@ -3142,8 +3142,8 @@ dependencies = [
  "indicatif",
  "inquire",
  "livtet-core",
- "livtet-database",
- "livtet-plugin",
+ "livtet-data",
+ "livtet-plugins",
  "livtet-test-utils",
  "miette",
  "minisign",
@@ -3171,8 +3171,9 @@ dependencies = [
  "dirs",
  "fake",
  "fs-err",
- "livtet-cover",
- "livtet-database",
+ "livtet-covers",
+ "livtet-data",
+ "livtet-search",
  "livtet-types",
  "miette",
  "mutants",
@@ -3190,14 +3191,14 @@ dependencies = [
 ]
 
 [[package]]
-name = "livtet-cover"
+name = "livtet-covers"
 version = "0.1.0"
 dependencies = [
  "async-trait",
  "blurhash",
  "camino",
  "image",
- "livtet-database",
+ "livtet-data",
  "livtet-types",
  "serde",
  "serde_json",
@@ -3207,7 +3208,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "livtet-database"
+name = "livtet-data"
 version = "0.1.0"
 dependencies = [
  "async-trait",
@@ -3243,10 +3244,8 @@ dependencies = [
  "if-addrs",
  "jni",
  "livtet-core",
- "livtet-database",
- "livtet-lua-plugins",
- "livtet-lua-stdlib",
- "livtet-plugin",
+ "livtet-data",
+ "livtet-plugins",
  "livtet-sync",
  "livtet-types",
  "log",
@@ -3267,18 +3266,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "livtet-lua-plugins"
-version = "0.1.0"
-dependencies = [
- "camino",
-]
-
-[[package]]
-name = "livtet-lua-stdlib"
-version = "0.1.0"
-
-[[package]]
-name = "livtet-plugin"
+name = "livtet-plugins"
 version = "0.2.0"
 dependencies = [
  "aes-gcm",
@@ -3296,9 +3284,7 @@ dependencies = [
  "hmac 0.13.0",
  "keyring",
  "livtet-core",
- "livtet-database",
- "livtet-lua-plugins",
- "livtet-lua-stdlib",
+ "livtet-data",
  "livtet-test-utils",
  "livtet-types",
  "miette",
@@ -3331,6 +3317,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "livtet-plugins-lua"
+version = "0.1.0"
+
+[[package]]
 name = "livtet-search"
 version = "0.1.0"
 dependencies = [
@@ -3338,7 +3328,7 @@ dependencies = [
  "camino",
  "camino-tempfile",
  "fs-err",
- "livtet-database",
+ "livtet-data",
  "livtet-types",
  "mutants",
  "parking_lot",
@@ -3367,7 +3357,7 @@ dependencies = [
  "hex",
  "http-range",
  "livtet-core",
- "livtet-database",
+ "livtet-data",
  "livtet-types",
  "miette",
  "poem",

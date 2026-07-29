@@ -16,7 +16,7 @@ use poem::{
     post,
     web::{Data, Json, Path, Query, sse},
 };
-use livtet_database::orm::EntityTrait;
+use livtet_data::orm::EntityTrait;
 use tokio::sync::{Mutex, RwLock, watch};
 
 type DynError = Box<dyn std::error::Error + Send + Sync>;
@@ -92,9 +92,9 @@ async fn post_pair(
 ) -> Result<Json<serde_json::Value>, Error> {
     let inner = engine.read().await;
 
-    use livtet_database::client_entities::pending_pairings;
+    use livtet_data::client_entities::pending_pairings;
     use livtet_types::{DbId, DeviceType, PairingStatus};
-    use livtet_database::orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, Set};
+    use livtet_data::orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, Set};
 
     let pending_id = DbId::from(PairingStatus::Pending);
     let now = time::OffsetDateTime::now_utc();
@@ -254,7 +254,7 @@ async fn get_file(
 
     let engine = engine.read().await;
 
-    let row = match livtet_database::entities::digital_inventory::Entity::find_by_id(inv_id)
+    let row = match livtet_data::entities::digital_inventory::Entity::find_by_id(inv_id)
         .one(engine.db())
         .await
     {
@@ -391,7 +391,7 @@ impl SyncServerInstance {
 
     pub async fn start(
         &mut self,
-        db: livtet_database::orm::DatabaseConnection,
+        db: livtet_data::orm::DatabaseConnection,
         device_id: String,
         port: u16,
     ) -> Result<(), DynError> {
@@ -473,7 +473,7 @@ impl Default for SyncServerInstance {
 }
 
 pub async fn start_sync_server(
-    db: livtet_database::orm::DatabaseConnection,
+    db: livtet_data::orm::DatabaseConnection,
     device_id: String,
     port: u16,
 ) -> Result<(), DynError> {

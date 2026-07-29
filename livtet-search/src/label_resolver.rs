@@ -14,10 +14,10 @@ use std::{
     time::{Duration, Instant},
 };
 
-use livtet_database::entities::{formats, languages};
+use livtet_data::entities::{formats, languages};
 use livtet_types::DbId;
 use parking_lot::Mutex;
-use livtet_database::orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter};
+use livtet_data::orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter};
 
 type CacheValue = (Vec<String>, Vec<String>, Instant);
 
@@ -58,7 +58,7 @@ impl LabelResolver {
         db: &DatabaseConnection,
         format_ids: &[DbId],
         language_ids: &[DbId],
-    ) -> Result<(Vec<String>, Vec<String>), livtet_database::orm::DbErr> {
+    ) -> Result<(Vec<String>, Vec<String>), livtet_data::orm::DbErr> {
         let key = (hash_ids(format_ids), hash_ids(language_ids));
 
         // Check cache.

@@ -33,7 +33,7 @@ use std::{collections::HashMap, ops::Range, sync::Arc};
 use camino::Utf8Path;
 use fs_err as fs;
 use rayon::prelude::*;
-use livtet_database::orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter};
+use livtet_data::orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter};
 use serde::{Deserialize, Serialize};
 use specta::Type;
 use tantivy::{
@@ -681,7 +681,7 @@ pub enum SearchError {
     #[error("tantivy error: {0}")]
     Tantivy(#[from] tantivy::TantivyError),
     #[error("database error: {0}")]
-    Db(#[from] livtet_database::orm::DbErr),
+    Db(#[from] livtet_data::orm::DbErr),
     #[error("snippet generation failed: {0}")]
     Snippet(String),
     #[error(
@@ -879,7 +879,7 @@ impl SearchIndex {
     #[tracing::instrument(level = "info", name = "search.reindex", skip_all)]
     pub async fn reindex(&self, db: &DatabaseConnection) -> Result<(), SearchError> {
         let start = std::time::Instant::now();
-        use livtet_database::entities::{
+        use livtet_data::entities::{
             authors::Entity as Authors, edition_authors::Entity as EditionAuthors,
             edition_genres::Entity as EditionGenres, edition_identifiers::Entity as EditionIds,
             edition_publishers::Entity as EditionPublishers,
@@ -918,7 +918,7 @@ impl SearchIndex {
         } else {
             EditionAuthors::find()
                 .filter(
-                    livtet_database::entities::edition_authors::Column::EditionId
+                    livtet_data::entities::edition_authors::Column::EditionId
                         .is_in(edition_ids.clone()),
                 )
                 .all(db)
@@ -948,7 +948,7 @@ impl SearchIndex {
         } else {
             WorkAuthors::find()
                 .filter(
-                    livtet_database::entities::work_authors::Column::WorkId.is_in(work_ids.clone()),
+                    livtet_data::entities::work_authors::Column::WorkId.is_in(work_ids.clone()),
                 )
                 .all(db)
                 .await?
@@ -970,7 +970,7 @@ impl SearchIndex {
         } else {
             EditionTags::find()
                 .filter(
-                    livtet_database::entities::edition_tags::Column::EditionId
+                    livtet_data::entities::edition_tags::Column::EditionId
                         .is_in(edition_ids.clone()),
                 )
                 .all(db)
@@ -992,7 +992,7 @@ impl SearchIndex {
         } else {
             EditionGenres::find()
                 .filter(
-                    livtet_database::entities::edition_genres::Column::EditionId
+                    livtet_data::entities::edition_genres::Column::EditionId
                         .is_in(edition_ids.clone()),
                 )
                 .all(db)
@@ -1014,7 +1014,7 @@ impl SearchIndex {
         } else {
             EditionSubjects::find()
                 .filter(
-                    livtet_database::entities::edition_subjects::Column::EditionId
+                    livtet_data::entities::edition_subjects::Column::EditionId
                         .is_in(edition_ids.clone()),
                 )
                 .all(db)
@@ -1038,7 +1038,7 @@ impl SearchIndex {
         } else {
             EditionPublishers::find()
                 .filter(
-                    livtet_database::entities::edition_publishers::Column::EditionId
+                    livtet_data::entities::edition_publishers::Column::EditionId
                         .is_in(edition_ids.clone()),
                 )
                 .all(db)
@@ -1063,7 +1063,7 @@ impl SearchIndex {
         } else {
             SeriesEntries::find()
                 .filter(
-                    livtet_database::entities::series_entries::Column::EditionId
+                    livtet_data::entities::series_entries::Column::EditionId
                         .is_in(edition_ids.clone()),
                 )
                 .all(db)
@@ -1086,7 +1086,7 @@ impl SearchIndex {
         } else {
             EditionIds::find()
                 .filter(
-                    livtet_database::entities::edition_identifiers::Column::EditionId
+                    livtet_data::entities::edition_identifiers::Column::EditionId
                         .is_in(edition_ids.clone()),
                 )
                 .all(db)
@@ -1094,18 +1094,18 @@ impl SearchIndex {
         };
         let ident_pk_ids: Vec<livtet_types::DbId> =
             edition_id_rows.iter().map(|r| r.identifier_id).collect();
-        let identifiers: Vec<livtet_database::entities::identifiers::Model> =
+        let identifiers: Vec<livtet_data::entities::identifiers::Model> =
             if ident_pk_ids.is_empty() {
                 Vec::new()
             } else {
                 Identifiers::find()
-                    .filter(livtet_database::entities::identifiers::Column::Id.is_in(ident_pk_ids))
+                    .filter(livtet_data::entities::identifiers::Column::Id.is_in(ident_pk_ids))
                     .all(db)
                     .await?
             };
         let ident_by_id: HashMap<
             livtet_types::DbId,
-            &livtet_database::entities::identifiers::Model,
+            &livtet_data::entities::identifiers::Model,
         > = identifiers.iter().map(|i| (i.id, i)).collect();
 
         let mut edition_isbns: HashMap<livtet_types::DbId, Vec<String>> = HashMap::new();
@@ -1171,7 +1171,7 @@ impl SearchIndex {
             .iter()
             .map(|l| (l.id, l.name.as_str()))
             .collect();
-        let works_by_id: HashMap<livtet_types::DbId, &livtet_database::entities::works::Model> =
+        let works_by_id: HashMap<livtet_types::DbId, &livtet_data::entities::works::Model> =
             all_works.iter().map(|w| (w.id, w)).collect();
 
         // ---- Phase 2: write documents.
@@ -2835,13 +2835,13 @@ pub trait WorkLookup: Send + Sync {
         &self,
         conn: &DatabaseConnection,
         id: livtet_types::DbId,
-    ) -> Result<Option<livtet_database::entities::works::Model>, livtet_database::orm::DbErr>;
+    ) -> Result<Option<livtet_data::entities::works::Model>, livtet_data::orm::DbErr>;
 
     async fn find_many(
         &self,
         conn: &DatabaseConnection,
         ids: &[livtet_types::DbId],
-    ) -> Result<Vec<livtet_database::entities::works::Model>, livtet_database::orm::DbErr>;
+    ) -> Result<Vec<livtet_data::entities::works::Model>, livtet_data::orm::DbErr>;
 }
 
 /// Lookup an individual edition or a batch by id, plus the ISBN
@@ -2852,13 +2852,13 @@ pub trait EditionLookup: Send + Sync {
         &self,
         conn: &DatabaseConnection,
         id: livtet_types::DbId,
-    ) -> Result<Option<livtet_database::entities::editions::Model>, livtet_database::orm::DbErr>;
+    ) -> Result<Option<livtet_data::entities::editions::Model>, livtet_data::orm::DbErr>;
 
     async fn find_many(
         &self,
         conn: &DatabaseConnection,
         ids: &[livtet_types::DbId],
-    ) -> Result<Vec<livtet_database::entities::editions::Model>, livtet_database::orm::DbErr>;
+    ) -> Result<Vec<livtet_data::entities::editions::Model>, livtet_data::orm::DbErr>;
 
     /// Resolve ISBNs for a batch of editions by joining
     /// `edition_identifiers` → `identifiers` where `kind = 'isbn'`.
@@ -2869,7 +2869,7 @@ pub trait EditionLookup: Send + Sync {
         &self,
         conn: &DatabaseConnection,
         ids: &[livtet_types::DbId],
-    ) -> Result<HashMap<livtet_types::DbId, Vec<String>>, livtet_database::orm::DbErr>;
+    ) -> Result<HashMap<livtet_types::DbId, Vec<String>>, livtet_data::orm::DbErr>;
 }
 
 /// Lookup an individual author or a batch by id.
@@ -2879,13 +2879,13 @@ pub trait AuthorLookup: Send + Sync {
         &self,
         conn: &DatabaseConnection,
         id: livtet_types::DbId,
-    ) -> Result<Option<livtet_database::entities::authors::Model>, livtet_database::orm::DbErr>;
+    ) -> Result<Option<livtet_data::entities::authors::Model>, livtet_data::orm::DbErr>;
 
     async fn find_many(
         &self,
         conn: &DatabaseConnection,
         ids: &[livtet_types::DbId],
-    ) -> Result<Vec<livtet_database::entities::authors::Model>, livtet_database::orm::DbErr>;
+    ) -> Result<Vec<livtet_data::entities::authors::Model>, livtet_data::orm::DbErr>;
 }
 
 /// One categorical axis the saved-search engine can target. Each
@@ -2928,7 +2928,7 @@ pub trait ResourceLookup: Send + Sync {
         conn: &DatabaseConnection,
         kind: ResourceKind,
         id: livtet_types::DbId,
-    ) -> Result<bool, livtet_database::orm::DbErr>;
+    ) -> Result<bool, livtet_data::orm::DbErr>;
 
     /// Resolve a batch of ids under a single axis to their display
     /// names. Missing ids are omitted from the result.
@@ -2937,7 +2937,7 @@ pub trait ResourceLookup: Send + Sync {
         conn: &DatabaseConnection,
         kind: ResourceKind,
         ids: &[livtet_types::DbId],
-    ) -> Result<HashMap<livtet_types::DbId, String>, livtet_database::orm::DbErr>;
+    ) -> Result<HashMap<livtet_types::DbId, String>, livtet_data::orm::DbErr>;
 }
 
 // ---------------------------------------------------------------------------

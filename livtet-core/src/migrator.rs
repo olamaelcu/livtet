@@ -1,1 +1,1 @@
-pub use livtet_database::migrator::{Kind, connect_with_migrations, run_kinds};
+pub use livtet_data::migrator::{Kind, connect_with_migrations, run_kinds};

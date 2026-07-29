@@ -1,12 +1,12 @@
 //! Canonical error type for the sync protocol.
 //!
 //! `SyncError` is returned by `SyncEngine` and `SyncClient` in place
-//! of `livtet_database::orm::DbErr`.  The `Db` variant carries the human-readable
+//! of `livtet_data::orm::DbErr`.  The `Db` variant carries the human-readable
 //! error message (FK and composite primary-key violations are
-//! pre-enhanced by `livtet_database::ConstraintViolation::enhance_db_err`)
+//! pre-enhanced by `livtet_data::ConstraintViolation::enhance_db_err`)
 //! plus the optional [`ConstraintViolation`] value when one is recognised.
 
-use livtet_database::ConstraintViolation;
+use livtet_data::ConstraintViolation;
 use livtet_types::DbId;
 use miette::Diagnostic;
 use thiserror::Error;
@@ -47,8 +47,8 @@ pub enum SyncError {
     },
 }
 
-impl From<livtet_database::orm::DbErr> for SyncError {
-    fn from(err: livtet_database::orm::DbErr) -> Self {
+impl From<livtet_data::orm::DbErr> for SyncError {
+    fn from(err: livtet_data::orm::DbErr) -> Self {
         let (message, violation) = ConstraintViolation::enhance_db_err(err);
         Self::Db { message, violation }
     }
@@ -121,8 +121,8 @@ mod tests {
 
     #[test]
     fn dberr_converts_via_from_into_db_variant() {
-        fn returns_dberr() -> std::result::Result<(), livtet_database::orm::DbErr> {
-            Err(livtet_database::orm::DbErr::RecordNotFound("missing".to_string()))
+        fn returns_dberr() -> std::result::Result<(), livtet_data::orm::DbErr> {
+            Err(livtet_data::orm::DbErr::RecordNotFound("missing".to_string()))
         }
         fn propagate() -> std::result::Result<(), SyncError> {
             returns_dberr()?;
@@ -140,7 +140,7 @@ mod tests {
             other => panic!("expected SyncError::Db, got {other:?}"),
         }
 
-        let dberr = livtet_database::orm::DbErr::Custom("explicit".to_string());
+        let dberr = livtet_data::orm::DbErr::Custom("explicit".to_string());
         let converted: SyncError = dberr.into();
         assert_matches!(converted, SyncError::Db { .. });
     }

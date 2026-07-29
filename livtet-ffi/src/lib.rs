@@ -248,14 +248,14 @@ impl From<livtet_core::error::CoreError> for MobileError {
     }
 }
 
-impl From<livtet_database::orm::DbErr> for MobileError {
-    fn from(e: livtet_database::orm::DbErr) -> Self {
+impl From<livtet_data::orm::DbErr> for MobileError {
+    fn from(e: livtet_data::orm::DbErr) -> Self {
         MobileError::Database(format!("Database error: {}", e))
     }
 }
 
-impl From<livtet_database::sql::Error> for MobileError {
-    fn from(e: livtet_database::sql::Error) -> Self {
+impl From<livtet_data::sql::Error> for MobileError {
+    fn from(e: livtet_data::sql::Error) -> Self {
         MobileError::Database(format!("SQLx error: {}", e))
     }
 }
@@ -313,13 +313,10 @@ pub fn is_sync_pool_initialized() -> bool {
 /// or Late Night).
 #[uniffi::export]
 pub fn get_greeting() -> Greeting {
-    Greeting {
-        label: String::new(),
-        text: String::new(),
-        author: String::new(),
-        material: String::new(),
-        period: String::new(),
-    }
+    // TBD: the `livtet_core::Greeting` type and the quote source
+    // (`data/quotes/`) are not yet wired in `livtet-core`. Restore the
+    // real implementation once the greeting literal pool lands.
+    panic!("TBD: Greeting/EmptyMessage quote source not in livtet-core")
 }
 
 /// Return an empty-state filler — a literary quotation without a
@@ -328,11 +325,8 @@ pub fn get_greeting() -> Greeting {
 /// from `livtet_core::data::quotes::empty.txt` per call.
 #[uniffi::export]
 pub fn get_empty_state_quotation() -> EmptyMessage {
-    EmptyMessage {
-        text: String::new(),
-        author: String::new(),
-        material: String::new(),
-    }
+    // TBD: see `get_greeting` above. Same root cause.
+    panic!("TBD: Greeting/EmptyMessage quote source not in livtet-core")
 }
 
 // ── Seed (debug) ───────────────────────────────────────────────────────────

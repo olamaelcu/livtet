@@ -13,9 +13,9 @@ fake = []
 
 [dependencies]
 dirs = "6.0"
-livtet-plugin = { workspace = true }
+livtet-plugins = { workspace = true }
 livtet-core = { workspace = true, features = ["fake"] }
-livtet-database = { workspace = true }
+livtet-data = { workspace = true }
 clap = { version = "4", features = ["derive", "env"] }
 miette = { workspace = true }
 thiserror = { workspace = true }

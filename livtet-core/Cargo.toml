@@ -9,7 +9,7 @@ independent = true
 
 [features]
 default = []
-fake = ["dep:fake", "livtet-database/fake", "livtet-types/fake"]
+fake = ["dep:fake", "livtet-data/fake", "livtet-types/fake"]
 
 [dependencies]
 async-trait.workspace = true
@@ -19,9 +19,10 @@ camino-tempfile = { workspace = true }
 dirs = "6"
 fake = { workspace = true, optional = true }
 fs-err = { workspace = true }
-livtet-cover = { path = "../livtet-cover" }
-livtet-database = { path = "../livtet-database" }
-livtet-types = { path = "../livtet-types" }
+livtet-covers = { workspace = true }
+livtet-data = { workspace = true }
+livtet-search = { workspace = true }
+livtet-types = { workspace = true }
 miette = { workspace = true }
 mutants = { workspace = true }
 rand = { workspace = true }

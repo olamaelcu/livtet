@@ -9,7 +9,7 @@ use std::{
 };
 
 use once_cell::sync::Lazy;
-use livtet_database::sql::SqlitePool;
+use livtet_data::sql::SqlitePool;
 
 static POOL_REGISTRY: Lazy<Mutex<HashMap<String, Arc<SqlitePool>>>> =
     Lazy::new(|| Mutex::new(std::collections::HashMap::new()));

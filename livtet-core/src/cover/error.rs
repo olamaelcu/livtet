@@ -12,7 +12,7 @@ pub enum CoverError {
 
     #[error("Database error: {0}")]
     #[diagnostic(code(livtet_core::cover::db_error))]
-    Db(#[from] livtet_database::orm::DbErr),
+    Db(#[from] livtet_data::orm::DbErr),
 
     #[error("Cache error: {0}")]
     #[diagnostic(code(livtet_core::cover::cache_error))]

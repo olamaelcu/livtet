@@ -1,7 +1,7 @@
 use camino::{Utf8Path, Utf8PathBuf};
 use ed25519_dalek::SigningKey;
 use fs_err as fs;
-use livtet_plugin::{
+use livtet_plugins::{
     archive::{install::install as archive_install, manifest::now_iso, pack::pack as archive_pack},
     keys::{TrustStore, fingerprint, keyfile::keygen as plugin_keygen, signing::parse_pubkey_text},
     repository::{
@@ -257,7 +257,7 @@ pub fn resolve_install_source(
                 source,
             })?;
         let index =
-            livtet_plugin::repository::index::parse_index_json(&index_text).map_err(|source| {
+            livtet_plugins::repository::index::parse_index_json(&index_text).map_err(|source| {
                 CliError::IndexParseFailed {
                     repo_name: repo_entry.name.clone(),
                     message: format!("{source}"),
@@ -422,7 +422,7 @@ pub fn run_search_with_key(
                 continue;
             }
         };
-        let index = match livtet_plugin::repository::index::parse_index_json(&index_text) {
+        let index = match livtet_plugins::repository::index::parse_index_json(&index_text) {
             Ok(i) => i,
             Err(e) => {
                 output::warn(&format!(
@@ -636,14 +636,14 @@ fn cmd_uninstall(id: &str, version: &str, providers: &Utf8Path, interactive: boo
 fn load_repositories(
     config_dir: &Utf8Path,
     key: &HmacKey,
-) -> Result<Vec<livtet_plugin::types::Repository>> {
+) -> Result<Vec<livtet_plugins::types::Repository>> {
     let path = config_dir.join("repositories.toml");
     if !path.exists() {
         return Ok(Vec::new());
     }
     let cache_dir = Utf8PathBuf::from_path_buf(std::env::temp_dir())
         .unwrap_or_else(|_| Utf8PathBuf::from("/tmp"));
-    let client = livtet_plugin::repository::client::RepositoryClient::with_http(
+    let client = livtet_plugins::repository::client::RepositoryClient::with_http(
         cache_dir,
         config_dir.to_path_buf(),
         key.clone(),

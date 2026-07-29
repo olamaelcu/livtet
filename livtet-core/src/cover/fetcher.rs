@@ -35,8 +35,8 @@ pub trait CoverFetcher: Send + Sync {
     fn priority(&self) -> u8;
     async fn keys_for(
         &self,
-        edition: &livtet_database::entities::edtions::Model,
-        db: &livtet_database::orm::DatabaseConnection,
-    ) -> std::result::Result<Vec<CacheKey>, livtet_database::orm::DbErr>;
+        edition: &livtet_data::entities::edtions::Model,
+        db: &livtet_data::orm::DatabaseConnection,
+    ) -> std::result::Result<Vec<CacheKey>, livtet_data::orm::DbErr>;
     async fn fetch(&self, key: &CacheKey) -> std::result::Result<FetchedCover, FetchError>;
 }

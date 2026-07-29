@@ -129,7 +129,7 @@ macro_rules! define_syncable_entities {
 //   * Entity type   – the `change_log.entity_type` string
 //   * Table name    – the SQLite table name
 
-use livtet_database::entities::{
+use livtet_data::entities::{
     annotations, digital_inventory, edition_authors, edition_genres, edition_groups,
     edition_publishers, edition_subjects, edition_tags, editions, editions_loans, owned_edition,
     reading_list_book, reading_lists, reading_progress, series_entries, work_authors, work_genres,
@@ -346,53 +346,53 @@ impl SyncableEntityKind {
     /// using sea-ORM typed queries (replaces the old `query_table` helper).
     pub async fn dump_all(db: &sea_orm::DatabaseConnection) -> Result<super::EntityDump> {
         Ok(super::EntityDump {
-            works: fetch_all_json::<livtet_database::entities::works::Entity>(db, "work").await?,
-            editions: fetch_all_json::<livtet_database::entities::editions::Entity>(db, "edition")
+            works: fetch_all_json::<livtet_data::entities::works::Entity>(db, "work").await?,
+            editions: fetch_all_json::<livtet_data::entities::editions::Entity>(db, "edition")
                 .await?,
-            edition_groups: fetch_all_json::<livtet_database::entities::edition_groups::Entity>(
+            edition_groups: fetch_all_json::<livtet_data::entities::edition_groups::Entity>(
                 db,
                 "edition_group",
             )
             .await?,
-            series_entries: fetch_all_json::<livtet_database::entities::series_entries::Entity>(
+            series_entries: fetch_all_json::<livtet_data::entities::series_entries::Entity>(
                 db,
                 "series_entry",
             )
             .await?,
             digital_inventory:
-                fetch_all_json::<livtet_database::entities::digital_inventory::Entity>(
+                fetch_all_json::<livtet_data::entities::digital_inventory::Entity>(
                     db,
                     "digital_inventory",
                 )
                 .await?,
-            owned_editions: fetch_all_json::<livtet_database::entities::owned_edition::Entity>(
+            owned_editions: fetch_all_json::<livtet_data::entities::owned_edition::Entity>(
                 db,
                 "owned_edition",
             )
             .await?,
-            editions_loans: fetch_all_json::<livtet_database::entities::editions_loans::Entity>(
+            editions_loans: fetch_all_json::<livtet_data::entities::editions_loans::Entity>(
                 db,
                 "edition_loan",
             )
             .await?,
-            annotations: fetch_all_json::<livtet_database::entities::annotations::Entity>(
+            annotations: fetch_all_json::<livtet_data::entities::annotations::Entity>(
                 db,
                 "annotation",
             )
             .await?,
-            reading_lists: fetch_all_json::<livtet_database::entities::reading_lists::Entity>(
+            reading_lists: fetch_all_json::<livtet_data::entities::reading_lists::Entity>(
                 db,
                 "reading_list",
             )
             .await?,
             reading_list_book:
-                fetch_all_json::<livtet_database::entities::reading_list_book::Entity>(
+                fetch_all_json::<livtet_data::entities::reading_list_book::Entity>(
                     db,
                     "reading_list_book",
                 )
                 .await?,
             reading_progress:
-                fetch_all_json::<livtet_database::entities::reading_progress::Entity>(
+                fetch_all_json::<livtet_data::entities::reading_progress::Entity>(
                     db,
                     "reading_progress",
                 )

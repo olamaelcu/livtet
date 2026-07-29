@@ -15,12 +15,12 @@
 
 use std::collections::HashMap;
 
-use livtet_database::entities::{
+use livtet_data::entities::{
     authors::Entity as Authors, editions::Entity as Editions, genres::Entity as Genres,
     publishers::Entity as Publishers, series::Entity as Series, subjects::Entity as Subjects,
     tags::Entity as Tags, works::Entity as Works,
 };
-use livtet_database::orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter};
+use livtet_data::orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter};
 use tracing::debug;
 
 use crate::{AuthorLookup, EditionLookup, ResourceKind, ResourceLookup, WorkLookup};
@@ -40,7 +40,7 @@ impl WorkLookup for SeaOrmWorkLookup {
         &self,
         conn: &DatabaseConnection,
         id: livtet_types::DbId,
-    ) -> Result<Option<<Works as EntityTrait>::Model>, livtet_database::orm::DbErr> {
+    ) -> Result<Option<<Works as EntityTrait>::Model>, livtet_data::orm::DbErr> {
         Works::find_by_id(id).one(conn).await
     }
 
@@ -48,7 +48,7 @@ impl WorkLookup for SeaOrmWorkLookup {
         &self,
         conn: &DatabaseConnection,
         ids: &[livtet_types::DbId],
-    ) -> Result<Vec<<Works as EntityTrait>::Model>, livtet_database::orm::DbErr> {
+    ) -> Result<Vec<<Works as EntityTrait>::Model>, livtet_data::orm::DbErr> {
         if ids.is_empty() {
             return Ok(Vec::new());
         }
@@ -69,7 +69,7 @@ impl EditionLookup for SeaOrmEditionLookup {
         &self,
         conn: &DatabaseConnection,
         id: livtet_types::DbId,
-    ) -> Result<Option<<Editions as EntityTrait>::Model>, livtet_database::orm::DbErr> {
+    ) -> Result<Option<<Editions as EntityTrait>::Model>, livtet_data::orm::DbErr> {
         Editions::find_by_id(id).one(conn).await
     }
 
@@ -77,7 +77,7 @@ impl EditionLookup for SeaOrmEditionLookup {
         &self,
         conn: &DatabaseConnection,
         ids: &[livtet_types::DbId],
-    ) -> Result<Vec<<Editions as EntityTrait>::Model>, livtet_database::orm::DbErr> {
+    ) -> Result<Vec<<Editions as EntityTrait>::Model>, livtet_data::orm::DbErr> {
         if ids.is_empty() {
             return Ok(Vec::new());
         }
@@ -91,7 +91,7 @@ impl EditionLookup for SeaOrmEditionLookup {
         &self,
         conn: &DatabaseConnection,
         ids: &[livtet_types::DbId],
-    ) -> Result<HashMap<livtet_types::DbId, Vec<String>>, livtet_database::orm::DbErr> {
+    ) -> Result<HashMap<livtet_types::DbId, Vec<String>>, livtet_data::orm::DbErr> {
         get_edition_isbns_impl(conn, ids).await
     }
 }
@@ -106,7 +106,7 @@ impl AuthorLookup for SeaOrmAuthorLookup {
         &self,
         conn: &DatabaseConnection,
         id: livtet_types::DbId,
-    ) -> Result<Option<<Authors as EntityTrait>::Model>, livtet_database::orm::DbErr> {
+    ) -> Result<Option<<Authors as EntityTrait>::Model>, livtet_data::orm::DbErr> {
         Authors::find_by_id(id).one(conn).await
     }
 
@@ -114,7 +114,7 @@ impl AuthorLookup for SeaOrmAuthorLookup {
         &self,
         conn: &DatabaseConnection,
         ids: &[livtet_types::DbId],
-    ) -> Result<Vec<<Authors as EntityTrait>::Model>, livtet_database::orm::DbErr> {
+    ) -> Result<Vec<<Authors as EntityTrait>::Model>, livtet_data::orm::DbErr> {
         if ids.is_empty() {
             return Ok(Vec::new());
         }
@@ -142,7 +142,7 @@ impl ResourceLookup for SeaOrmResourceLookup {
         conn: &DatabaseConnection,
         kind: ResourceKind,
         id: livtet_types::DbId,
-    ) -> Result<bool, livtet_database::orm::DbErr> {
+    ) -> Result<bool, livtet_data::orm::DbErr> {
         let found = match kind {
             ResourceKind::Author => Authors::find_by_id(id).one(conn).await?.is_some(),
             ResourceKind::Genre => Genres::find_by_id(id).one(conn).await?.is_some(),
@@ -159,7 +159,7 @@ impl ResourceLookup for SeaOrmResourceLookup {
         conn: &DatabaseConnection,
         kind: ResourceKind,
         ids: &[livtet_types::DbId],
-    ) -> Result<HashMap<livtet_types::DbId, String>, livtet_database::orm::DbErr> {
+    ) -> Result<HashMap<livtet_types::DbId, String>, livtet_data::orm::DbErr> {
         if ids.is_empty() {
             return Ok(HashMap::new());
         }
@@ -228,8 +228,8 @@ impl ResourceLookup for SeaOrmResourceLookup {
 pub async fn get_edition_isbns_impl(
     conn: &DatabaseConnection,
     ids: &[livtet_types::DbId],
-) -> Result<HashMap<livtet_types::DbId, Vec<String>>, livtet_database::orm::DbErr> {
-    use livtet_database::entities::{
+) -> Result<HashMap<livtet_types::DbId, Vec<String>>, livtet_data::orm::DbErr> {
+    use livtet_data::entities::{
         edition_identifiers::Entity as EditionIds, identifiers::Entity as Identifiers,
     };
 

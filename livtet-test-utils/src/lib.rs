@@ -1,5 +1,5 @@
 //! Test utilities shared across the workspace. Stub: only the
-//! minimum surface required by `livtet-plugin`'s HTTP integration
+//! minimum surface required by `livtet-plugins`'s HTTP integration
 //! tests. Extend as new tests need it.
 
 use std::{collections::HashMap, sync::Arc};
@@ -8,7 +8,7 @@ use camino::Utf8PathBuf;
 use tokio::sync::Mutex;
 
 /// A tiny in-process HTTP/1.1 server used by the
-/// `livtet-plugin::repository::client` integration tests to serve
+/// `livtet-plugins::repository::client` integration tests to serve
 /// repository metadata over loopback. Returned by `spawn_server`.
 pub struct TestServer {
     /// Base URL (e.g. `http://127.0.0.1:54321`) the client should

@@ -23,7 +23,7 @@ use camino::{Utf8Path, Utf8PathBuf};
 use common::{TestContext, sample_index, setup_test_env, write_signed_repo};
 use ed25519_dalek::{Signer, SigningKey, VerifyingKey};
 use fs_err as fs;
-use livtet_plugin::{
+use livtet_plugins::{
     keys::{fingerprint, keyfile::keygen},
     repository::{
         index::{Index, IndexPlugin, IndexVersionEntry, render_index_json},
@@ -101,7 +101,7 @@ fn seed_trust_store_with_key(
 }
 
 fn pack_test_plugin(tmp: &TempDir, id: &str, version: &str) -> Utf8PathBuf {
-    use livtet_plugin::archive::pack::pack as archive_pack;
+    use livtet_plugins::archive::pack::pack as archive_pack;
     let plugin_src = tmp.path().join("plugin-src");
     let out_dir = tmp.path().join("out");
     let keys = tmp.path().join("keys");
@@ -161,7 +161,7 @@ fn repo_init_creates_skeleton_with_repo_toml_and_index_json() {
     assert!(pool.is_dir(), "init must create the pool/ directory");
 
     let toml_text = fs::read_to_string(&repo_toml).expect("read repo.toml");
-    let parsed = livtet_plugin::repository::repo_toml::parse_repo_toml(&toml_text)
+    let parsed = livtet_plugins::repository::repo_toml::parse_repo_toml(&toml_text)
         .expect("repo.toml must parse");
     assert_eq!(parsed.repo.name, "test-repo");
     assert_eq!(parsed.signing.key_fingerprint, "SHA256:deadbeef");
@@ -703,7 +703,7 @@ fn repo_publish_appends_signed_index_entry() {
         "index.json must mention publish-me, got: {index_text}"
     );
     let index: Index =
-        livtet_plugin::repository::index::parse_index_json(&index_text).expect("parse index");
+        livtet_plugins::repository::index::parse_index_json(&index_text).expect("parse index");
     let plugin = index.plugins.get("publish-me").expect("plugin entry");
     assert!(plugin.versions.contains_key("0.1.0"));
 }
@@ -839,7 +839,7 @@ fn repo_unpublish_specific_version_drops_archive_and_index_entry() {
     assert!(!pool_archive.exists(), "{pool_archive:?} must be gone");
     let index_text = fs::read_to_string(repo_dir.join("index.json")).expect("read index");
     let parsed: Index =
-        livtet_plugin::repository::index::parse_index_json(&index_text).expect("parse");
+        livtet_plugins::repository::index::parse_index_json(&index_text).expect("parse");
     if let Some(plugin) = parsed.plugins.get("unpub-me") {
         assert!(
             !plugin.versions.contains_key("0.1.0"),
