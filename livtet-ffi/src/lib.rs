@@ -1,9 +1,12 @@
 mod init;
 mod lookup;
+mod pino_layer;
 mod runtime;
 mod state;
 pub mod sync;
 pub mod sync_export;
+
+pub use pino_layer::PinoLayer;
 
 use livtet_types::DbId;
 
