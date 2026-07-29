@@ -11,10 +11,3 @@ The extensibility seam for third-party Livtet integrations. It defines the typed
 ```bash
 mise run test-rust -p livtet-plugins
 ```
-
-## Architecture
-
-- [docs/ARCHITECTURE.md](../../docs/ARCHITECTURE.md) — workspace overview
-- [docs/reference/adr/0007-plugin-infrastructure.md](../../docs/reference/adr/0007-plugin-infrastructure.md) — process model & IPC
-- [docs/reference/adr/0008-plugin-signing-repositories.md](../../docs/reference/adr/0008-plugin-signing-repositories.md) — trust model
-- [docs/reference/adr/0015-enhanced-plugin-host-logging.md](../../docs/reference/adr/0015-enhanced-plugin-host-logging.md) — host logging

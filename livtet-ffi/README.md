@@ -11,9 +11,3 @@ The mobile-facing surface of Livtet. It compiles to a static library per platfor
 ```bash
 mise run test-rust -p livtet-ffi
 ```
-
-## Architecture
-
-- [docs/ARCHITECTURE.md](../../docs/ARCHITECTURE.md) — workspace overview
-- [docs/reference/adr/0002-ios-ffi-bridge.md](../../docs/reference/adr/0002-ios-ffi-bridge.md) — iOS FFI choice
-- [docs/reference/adr/0017-ios-app-architecture.md](../../docs/reference/adr/0017-ios-app-architecture.md) — iOS app architecture

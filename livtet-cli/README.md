@@ -11,8 +11,3 @@ A `clap`-driven binary that wraps the same library functions the Tauri app uses:
 ```bash
 mise run test-rust -p livtet-cli
 ```
-
-## Architecture
-
-- [docs/ARCHITECTURE.md](../../docs/ARCHITECTURE.md) — workspace overview
-- [docs/reference/adr/0008-plugin-signing-repositories.md](../../docs/reference/adr/0008-plugin-signing-repositories.md) — signing workflow

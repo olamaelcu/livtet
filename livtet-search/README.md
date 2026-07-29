@@ -11,7 +11,3 @@ Maintains a Tantivy index alongside the SQLite database so that library queries 
 ```bash
 mise run test-rust -p livtet-search
 ```
-
-## Architecture
-
-- [docs/ARCHITECTURE.md](../../docs/ARCHITECTURE.md) — workspace overview

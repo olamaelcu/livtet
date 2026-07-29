@@ -11,9 +11,3 @@ The leaf of the dependency graph. It holds ULID wrappers, ISBN/identifier newtyp
 ```bash
 mise run test-rust -p livtet-types
 ```
-
-## Architecture
-
-- [docs/ARCHITECTURE.md](../../docs/ARCHITECTURE.md) — workspace overview
-- [docs/reference/adr/0005-dbid-migration.md](../../docs/reference/adr/0005-dbid-migration.md) — `DbId` design
-- [docs/reference/adr/0019-isbn-newtype.md](../../docs/reference/adr/0019-isbn-newtype.md) — ISBN newtype

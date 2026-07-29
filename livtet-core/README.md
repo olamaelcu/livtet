@@ -13,10 +13,3 @@ Every other Livtet crate either composes `livtet-core` services or talks to the 
 ```bash
 mise run test-rust -p livtet-core
 ```
-
-## Architecture
-
-- [docs/ARCHITECTURE.md](../../docs/ARCHITECTURE.md) — workspace overview
-- [docs/reference/protected_data.md](../../docs/reference/protected_data.md) — data classification
-- [docs/reference/adr/0005-dbid-migration.md](../../docs/reference/adr/0005-dbid-migration.md) — primary-key design
-- [docs/reference/adr/0019-isbn-newtype.md](../../docs/reference/adr/0019-isbn-newtype.md) — strong-typed identifiers

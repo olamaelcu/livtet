@@ -11,8 +11,3 @@ The piece of Livtet that turns a "find me a cover for this ISBN / Open Library w
 ```bash
 mise run test-rust -p livtet-covers
 ```
-
-## Architecture
-
-- [docs/ARCHITECTURE.md](../../docs/ARCHITECTURE.md) — workspace overview
-- [docs/plans/in-progress/multi-provider-cover-system.md](../../docs/plans/in-progress/multi-provider-cover-system.md) — current work

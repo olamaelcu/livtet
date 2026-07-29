@@ -11,8 +11,3 @@ Defines a directory-shaped archive of the SQLite database plus its file-bearing 
 ```bash
 mise run test-rust -p livtet-backup
 ```
-
-## Architecture
-
-- [docs/ARCHITECTURE.md](../../docs/ARCHITECTURE.md) — workspace overview
-- [docs/reference/adr/0012-book-file-sync-pr7-9.md](../../docs/reference/adr/0012-book-file-sync-pr7-9.md) — end-to-end file sync
