@@ -1,0 +1,33 @@
+[package]
+name = "livtet-search"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+
+
+[package.metadata.workspaces]
+independent = true
+
+[dependencies]
+tantivy = "0.26"
+livtet-database = { workspace = true, features = ["server"] }
+livtet-types = { workspace = true, features = ["search"] }
+thiserror.workspace = true
+tracing.workspace = true
+serde.workspace = true
+tokio = { workspace = true, features = ["sync"] }
+specta.workspace = true
+camino.workspace = true
+async-trait.workspace = true
+time.workspace = true
+serde_json.workspace = true
+rayon = "1.12"
+parking_lot = "0.12"
+fs-err.workspace = true
+camino-tempfile = { workspace = true }
+
+[dev-dependencies]
+livtet-database = { workspace = true, features = ["server"] }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+serde_json.workspace = true
+mutants = { workspace = true }

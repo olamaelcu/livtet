@@ -1,0 +1,53 @@
+[package]
+name = "livtet-sync"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+
+[package.metadata.workspaces]
+independent = true
+
+[features]
+default = ["server"]
+server = ["poem"]
+client = []
+backup = []
+fake = ["dep:fake"]
+
+[dependencies]
+camino-tempfile.workspace = true
+async-trait.workspace = true
+camino.workspace = true
+fs-err = { workspace = true }
+livtet-types = { workspace = true }
+livtet-core = { workspace = true }
+livtet-database = { workspace = true, features = ["server", "backup"] }
+sea-query = "1.0"
+serde = { workspace = true }
+serde_json = { workspace = true }
+time = { workspace = true }
+thiserror.workspace = true
+miette.workspace = true
+tokio = { workspace = true, features = ["full"] }
+http-range = "0.1"
+tracing.workspace = true
+ulid.workspace = true
+poem = { version = "3.1", optional = true, default-features = false, features = [
+  "sse",
+  "server",
+] }
+async-stream = "0.3"
+futures-util = { workspace = true }
+hex = { workspace = true }
+rusqlite = { version = "0.32", features = ["bundled", "backup", "session"] }
+reqwest = { workspace = true, default-features = false, features = [
+  "json",
+  "http2",
+] }
+rayon = "1.12"
+fake = { workspace = true, optional = true }
+url = "2"
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt"] }
+poem = { version = "3.1", features = ["sse", "test"] }

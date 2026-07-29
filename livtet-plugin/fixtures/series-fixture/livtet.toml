@@ -1,0 +1,9 @@
+[plugin]
+id = "series-fixture"
+name = "Series Fixture"
+version = "1.0.0"
+description = "A test series plugin that returns canned series data without making HTTP calls"
+type = "provider"
+
+[plugin.capabilities]
+series = true

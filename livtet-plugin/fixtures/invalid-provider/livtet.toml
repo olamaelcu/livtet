@@ -1,0 +1,4 @@
+[plugin]
+id = "INVALID ID!!!"
+name = "Bad Plugin"
+version = "not-semver"

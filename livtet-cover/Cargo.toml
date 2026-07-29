@@ -1,0 +1,29 @@
+[package]
+name = "livtet-cover"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+
+
+[package.metadata.workspaces]
+independent = true
+
+[dependencies]
+livtet-types = { path = "../livtet-types" }
+livtet-database = { workspace = true }
+async-trait.workspace = true
+thiserror.workspace = true
+camino = { workspace = true }
+serde = { workspace = true }
+specta.workspace = true
+blurhash = { version = "0.2", default-features = false, features = [] }
+image = { version = "0.25", default-features = false, features = [
+  "jpeg",
+  "png",
+  "webp",
+  "gif",
+] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt"] }
+serde_json = { workspace = true }

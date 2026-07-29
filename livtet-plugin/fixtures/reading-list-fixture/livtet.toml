@@ -1,0 +1,9 @@
+[plugin]
+id = "reading-list-fixture"
+name = "Reading List Fixture"
+version = "1.0.0"
+description = "A test reading_list plugin that returns canned lists without any network calls"
+type = "provider"
+
+[plugin.capabilities]
+reading_list = true

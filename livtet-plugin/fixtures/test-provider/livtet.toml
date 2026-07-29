@@ -1,0 +1,12 @@
+[plugin]
+id = "test-provider"
+name = "Test Provider"
+version = "1.0.0"
+description = "A test link resolver plugin"
+type = "provider"
+
+[plugin.capabilities]
+link_resolver = true
+
+[plugin.requires]
+http = true

@@ -1,0 +1,9 @@
+[plugin]
+id = "progress-fixture"
+name = "Progress Fixture"
+version = "1.0.0"
+description = "A test reading_progress plugin that returns canned data without making HTTP calls"
+type = "provider"
+
+[plugin.capabilities]
+reading_progress = true

@@ -1,0 +1,12 @@
+[plugin]
+id = "provider-fixture"
+name = "Provider Fixture"
+version = "1.0.0"
+description = "A test provider plugin that returns canned search/lookup/enrich/get_cover results without any network or filesystem access"
+type = "provider"
+
+[plugin.capabilities]
+search = true
+lookup = true
+enrich = true
+cover = true

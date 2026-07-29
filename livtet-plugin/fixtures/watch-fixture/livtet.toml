@@ -1,0 +1,9 @@
+[plugin]
+id = "watch-fixture"
+name = "Watch Fixture"
+version = "1.0.0"
+description = "A test plugin that returns canned watch batches without polling any real source. Used by host_manager_tests.rs to verify the watch capability dispatcher."
+type = "provider"
+
+[plugin.capabilities]
+watch = true

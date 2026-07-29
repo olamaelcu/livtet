@@ -1,0 +1,9 @@
+[plugin]
+id = "annotations-fixture"
+name = "Annotations Fixture"
+version = "1.0.0"
+description = "A test annotations plugin that returns canned data without reading any local files"
+type = "provider"
+
+[plugin.capabilities]
+annotations = true

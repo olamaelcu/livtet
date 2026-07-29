@@ -1,0 +1,10 @@
+[package]
+name = "livtet-test-utils"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+camino = { workspace = true }
+fs-err = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "io-util"] }

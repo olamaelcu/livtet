@@ -1,0 +1,19 @@
+[package]
+name = "livtet-backup"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+
+
+[package.metadata.workspaces]
+independent = true
+
+[dependencies]
+async-trait.workspace = true
+camino.workspace = true
+time = { workspace = true, features = ["serde", "formatting"] }
+thiserror.workspace = true
+miette.workspace = true
+sea-orm = { workspace = true, features = ["time"] }
+serde = { workspace = true }
+specta.workspace = true

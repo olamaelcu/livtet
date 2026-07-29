@@ -1,0 +1,39 @@
+[package]
+name = "livtet-types"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+
+
+[package.metadata.workspaces]
+independent = true
+
+[dependencies]
+ulid.workspace = true
+camino = { workspace = true }
+serde = { workspace = true }
+specta = { workspace = true, features = ["derive"] }
+sea-orm = { version = "2.0", features = ["time", "macros"] }
+time = { workspace = true }
+serde_json.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+thiserror = { workspace = true }
+fake = { workspace = true, optional = true, features = ["derive", "time", "ulid"] }
+rand.workspace = true
+strum = { workspace = true }
+schemars.workspace = true
+jsonschema.workspace = true
+miette = { workspace = true }
+paste = { workspace = true }
+tantivy-query-grammar = { version = "0.26", optional = true }
+mutants = { workspace = true, optional = true }
+async-trait.workspace = true
+specta-typescript = { version = "0.0.12", features = ["serde"] }
+
+[features]
+fake = ["dep:fake", "dep:mutants"]
+search = ["dep:tantivy-query-grammar", "dep:mutants"]
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt", "macros"] }

@@ -1,0 +1,18 @@
+[plugin]
+id = "import-fixture"
+name = "Import (Fixture)"
+version = "0.1.0"
+description = "Mock-host test fixture: returns canned import_detect / import_list_items / import_items responses for a Calibre-style metadata.db source."
+type = "provider"
+runtime = "lua"
+entry = "init.lua"
+
+[plugin.capabilities]
+import_detect = true
+import_list_items = true
+import_items = true
+
+[plugin.requires]
+http = false
+secrets = false
+filesystem = false

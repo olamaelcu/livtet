@@ -1,0 +1,32 @@
+use livtet_types::DbId;
+use sea_orm::entity::prelude::*;
+use serde::{Deserialize, Serialize};
+
+#[cfg_attr(feature = "fake", derive(fake::Dummy))]
+#[derive(Clone, Debug, Serialize, Deserialize, DeriveEntityModel)]
+#[sea_orm(table_name = "edition_genres")]
+pub struct Model {
+    #[sea_orm(primary_key)]
+    pub edition_id: DbId,
+    #[sea_orm(primary_key)]
+    pub genre_id: DbId,
+}
+
+#[cfg_attr(feature = "fake", derive(fake::Dummy))]
+#[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+pub enum Relation {
+    #[sea_orm(
+        belongs_to = "super::editions::Entity",
+        from = "Column::EditionId",
+        to = "super::editions::Column::Id"
+    )]
+    Edition,
+    #[sea_orm(
+        belongs_to = "super::genres::Entity",
+        from = "Column::GenreId",
+        to = "super::genres::Column::Id"
+    )]
+    Genre,
+}
+
+impl ActiveModelBehavior for ActiveModel {}

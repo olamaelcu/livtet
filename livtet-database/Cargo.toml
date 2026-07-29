@@ -1,0 +1,57 @@
+[package]
+name = "livtet-database"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+
+[package.metadata.workspaces]
+independent = true
+
+[features]
+default = []
+# Always compiled; these exist solely so existing consumer `features = [...]`
+# lists keep resolving:
+server = []
+client = []
+core = []
+backup = []
+plugin = []
+# Enables the database seeding module (moved from livtet-core's `fake`-gated seed):
+fake = ["dep:fake", "dep:rand"]
+
+[dependencies]
+sea-orm = { version = "2.0", features = [
+  "sqlx-sqlite",
+  "runtime-tokio-rustls",
+  "macros",
+] }
+sea-orm-migration = { version = "2.0", features = [
+  "runtime-tokio-rustls",
+  "sqlx-sqlite",
+] }
+sqlx = { version = "0.9", features = [
+  "runtime-tokio",
+  "sqlite",
+  "macros",
+  "time",
+] }
+
+serde = { workspace = true }
+serde_json = { workspace = true }
+strum = { workspace = true }
+time = { workspace = true }
+ulid = { workspace = true, features = ["serde"] }
+async-trait = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread"] }
+tracing = { workspace = true }
+miette = { workspace = true }
+thiserror = { workspace = true }
+livtet-types = { workspace = true }
+fake = { workspace = true, optional = true }
+rand = { workspace = true, optional = true }
+camino = { workspace = true, optional = true }
+specta = { workspace = true, optional = true }
+
+# Required by the moved state/test_db modules:
+camino-tempfile = { workspace = true }
+mutants = { workspace = true }

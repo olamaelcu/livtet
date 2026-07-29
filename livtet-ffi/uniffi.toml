@@ -1,0 +1,19 @@
+[bindings.kotlin.custom_types.DbId]
+type_name = "ULID"
+into_custom = "ULID.fromBytes({})"
+from_custom = "{}.toBytes()"
+imports = ["ulid.ULID"]
+
+[bindings.swift.custom_types.DbId]
+type_name = "ULID"
+# FastULID's `ULID(ulidData:)` is failable (`init?`), but uniffi's `into_custom`
+# expects a non-failable expression that returns the custom type. Force-unwrap
+# here is safe because the lower side (`from_custom`) always emits 16 bytes.
+into_custom = "ULID(ulidData: {})!"
+from_custom = "{}.ulidData"
+imports = ["FastULID"]
+
+[bindings.kotlin]
+package_name = "net.olamaelcu.livtet.ffi"
+generate_immutable_records = true
+kotlin_target_version = "2.4.0"

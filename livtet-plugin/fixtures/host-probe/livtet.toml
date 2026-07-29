@@ -1,0 +1,13 @@
+[plugin]
+id = "host-probe"
+name = "Host Probe"
+version = "1.0.0"
+description = "Test fixture that calls every host.* function for round-trip tests"
+type = "provider"
+
+[plugin.capabilities]
+probe = true
+
+[plugin.requires]
+http = false
+secrets = false

@@ -1,0 +1,32 @@
+//! Livtet core library — shared across all livtet crates
+//!
+//! Extracts all SeaORM entities from the original `livtet-tauri/src/db/` module
+//! so they can be used by both the Tauri app and the Kobo sync binaries.
+
+pub use livtet_database::migration::{Migrator, MigratorTrait};
+pub use livtet_database::sql::{Error as DbErr, SqlitePool as DatabaseConnection};
+
+pub mod core;
+pub mod cover;
+pub mod error;
+pub mod migrator;
+pub mod paths;
+#[cfg(feature = "fake")]
+pub mod seed;
+pub mod user_agent;
+
+pub use livtet_cover::{
+    CacheKey, CachedCover, CoverError, CoverFetcher, CoverResult, CoverStorage, FetchError,
+    FetchedCover,
+};
+pub use livtet_types::{Address, DbId, DiskPath, Urn, now_primitive};
+#[cfg(feature = "fake")]
+pub use seed::{SeedConfig, SeedResult, seed_database};
+
+pub use crate::{
+    core::{
+        SharedState, apply_optimizations, get_state, init_state, is_initialized,
+        sqlite_pool_options,
+    },
+    error::{CoreError, Result as CoreResult},
+};

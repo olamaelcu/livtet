@@ -1,0 +1,40 @@
+[package]
+name = "livtet-core"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+
+[package.metadata.workspaces]
+independent = true
+
+[features]
+default = []
+fake = ["dep:fake", "livtet-database/fake", "livtet-types/fake"]
+
+[dependencies]
+async-trait.workspace = true
+blake3 = "1.8"
+camino = { workspace = true }
+camino-tempfile = { workspace = true }
+dirs = "6"
+fake = { workspace = true, optional = true }
+fs-err = { workspace = true }
+livtet-cover = { path = "../livtet-cover" }
+livtet-database = { path = "../livtet-database" }
+livtet-types = { path = "../livtet-types" }
+miette = { workspace = true }
+mutants = { workspace = true }
+rand = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+specta = { workspace = true }
+strsim = "0.11"
+strum = { workspace = true }
+thiserror = { workspace = true }
+time = { version = "0.3", features = ["serde"] }
+tokio = { workspace = true }
+tracing = { workspace = true }
+ulid.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["full"] }

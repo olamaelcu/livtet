@@ -1,0 +1,163 @@
+[[disallowed-types]]
+path = "chrono::Utc"
+reason = "Use `time::OffsetDateTime` from the `time` crate instead"
+
+[[disallowed-types]]
+path = "chrono::DateTime"
+reason = "Use `time::OffsetDateTime` from the `time` crate instead"
+
+[[disallowed-types]]
+path = "chrono::Duration"
+reason = "Use `time::Duration` from the `time` crate instead"
+
+[[disallowed-types]]
+path = "chrono::NaiveDate"
+reason = "Use `time::Date` from the `time` crate instead"
+
+[[disallowed-types]]
+path = "chrono::NaiveDateTime"
+reason = "Use `time::PrimitiveDateTime` from the `time` crate instead"
+
+[[disallowed-types]]
+path = "chrono::NaiveTime"
+reason = "Use `time::Time` from the `time` crate instead"
+
+[[disallowed-types]]
+path = "chrono::Local"
+reason = "Use `time::OffsetDateTime::now_local` from the `time` crate instead"
+
+[[disallowed-types]]
+path = "chrono::FixedOffset"
+reason = "Use `time::UtcOffset` from the `time` crate instead"
+
+[[disallowed-types]]
+path = "chrono::TimeZone"
+reason = "Use types from the `time` crate instead"
+
+[[disallowed-types]]
+path = "chrono::Date"
+reason = "Use `time::Date` from the `time` crate instead"
+
+[[disallowed-types]]
+path = "std::path::Path"
+reason = "Use camino::Utf8Path instead"
+
+[[disallowed-types]]
+path = "std::path::PathBuf"
+reason = "Use camino::Utf8PathBuf instead"
+
+[[disallowed-methods]]
+path = "std::fs::create_dir_all"
+reason = "Use fs_err::fs::create_dir_all (via 'use fs_err as fs') instead of std::fs"
+
+[[disallowed-methods]]
+path = "std::fs::write"
+reason = "Use fs_err::fs::write (via 'use fs_err as fs') instead of std::fs"
+
+[[disallowed-methods]]
+path = "std::fs::read"
+reason = "Use fs_err::fs::read (via 'use fs_err as fs') instead of std::fs"
+
+[[disallowed-methods]]
+path = "std::fs::read_dir"
+reason = "Use fs_err::fs::read_dir (via 'use fs_err as fs') instead of std::fs"
+
+[[disallowed-methods]]
+path = "std::fs::remove_file"
+reason = "Use fs_err::fs::remove_file (via 'use fs_err as fs') instead of std::fs"
+
+[[disallowed-methods]]
+path = "std::fs::remove_dir_all"
+reason = "Use fs_err::fs::remove_dir_all (via 'use fs_err as fs') instead of std::fs"
+
+[[disallowed-methods]]
+path = "std::fs::copy"
+reason = "Use fs_err::fs::copy (via 'use fs_err as fs') instead of std::fs"
+
+[[disallowed-methods]]
+path = "std::fs::rename"
+reason = "Use fs_err::fs::rename (via 'use fs_err as fs') instead of std::fs"
+
+[[disallowed-methods]]
+path = "std::fs::hard_link"
+reason = "Use fs_err::fs::hard_link (via 'use fs_err as fs') instead of std::fs"
+
+[[disallowed-methods]]
+path = "std::fs::metadata"
+reason = "Use fs_err::fs::metadata (via 'use fs_err as fs') instead of std::fs"
+
+[[disallowed-methods]]
+path = "tokio::fs::create_dir_all"
+reason = "Use fs_err::tokio::create_dir_all instead of tokio::fs"
+
+[[disallowed-methods]]
+path = "tokio::fs::write"
+reason = "Use fs_err::tokio::write instead of tokio::fs"
+
+[[disallowed-methods]]
+path = "tokio::fs::read"
+reason = "Use fs_err::tokio::read instead of tokio::fs"
+
+[[disallowed-methods]]
+path = "tokio::fs::read_dir"
+reason = "Use fs_err::tokio::read_dir instead of tokio::fs"
+
+[[disallowed-methods]]
+path = "tokio::fs::remove_file"
+reason = "Use fs_err::tokio::remove_file instead of tokio::fs"
+
+[[disallowed-methods]]
+path = "tokio::fs::remove_dir_all"
+reason = "Use fs_err::tokio::remove_dir_all instead of tokio::fs"
+
+[[disallowed-methods]]
+path = "tokio::fs::copy"
+reason = "Use fs_err::tokio::copy instead of tokio::fs"
+
+[[disallowed-methods]]
+path = "tokio::fs::rename"
+reason = "Use fs_err::tokio::rename instead of tokio::fs"
+
+[[disallowed-methods]]
+path = "tokio::fs::hard_link"
+reason = "Use fs_err::tokio::hard_link instead of tokio::fs"
+
+[[disallowed-methods]]
+path = "tokio::fs::try_exists"
+reason = "Use fs_err::tokio::try_exists instead of tokio::fs"
+
+[[disallowed-methods]]
+path = "tokio::fs::metadata"
+reason = "Use fs_err::tokio::metadata instead of tokio::fs"
+
+[[disallowed-methods]]
+path = "chrono::Utc::now"
+reason = "Use `time::OffsetDateTime::now_utc` from the `time` crate instead"
+
+[[disallowed-methods]]
+path = "chrono::Local::now"
+reason = "Use `time::OffsetDateTime::now_local` from the `time` crate instead"
+
+[[disallowed-methods]]
+path = "chrono::DateTime::timestamp"
+reason = "Use `time::OffsetDateTime::unix_timestamp` from the `time` crate instead"
+
+[[disallowed-methods]]
+path = "chrono::DateTime::timestamp_millis"
+reason = "Use `time::OffsetDateTime::unix_timestamp_nanos` from the `time` crate instead"
+
+[[disallowed-methods]]
+path = "chrono::DateTime::timestamp_nanos"
+reason = "Use `time::OffsetDateTime::unix_timestamp_nanos` from the `time` crate instead"
+
+[[disallowed-methods]]
+path = "chrono::DateTime::from_timestamp"
+reason = "Use `time::OffsetDateTime::from_unix_timestamp` from the `time` crate instead"
+
+[[disallowed-methods]]
+path = "chrono::DateTime::from_timestamp_millis"
+reason = "Use `time::OffsetDateTime::from_unix_timestamp_nanos` from the `time` crate instead"
+
+[[disallowed-methods]]
+path = "chrono::NaiveDate::from_ymd_opt"
+reason = "Use `time::Date::from_calendar_date` from the `time` crate instead"

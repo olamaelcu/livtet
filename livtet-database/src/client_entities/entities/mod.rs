@@ -1,0 +1,9 @@
+pub mod change_log;
+pub mod device_types;
+pub mod edition_embedding;
+pub mod edition_plugin_metadata;
+pub mod installed_plugins;
+pub mod paired_devices;
+pub mod pairing_statuses;
+pub mod pending_pairings;
+pub mod plugin_settings;
