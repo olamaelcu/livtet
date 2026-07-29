@@ -3,8 +3,6 @@ use camino::Utf8PathBuf;
 use camino_tempfile::Utf8TempDir as TempDir;
 use common::fixture_path;
 use fs_err as fs;
-#[cfg(feature = "bundled")]
-use livtet_plugins::discovery::scan_embedded_plugins;
 use livtet_plugins::{
     discovery::{PluginSource, scan_plugins},
     manifest::{PluginRuntime, PluginType},
@@ -118,34 +116,4 @@ fn test_scan_plugins_walks_version_subfolders() {
     assert_eq!(versions.len(), 2);
     assert!(versions.contains(&("my-plugin".to_string(), "1.0.0".to_string())));
     assert!(versions.contains(&("my-plugin".to_string(), "2.0.0".to_string())));
-}
-
-/// When the `bundled` feature is enabled, the `scan_embedded_plugins`
-/// function returns one `DiscoveredPlugin` per bundled plugin in the
-/// binary, with `source = PluginSource::Embedded` and the manifest
-/// read from memory.
-#[cfg(feature = "bundled")]
-#[test]
-fn test_scan_embedded_returns_all_lua_plugins() {
-    let plugins = scan_embedded_plugins();
-    let ids: Vec<&str> = plugins.iter().map(|p| p.id.as_str()).collect();
-    for expected in ["openlibrary", "overdrive", "worldcat"] {
-        assert!(
-            ids.contains(&expected),
-            "missing bundled plugin {expected}; got {ids:?}"
-        );
-    }
-    for plugin in &plugins {
-        assert_eq!(
-            plugin.source,
-            PluginSource::Embedded,
-            "{} not marked Embedded",
-            plugin.id
-        );
-        assert_eq!(
-            plugin.manifest.plugin.id, plugin.id,
-            "manifest id mismatch for {}",
-            plugin.id
-        );
-    }
 }

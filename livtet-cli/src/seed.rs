@@ -7,7 +7,6 @@
 
 use camino::Utf8PathBuf;
 use clap::Parser;
-use miette::IntoDiagnostic;
 
 use crate::Result;
 
@@ -42,7 +41,9 @@ impl SeedArgs {
             ))
             .with_default(false)
             .prompt()
-            .into_diagnostic()?;
+            .map_err(|e| crate::CliError::InteractiveAborted {
+                message: e.to_string(),
+            })?;
             if !confirmed {
                 return Err(crate::CliError::Operation {
                     message: "Aborted by user".to_string(),
@@ -53,7 +54,9 @@ impl SeedArgs {
         let db_url = format!("sqlite:{}?mode=rwc", db_path);
         let sea_conn = livtet_data::orm::Database::connect(&db_url)
             .await
-            .into_diagnostic()?;
+            .map_err(|e| crate::CliError::Operation {
+                message: format!("Failed to connect to {db_url}: {e}"),
+            })?;
 
         let config = livtet_core::seed::SeedConfig {
             num_works: self.works,
