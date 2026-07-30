@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 pub struct Model {
     #[sea_orm(primary_key, auto_increment = false)]
     pub id: DbId,
+    #[sea_orm(unique)]
     pub edition_id: DbId,
     pub file_path: Option<String>,
     pub cover_path: Option<String>,

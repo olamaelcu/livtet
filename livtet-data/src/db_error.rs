@@ -181,6 +181,40 @@ mod tests {
     }
 
     #[test]
+    fn enhance_detects_digital_inventory_edition_sqlite() {
+        let raw = "error returned from database: UNIQUE constraint failed: digital_inventory.edition_id";
+        let (msg, violation) = ConstraintViolation::enhance_db_err(db_err(raw));
+        assert!(
+            matches!(
+                violation,
+                Some(ConstraintViolation::CompositeKey(
+                    PrimaryKey::DigitalInventoryEdition
+                ))
+            ),
+            "expected CompositeKey(DigitalInventoryEdition), got {violation:?}"
+        );
+        assert!(
+            msg.contains("Another digital inventory row already exists for this edition"),
+            "message should include human_readable text, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn enhance_detects_digital_inventory_edition_by_index_name() {
+        let raw = r#"ERROR: duplicate key value violates unique constraint "uq_digital_inventory_edition_id""#;
+        let (_, violation) = ConstraintViolation::enhance_db_err(db_err(raw));
+        assert!(
+            matches!(
+                violation,
+                Some(ConstraintViolation::CompositeKey(
+                    PrimaryKey::DigitalInventoryEdition
+                ))
+            ),
+            "expected CompositeKey(DigitalInventoryEdition) from PostgreSQL message, got {violation:?}"
+        );
+    }
+
+    #[test]
     fn human_readable_delegates_to_inner() {
         assert_eq!(
             ConstraintViolation::ForeignKey(Constraint::WorksLanguage).human_readable(),

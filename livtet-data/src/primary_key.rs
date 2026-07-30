@@ -32,6 +32,9 @@ pub enum PrimaryKey {
 
     // ── m0005_reading_annotations ──────────────────────────────────
     ReadingListBook,
+
+    // ── m0011_digital_inventory_unique_edition ────────────────────
+    DigitalInventoryEdition,
 }
 
 impl PrimaryKey {
@@ -60,6 +63,11 @@ impl PrimaryKey {
 
             // ── m0005_reading_annotations ──────────────────────────
             Self::ReadingListBook => "Duplicate reading-list entry",
+
+            // ── m0011_digital_inventory_unique_edition ────────────
+            Self::DigitalInventoryEdition => {
+                "Another digital inventory row already exists for this edition"
+            }
         }
     }
 
@@ -97,6 +105,11 @@ impl PrimaryKey {
 
             // ── m0005_reading_annotations ──────────────────────────
             Self::ReadingListBook => &["pk_reading_list_book", "reading_list_book."],
+
+            // ── m0011_digital_inventory_unique_edition ────────────
+            Self::DigitalInventoryEdition => {
+                &["uq_digital_inventory_edition_id", "digital_inventory."]
+            }
         }
     }
 
