@@ -81,20 +81,14 @@ async fn digital_inventory_edition_id_is_unique() {
     let work = seed_work(&db).await;
     let edition = seed_edition(&db, work.id).await;
 
-    digital_inventory::ActiveModel {
-        edition_id: Set(edition.id),
-        ..digital_inventory_row(DbId::new(), edition.id)
-    }
-    .insert(&db)
-    .await
-    .expect("first insert for an edition must succeed");
+    digital_inventory_row(DbId::new(), edition.id)
+        .insert(&db)
+        .await
+        .expect("first insert for an edition must succeed");
 
-    let dup = digital_inventory::ActiveModel {
-        edition_id: Set(edition.id),
-        ..digital_inventory_row(DbId::new(), edition.id)
-    }
-    .insert(&db)
-    .await;
+    let dup = digital_inventory_row(DbId::new(), edition.id)
+        .insert(&db)
+        .await;
     assert!(
         dup.is_err(),
         "digital_inventory must reject a second row for the same edition_id"
@@ -112,19 +106,13 @@ async fn digital_inventory_distinct_edition_ids_succeed() {
     let edition_a = seed_edition(&db, work.id).await;
     let edition_b = seed_edition(&db, work.id).await;
 
-    digital_inventory::ActiveModel {
-        edition_id: Set(edition_a.id),
-        ..digital_inventory_row(DbId::new(), edition_a.id)
-    }
-    .insert(&db)
-    .await
-    .expect("first edition must accept a digital_inventory row");
+    digital_inventory_row(DbId::new(), edition_a.id)
+        .insert(&db)
+        .await
+        .expect("first edition must accept a digital_inventory row");
 
-    digital_inventory::ActiveModel {
-        edition_id: Set(edition_b.id),
-        ..digital_inventory_row(DbId::new(), edition_b.id)
-    }
-    .insert(&db)
-    .await
-    .expect("second edition must accept its own digital_inventory row");
+    digital_inventory_row(DbId::new(), edition_b.id)
+        .insert(&db)
+        .await
+        .expect("second edition must accept its own digital_inventory row");
 }
