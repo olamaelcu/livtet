@@ -4,6 +4,19 @@ use ulid::Ulid;
 
 use crate::ProgressUnit;
 
+/// Rich language metadata returned by [`CommonLanguages::normalize_language_code`].
+#[derive(Debug, Clone)]
+pub struct LanguageInfo {
+    /// Normalized ISO 639-1 two-letter code (e.g. `"en"`).
+    pub code: String,
+    /// English display name (e.g. `"English"`).
+    pub english_name: String,
+    /// Native-language name, if known (e.g. `"Español"`).
+    pub autonym: Option<String>,
+    /// Flag emoji, if known (e.g. `"🇺🇸"`).
+    pub flag_emoji: Option<String>,
+}
+
 /// Known format identifiers used across the codebase.
 /// These are deterministic ULIDs that are seeded into the database.
 #[cfg_attr(feature = "fake", derive(fake::Dummy))]
@@ -274,22 +287,76 @@ impl CommonLanguages {
         }
     }
 
-    /// Normalize an arbitrary ISO 639 language code into a canonical
-    /// 2-letter ISO 639-1 code.  Handles 639-1 (`"en"`), 639-3
-    /// (`"eng"`), and BCP 47 locale strings (`"en-GB"`).
+    /// Normalize an arbitrary ISO 639 language code into a
+    /// [`LanguageInfo`] struct with the canonical 2-letter code,
+    /// English name, autonym, and flag emoji.
     ///
     /// Returns `None` when `isolang` does not recognize the input.
-    pub fn normalize_language_code(raw: &str) -> Option<String> {
+    pub fn normalize_language_code(raw: &str) -> Option<LanguageInfo> {
         let normalized = raw.replace('_', "-");
-        if let Some(lang) = isolang::Language::from_locale(&normalized) {
-            return lang.to_639_1().map(|s| s.to_owned());
+        let lang = if let Some(l) = isolang::Language::from_locale(&normalized) {
+            Some(l)
+        } else if let Some(l) = isolang::Language::from_639_3(&normalized) {
+            Some(l)
+        } else {
+            isolang::Language::from_639_1(&normalized)
+        }?;
+
+        let code = lang.to_639_1()?.to_owned();
+        let common = CommonLanguages::all()
+            .into_iter()
+            .find(|l| l.code() == code);
+
+        let english_name = common
+            .map(|l| l.name().to_string())
+            .unwrap_or_else(|| lang.to_name().to_string());
+
+        let autonym = common.and_then(|l| l.autonym()).map(String::from);
+
+        let flag_emoji = flag_emoji_for(&code);
+
+        Some(LanguageInfo {
+            code,
+            english_name,
+            autonym,
+            flag_emoji,
+        })
+    }
+
+    /// Returns the native-language name for this language, if known.
+    pub fn autonym(self) -> Option<&'static str> {
+        match self {
+            CommonLanguages::English => Some("English"),
+            CommonLanguages::Spanish => Some("Español"),
+            CommonLanguages::HaitianKreyol => Some("Kreyòl Ayisyen"),
+            CommonLanguages::UkEnglish => Some("English (UK)"),
+            CommonLanguages::Russian => Some("Русский"),
+            CommonLanguages::Japanese => Some("日本語"),
+            CommonLanguages::MandarinChinese => Some("中文"),
+            CommonLanguages::Hindi => Some("हिन्दी"),
+            CommonLanguages::Arabic => Some("العربية"),
+            CommonLanguages::Bengali => Some("বাংলা"),
+            CommonLanguages::Portuguese => Some("Português"),
+            CommonLanguages::WesternPunjabi => Some("پنجابی"),
+            CommonLanguages::Turkish => Some("Türkçe"),
+            CommonLanguages::Vietnamese => Some("Tiếng Việt"),
+            CommonLanguages::French => Some("Français"),
+            CommonLanguages::German => Some("Deutsch"),
+            CommonLanguages::Korean => Some("한국어"),
+            CommonLanguages::Italian => Some("Italiano"),
+            CommonLanguages::Indonesian => Some("Bahasa Indonesia"),
+            CommonLanguages::Dutch => Some("Nederlands"),
+            CommonLanguages::Polish => Some("Polski"),
+            CommonLanguages::Swedish => Some("Svenska"),
+            CommonLanguages::Ukrainian => Some("Українська"),
+            CommonLanguages::Persian => Some("فارسی"),
+            CommonLanguages::Urdu => Some("اردو"),
+            CommonLanguages::Hebrew => Some("עברית"),
+            CommonLanguages::Thai => Some("ไทย"),
+            CommonLanguages::Tagalog => Some("Tagalog"),
+            CommonLanguages::Tamil => Some("தமிழ்"),
+            CommonLanguages::Telugu => Some("తెలుగు"),
         }
-        if let Some(lang) = isolang::Language::from_639_3(&normalized) {
-            return lang.to_639_1().map(|s| s.to_owned());
-        }
-        isolang::Language::from_639_1(&normalized)
-            .and_then(|l| l.to_639_1())
-            .map(|s| s.to_owned())
     }
 
     /// Returns the flag emoji for this language.
@@ -378,6 +445,141 @@ impl From<Ulid> for CommonLanguages {
             _ => panic!("Unknown ULID for KnownLanguageIds: {ulid}"),
         }
     }
+}
+
+/// Derive a flag emoji from an ISO 639-1 two-letter language code.
+///
+/// First checks the seeded [`CommonLanguages`] variants, then falls
+/// back to a language→country mapping for ~100 additional languages.
+/// Returns `None` when no flag mapping is known.
+pub fn flag_emoji_for(code: &str) -> Option<String> {
+    if let Some(common) = CommonLanguages::all()
+        .into_iter()
+        .find(|l| l.code() == code)
+    {
+        return Some(common.flag_emoji().to_string());
+    }
+    country_code_to_flag(language_to_country(code)?)
+}
+
+/// Map an ISO 639-1 language code to a representative ISO 3166-1
+/// alpha-2 country code.
+fn language_to_country(code: &str) -> Option<&'static str> {
+    Some(match code {
+        "af" => "ZA",
+        "am" => "ET",
+        "ar" => "SA",
+        "az" => "AZ",
+        "be" => "BY",
+        "bg" => "BG",
+        "bm" => "ML",
+        "bs" => "BA",
+        "ca" => "ES",
+        "cs" => "CZ",
+        "cy" => "GB",
+        "da" => "DK",
+        "de" => "DE",
+        "el" => "GR",
+        "en" => "US",
+        "eo" => "EU",
+        "es" => "ES",
+        "et" => "EE",
+        "eu" => "ES",
+        "fa" => "IR",
+        "fi" => "FI",
+        "fr" => "FR",
+        "ga" => "IE",
+        "gl" => "ES",
+        "gu" => "IN",
+        "ha" => "NG",
+        "he" => "IL",
+        "hi" => "IN",
+        "hr" => "HR",
+        "hu" => "HU",
+        "hy" => "AM",
+        "id" => "ID",
+        "ig" => "NG",
+        "is" => "IS",
+        "it" => "IT",
+        "ja" => "JP",
+        "jv" => "ID",
+        "ka" => "GE",
+        "kk" => "KZ",
+        "km" => "KH",
+        "kn" => "IN",
+        "ko" => "KR",
+        "ku" => "TR",
+        "ky" => "KG",
+        "lb" => "LU",
+        "lo" => "LA",
+        "lt" => "LT",
+        "lv" => "LV",
+        "mg" => "MG",
+        "mi" => "NZ",
+        "mk" => "MK",
+        "ml" => "IN",
+        "mn" => "MN",
+        "mr" => "IN",
+        "ms" => "MY",
+        "mt" => "MT",
+        "my" => "MM",
+        "nb" => "NO",
+        "ne" => "NP",
+        "nl" => "NL",
+        "nn" => "NO",
+        "no" => "NO",
+        "ny" => "MW",
+        "or" => "IN",
+        "pa" => "PK",
+        "pl" => "PL",
+        "ps" => "AF",
+        "pt" => "PT",
+        "ro" => "RO",
+        "ru" => "RU",
+        "rw" => "RW",
+        "sd" => "PK",
+        "si" => "LK",
+        "sk" => "SK",
+        "sl" => "SI",
+        "sn" => "ZW",
+        "so" => "SO",
+        "sq" => "AL",
+        "sr" => "RS",
+        "sv" => "SE",
+        "sw" => "TZ",
+        "ta" => "IN",
+        "te" => "IN",
+        "tg" => "TJ",
+        "th" => "TH",
+        "tk" => "TM",
+        "tl" => "PH",
+        "tr" => "TR",
+        "uk" => "UA",
+        "ur" => "PK",
+        "uz" => "UZ",
+        "vi" => "VN",
+        "xh" => "ZA",
+        "yo" => "NG",
+        "zh" => "CN",
+        "zu" => "ZA",
+        _ => return None,
+    })
+}
+
+/// Convert an ISO 3166-1 alpha-2 country code to a Unicode flag
+/// emoji (regional indicator pair).
+fn country_code_to_flag(country: &str) -> Option<String> {
+    if country.len() != 2 {
+        return None;
+    }
+    let mut flag = String::with_capacity(8);
+    for byte in country.bytes() {
+        if !byte.is_ascii_uppercase() {
+            return None;
+        }
+        flag.push(char::from_u32(0x1F1E6u32 + (byte - b'A') as u32)?);
+    }
+    Some(flag)
 }
 
 #[cfg_attr(feature = "fake", derive(fake::Dummy))]
