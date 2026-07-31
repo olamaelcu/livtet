@@ -13,18 +13,18 @@ pub struct CachedCover {
     pub size: String,
     pub ext: String,
     pub bytes: Vec<u8>,
-    pub inventory_id: DbId,
+    pub edition_id: DbId,
     pub display_path: Option<String>,
 }
 
 #[async_trait]
 pub trait CoverStorage: Send + Sync {
-    async fn list_cached(&self, inventory_id: DbId) -> CoverResult<Vec<CachedCover>>;
+    async fn list_cached(&self, edition_id: DbId) -> CoverResult<Vec<CachedCover>>;
     async fn store(&mut self, key: &str, bytes: &[u8]) -> CoverResult<()>;
     async fn copy_to_permanent(
         &mut self,
         cache_key: &str,
-        inventory_id: DbId,
+        edition_id: DbId,
     ) -> CoverResult<String>;
-    fn permanent_path(&self, inventory_id: DbId, ext: &str) -> Utf8PathBuf;
+    fn permanent_path(&self, edition_id: DbId, ext: &str) -> Utf8PathBuf;
 }

@@ -21,7 +21,7 @@ impl TestStorage {
 
 #[async_trait]
 impl CoverStorage for TestStorage {
-    async fn list_cached(&self, _inventory_id: DbId) -> CoverResult<Vec<CachedCover>> {
+    async fn list_cached(&self, _edition_id: DbId) -> CoverResult<Vec<CachedCover>> {
         Ok(vec![])
     }
 
@@ -36,19 +36,19 @@ impl CoverStorage for TestStorage {
     async fn copy_to_permanent(
         &mut self,
         cache_key: &str,
-        inventory_id: DbId,
+        edition_id: DbId,
     ) -> CoverResult<String> {
         self.copy_calls
             .lock()
             .unwrap()
-            .push((cache_key.to_string(), inventory_id));
-        let path = self.permanent_path(inventory_id, "jpg");
+            .push((cache_key.to_string(), edition_id));
+        let path = self.permanent_path(edition_id, "jpg");
         Ok(path.to_string())
     }
 
-    fn permanent_path(&self, inventory_id: DbId, ext: &str) -> Utf8PathBuf {
+    fn permanent_path(&self, edition_id: DbId, ext: &str) -> Utf8PathBuf {
         let safe_ext = ext.replace(['.', '/', '\\'], "");
-        Utf8PathBuf::from(format!("/covers/{}/cover.{}", inventory_id, safe_ext))
+        Utf8PathBuf::from(format!("/covers/{}/cover.{}", edition_id, safe_ext))
     }
 }
 

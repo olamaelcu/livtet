@@ -28,7 +28,7 @@
 //! [`ResourceLookup`]. The concrete SeaORM-backed implementation
 //! is in [`crate::sea_orm_resource_lookup`].
 
-use std::{collections::HashMap, ops::Range, sync::Arc};
+use std::{collections::HashMap, sync::Arc};
 
 use camino::Utf8Path;
 use fs_err as fs;
@@ -316,7 +316,8 @@ pub struct SearchHit {
     pub snippet_text: Option<String>,
     /// Byte ranges into `snippet_text` that should be highlighted.
     /// Empty when the snippet was generated without highlights.
-    pub snippet_highlighted: Vec<Range<usize>>,
+    /// Each entry is `[start, end]` — byte offsets into `snippet_text`.
+    pub snippet_highlighted: Vec<[u32; 2]>,
 
     /// When `HitKind::Work`, the edition IDs collapsed into this
     /// work hit. Empty for edition/person hits.
@@ -2392,11 +2393,12 @@ impl SearchIndex {
                 Some(snippet_gen) => {
                     let snippet = snippet_gen.snippet_from_doc(&doc);
                     let text = snippet.fragment().to_string();
-                    // tantivy's `Snippet::highlighted()` already
-                    // returns `&[Range<usize>]` indexed into the
-                    // fragment bytes, which is exactly the wire
-                    // shape the frontend expects.
-                    let ranges: Vec<Range<usize>> = snippet.highlighted().to_vec();
+                    // tantivy's `Snippet::highlighted()` returns
+                    // `&[Range<usize>]` indexed into the fragment
+                    // bytes. Map to `[u32; 2]` for IPC compatibility.
+                    let ranges: Vec<[u32; 2]> = snippet.highlighted().iter()
+                        .map(|r| [r.start as u32, r.end as u32])
+                        .collect();
                     (Some(text), ranges)
                 }
                 None => (None, Vec::new()),

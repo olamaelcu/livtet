@@ -326,8 +326,8 @@ async fn snippet_contains_marker_bytes_for_matching_query() {
     // We just confirm the bytes are within bounds — frontend
     // rendering logic isn't in scope here.
     for range in &hit.snippet_highlighted {
-        assert!(range.start <= range.end);
-        assert!(range.end <= snippet.len());
+        assert!(range[0] <= range[1]);
+        assert!((range[1] as usize) <= snippet.len());
     }
 }
 

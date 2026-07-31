@@ -72,7 +72,7 @@ fn cached_cover_constructable() {
         size: "S".to_string(),
         ext: "jpg".to_string(),
         bytes: vec![0xff, 0xd8, 0xff],
-        inventory_id: DbId::new(),
+        edition_id: DbId::new(),
         display_path: Some("/covers/abc.jpg".to_string()),
     };
     assert_eq!(cover.ext, "jpg");
@@ -87,14 +87,14 @@ fn cached_cover_serde_roundtrip() {
         size: "XL".to_string(),
         ext: "png".to_string(),
         bytes: vec![1, 2, 3],
-        inventory_id: DbId::new(),
+        edition_id: DbId::new(),
         display_path: None,
     };
     let json = serde_json::to_string(&cover).unwrap();
     let back: CachedCover = serde_json::from_str(&json).unwrap();
     assert_eq!(cover.key, back.key);
     assert_eq!(cover.bytes, back.bytes);
-    assert_eq!(cover.inventory_id, back.inventory_id);
+    assert_eq!(cover.edition_id, back.edition_id);
 }
 
 #[test]
