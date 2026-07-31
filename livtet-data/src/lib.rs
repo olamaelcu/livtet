@@ -26,6 +26,7 @@ pub mod error;
 pub mod index;
 pub mod migrator;
 pub mod primary_key;
+pub mod unique_index;
 pub mod state;
 pub mod test_db;
 
@@ -45,6 +46,7 @@ pub use error::{CoreError, Result as CoreResult};
 pub use index::NamedIndex;
 pub use migrator::{Kind, connect_with_migrations, run_kinds};
 pub use primary_key::PrimaryKey;
+pub use unique_index::UniqueIndex;
 #[cfg(feature = "fake")]
 pub use seed::{SeedConfig, SeedResult, seed_database};
 pub use state::{
