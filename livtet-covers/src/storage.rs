@@ -15,6 +15,8 @@ pub struct CachedCover {
     pub bytes: Vec<u8>,
     pub edition_id: DbId,
     pub display_path: Option<String>,
+    pub blurhash: Option<String>,
+    pub dominant_color: Option<String>,
 }
 
 #[async_trait]

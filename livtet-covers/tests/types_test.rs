@@ -74,6 +74,8 @@ fn cached_cover_constructable() {
         bytes: vec![0xff, 0xd8, 0xff],
         edition_id: DbId::new(),
         display_path: Some("/covers/abc.jpg".to_string()),
+        blurhash: None,
+        dominant_color: None,
     };
     assert_eq!(cover.ext, "jpg");
     assert!(cover.display_path.is_some());
@@ -89,6 +91,8 @@ fn cached_cover_serde_roundtrip() {
         bytes: vec![1, 2, 3],
         edition_id: DbId::new(),
         display_path: None,
+        blurhash: None,
+        dominant_color: None,
     };
     let json = serde_json::to_string(&cover).unwrap();
     let back: CachedCover = serde_json::from_str(&json).unwrap();

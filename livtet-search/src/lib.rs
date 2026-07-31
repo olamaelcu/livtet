@@ -93,6 +93,10 @@ pub mod fields {
 
     pub const SOURCE: &str = "source";
 
+    /// Whether the edition has a row in `digital_inventory`
+    /// (i.e. there is a file on disk). Indexed as a bool.
+    pub const HAS_FILE: &str = "has_file";
+
     pub const TAG_ID: &str = "tag_id";
     pub const GENRE_ID: &str = "genre_id";
     pub const SUBJECT_ID: &str = "subject_id";
@@ -114,7 +118,7 @@ pub const OPDS_WORK_ID_LIMIT: usize = 1_000;
 
 /// Current schema version. Stored in `search_schema_version.json` next to the
 /// tantivy index dir. Bumped when `build_schema()` changes.
-pub const SCHEMA_VERSION: u32 = 2;
+pub const SCHEMA_VERSION: u32 = 3;
 
 /// Build the Tantivy schema.
 ///
@@ -237,6 +241,8 @@ pub fn build_schema() -> Schema {
     b.add_u64_field(fields::POPULARITY, FAST);
     b.add_text_field(fields::SOURCE, TEXT | STORED);
 
+    b.add_bool_field(fields::HAS_FILE, STORED | FAST);
+
     b.build()
 }
 
@@ -327,6 +333,10 @@ pub struct SearchHit {
     /// plugin id prefix for imported data). See the `source`
     /// field documentation.
     pub source: String,
+
+    /// Whether this edition has a row in `digital_inventory`
+    /// (i.e. there is a file on disk).
+    pub has_file: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -881,7 +891,8 @@ impl SearchIndex {
     pub async fn reindex(&self, db: &DatabaseConnection) -> Result<(), SearchError> {
         let start = std::time::Instant::now();
         use livtet_data::entities::{
-            authors::Entity as Authors, edition_authors::Entity as EditionAuthors,
+            authors::Entity as Authors, digital_inventory::Entity as DigitalInventory,
+            edition_authors::Entity as EditionAuthors,
             edition_genres::Entity as EditionGenres, edition_identifiers::Entity as EditionIds,
             edition_publishers::Entity as EditionPublishers,
             edition_subjects::Entity as EditionSubjects, edition_tags::Entity as EditionTags,
@@ -1077,6 +1088,11 @@ impl SearchIndex {
                 .push(r.series_id);
         }
 
+        // Digital inventory: edition_id → has_file
+        let all_inventory = DigitalInventory::find().all(db).await?;
+        let inventory_editions: std::collections::HashSet<livtet_types::DbId> =
+            all_inventory.iter().map(|r| r.edition_id).collect();
+
         // Identifiers via edition_identifier → identifiers. Filter to
         // both `isbn` and the non-isbn kinds so we can canonicalise
         // ISBNs via `livtet_types::Isbn::parse`.
@@ -1258,6 +1274,7 @@ impl SearchIndex {
             .get_field(fields::POPULARITY)
             .expect("popularity");
         let source_field = self.schema.get_field(fields::SOURCE).expect("source");
+        let has_file_field = self.schema.get_field(fields::HAS_FILE).expect("has_file");
         let tag_id_field = self.schema.get_field(fields::TAG_ID).expect("tag_id");
         let genre_id_field = self.schema.get_field(fields::GENRE_ID).expect("genre_id");
         let subject_id_field = self
@@ -1514,6 +1531,10 @@ impl SearchIndex {
                     .cloned()
                     .unwrap_or_else(|| "catalog".to_string());
                 d.add_text(source_field, &edition_source);
+
+                // has_file
+                let has_file = inventory_editions.contains(&edition.id);
+                d.add_bool(has_file_field, has_file);
 
                 // Categorical IDs.
                 for t in &tag_id_strs {
@@ -2306,6 +2327,7 @@ impl SearchIndex {
         let format_field = self.schema.get_field(fields::FORMAT).expect("format");
         let language_field = self.schema.get_field(fields::LANGUAGE).expect("language");
         let source_field = self.schema.get_field(fields::SOURCE).expect("source");
+        let has_file_field = self.schema.get_field(fields::HAS_FILE).expect("has_file");
 
         let snippet_field = self
             .schema
@@ -2380,6 +2402,11 @@ impl SearchIndex {
                 .map(|s| s.to_string())
                 .unwrap_or_else(|| "catalog".to_string());
 
+            let has_file = doc
+                .get_first(has_file_field)
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+
             let explanation = if opts.explain {
                 query
                     .explain(searcher, *addr)
@@ -2440,6 +2467,7 @@ impl SearchIndex {
                 snippet_highlighted,
                 grouped_edition_ids: Vec::new(),
                 source: hit_source,
+                has_file,
             });
         }
 
@@ -2986,6 +3014,7 @@ mod tests {
             snippet_highlighted: Vec::new(),
             grouped_edition_ids: Vec::new(),
             source: "catalog".to_string(),
+            has_file: false,
         }
     }
 
