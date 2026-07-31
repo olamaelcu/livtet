@@ -1,14 +1,28 @@
 use strum::{Display, EnumIter, EnumString, IntoEnumIterator};
 
-/// Every named composite primary-key index in the livtet schema.
+/// Every named uniqueness constraint in the livtet schema whose violation
+/// we want to classify as a primary-key-style error.
 ///
-/// Each variant maps to an `Index::create().name("pk_…")` call in a
-/// migration table definition.  `Display` produces the raw index-name
-/// string, suitable for passing directly to `.name()` via `.to_string()`.
+/// This enum mixes two kinds of indexes:
 ///
-/// Only junction tables and other tables with composite (multi-column)
-/// primary keys appear here.  Single-column primary keys use
-/// `pk_db_id(…)` directly and need no named index.
+/// - Composite (multi-column) primary-key indexes on junction tables
+///   and similar many-to-many link tables (e.g. `pk_work_authors`,
+///   `pk_edition_tags`). These are the original use case; each maps to
+///   an `Index::create().name("pk_…").unique()` call in a migration.
+/// - Single-column UNIQUE indexes that enforce a 1:1 cardinality that
+///   the rest of the codebase already assumes (e.g.
+///   `uq_digital_inventory_edition_id` from m0011). These are
+///   semantically equivalent for downstream consumers: a duplicate
+///   insert is a duplicate row, full stop.
+///
+/// `Display` produces the raw index-name string with the `pk_` prefix
+/// from `strum(prefix = "pk_")`, suitable for passing directly to
+/// `.name()` via `.to_string()` for the composite-PK variants. The
+/// single-column UNIQUE variant intentionally diverges — see the
+/// in-line comment on `DigitalInventoryEdition` below.
+///
+/// Plain single-column primary keys (e.g. `pk_db_id(…)`) use SeaORM's
+/// built-in PK machinery and need no named index here.
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Display, EnumString, EnumIter)]
 #[strum(serialize_all = "snake_case", prefix = "pk_")]
 pub enum PrimaryKey {
@@ -32,6 +46,17 @@ pub enum PrimaryKey {
 
     // ── m0005_reading_annotations ──────────────────────────────────
     ReadingListBook,
+
+    // ── m0011_digital_inventory_unique_edition ────────────────────
+    // Display intentionally diverges from the DDL name; this variant is
+    // a single-column UNIQUE, not a composite PK. `strum(prefix = "pk_")`
+    // yields `pk_digital_inventory_edition` for Display, but the actual
+    // index is `uq_digital_inventory_edition_id`. No caller invokes
+    // `DigitalInventoryEdition.to_string()` for DDL — the migration uses
+    // the literal string directly — so the divergence is safe. If you
+    // ever need the DDL name, look it up explicitly rather than relying
+    // on Display.
+    DigitalInventoryEdition,
 }
 
 impl PrimaryKey {
@@ -60,19 +85,36 @@ impl PrimaryKey {
 
             // ── m0005_reading_annotations ──────────────────────────
             Self::ReadingListBook => "Duplicate reading-list entry",
+
+            // ── m0011_digital_inventory_unique_edition ────────────
+            Self::DigitalInventoryEdition => {
+                "Another digital inventory row already exists for this edition"
+            }
         }
     }
 
-    /// Substrings used to identify this composite primary-key violation
+    /// Substrings used to identify this primary-key-style violation
     /// in a database error message.
     ///
     /// Two patterns are provided per variant:
-    /// - The DDL index name (e.g. `"pk_work_authors"`) — matched by
-    ///   databases such as PostgreSQL that embed index names in
-    ///   violation messages.
+    /// - The DDL index name (e.g. `"pk_work_authors"` or, for the
+    ///   single-column UNIQUE case, `"uq_digital_inventory_edition_id"`)
+    ///   — matched by databases such as PostgreSQL that embed index
+    ///   names in violation messages.
     /// - The table-column prefix (e.g. `"work_authors."`) — matched
     ///   by SQLite, which reports `"UNIQUE constraint failed:
     ///   work_authors.work_id, ..."` without the index name.
+    ///
+    /// SQLite substring-match caveat: SQLite foreign-key violations do
+    /// not embed constraint names, so a UNIQUE error on a matched
+    /// table may be misclassified as a primary-key violation even when
+    /// it actually came from an FK check against a column on that
+    /// table. This is a pre-existing design trade-off — the substring
+    /// match is good enough for the surfaced-error path because both
+    /// the genuine UNIQUE violation and the misclassified FK violation
+    /// share the same correct user-facing recovery (deduplicate the
+    /// row). Callers that need a strictly-correct classification should
+    /// re-query the constraint that actually fired.
     pub fn patterns(self) -> &'static [&'static str] {
         match self {
             // ── m0003_junctions ────────────────────────────────────
@@ -97,6 +139,11 @@ impl PrimaryKey {
 
             // ── m0005_reading_annotations ──────────────────────────
             Self::ReadingListBook => &["pk_reading_list_book", "reading_list_book."],
+
+            // ── m0011_digital_inventory_unique_edition ────────────
+            Self::DigitalInventoryEdition => {
+                &["uq_digital_inventory_edition_id", "digital_inventory."]
+            }
         }
     }
 
