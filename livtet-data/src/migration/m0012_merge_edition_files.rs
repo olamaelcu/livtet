@@ -24,21 +24,36 @@ impl MigrationName for Migration {
 impl MigrationTrait for Migration {
     async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
         // Add file_format column to digital_inventory
-        manager
-            .add_column(
-                ColumnDef::new(DigitalInventory::FileFormat)
-                    .string()
-                    .not_null()
-                    .default("")
-                    .to_owned(),
+        if !manager
+            .has_column(
+                DigitalInventory::Table.to_string(),
+                DigitalInventory::FileFormat.to_string(),
             )
-            .await?;
+            .await?
+        {
+            manager
+                .alter_table(
+                    Table::alter()
+                        .table(DigitalInventory::Table)
+                        .add_column(
+                            ColumnDef::new(DigitalInventory::FileFormat)
+                                .text()
+                                .not_null()
+                                .default(Expr::val("EPUB"))
+                                .to_owned(),
+                        )
+                        .to_owned(),
+                )
+                .await?;
+        }
 
-        // Drop edition_files table using raw SQL since we removed the enum
-        manager
-            .get_connection()
-            .execute_unprepared("DROP TABLE edition_files")
-            .await?;
+        // Drop edition_files table if it exists (idempotent for fresh databases)
+        if manager.has_table("edition_files").await? {
+            manager
+                .get_connection()
+                .execute_unprepared("DROP TABLE edition_files")
+                .await?;
+        }
 
         Ok(())
     }
