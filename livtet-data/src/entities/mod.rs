@@ -3,7 +3,6 @@ pub mod authors;
 pub mod current_work_status;
 pub mod digital_inventory;
 pub mod edition_authors;
-pub mod edition_files;
 pub mod edition_genres;
 pub mod edition_groups;
 pub mod edition_identifiers;

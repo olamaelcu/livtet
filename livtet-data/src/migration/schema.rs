@@ -516,6 +516,23 @@ pub enum EditionsLoans {
 }
 
 #[derive(DeriveIden)]
+pub enum EditionFiles {
+    Table,
+    Id,
+    EditionId,
+    FilePath,
+    CoverPath,
+    Blurhash,
+    DominantColor,
+    FileHash,
+    FileSizeBytes,
+    FileFormat,
+    Notes,
+    AddedAt,
+    UpdatedAt,
+}
+
+#[derive(DeriveIden)]
 pub enum DigitalInventory {
     Table,
     Id,
@@ -526,6 +543,7 @@ pub enum DigitalInventory {
     DominantColor,
     FileHash,
     FileSizeBytes,
+    FileFormat,
     Notes,
     AddedAt,
     UpdatedAt,
@@ -641,19 +659,4 @@ pub enum SavedSearches {
     DefinitionJson,
     BindingsJson,
     OptionsJson,
-}
-
-#[derive(DeriveIden)]
-pub enum EditionFiles {
-    Table,
-    Id,
-    EditionId,
-    FilePath,
-    FileFormat,
-    FileSizeBytes,
-    FileLastModified,
-    FileMode,
-    SourcePlugin,
-    SourceId,
-    CreatedAt,
 }

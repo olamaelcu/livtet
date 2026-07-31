@@ -17,6 +17,7 @@ pub struct Model {
     pub dominant_color: Option<String>,
     pub file_hash: Option<String>,
     pub file_size_bytes: Option<i64>,
+    pub file_format: Option<String>,
     pub notes: Option<String>,
     pub added_at: time::PrimitiveDateTime,
     pub updated_at: Option<time::PrimitiveDateTime>,

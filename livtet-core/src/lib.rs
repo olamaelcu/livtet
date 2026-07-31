@@ -22,7 +22,7 @@ pub use livtet_covers::{
 };
 pub use livtet_data as data;
 pub use livtet_search as search;
-pub use livtet_types::{Address, DbId, DiskPath, Urn, now_primitive};
+pub use livtet_types::{Address, DbId, DiskPath, Urn, now_primitive, CommonLanguages, Isbn};
 #[cfg(feature = "fake")]
 pub use seed::{SeedConfig, SeedResult, seed_database};
 

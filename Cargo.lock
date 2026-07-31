@@ -3407,8 +3407,6 @@ dependencies = [
  "thiserror",
  "time",
  "tokio",
- "tracing",
- "tracing-subscriber",
  "ulid",
 ]
 
