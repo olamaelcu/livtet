@@ -27,6 +27,7 @@ paste = { workspace = true }
 tantivy-query-grammar = { version = "0.26", optional = true }
 mutants = { workspace = true, optional = true }
 async-trait.workspace = true
+isolang = "2"
 specta-typescript = { version = "0.0.12", features = ["serde"] }
 
 [features]

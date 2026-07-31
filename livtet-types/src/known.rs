@@ -274,6 +274,24 @@ impl CommonLanguages {
         }
     }
 
+    /// Normalize an arbitrary ISO 639 language code into a canonical
+    /// 2-letter ISO 639-1 code.  Handles 639-1 (`"en"`), 639-3
+    /// (`"eng"`), and BCP 47 locale strings (`"en-GB"`).
+    ///
+    /// Returns `None` when `isolang` does not recognize the input.
+    pub fn normalize_language_code(raw: &str) -> Option<String> {
+        let normalized = raw.replace('_', "-");
+        if let Some(lang) = isolang::Language::from_locale(&normalized) {
+            return lang.to_639_1().map(|s| s.to_owned());
+        }
+        if let Some(lang) = isolang::Language::from_639_3(&normalized) {
+            return lang.to_639_1().map(|s| s.to_owned());
+        }
+        isolang::Language::from_639_1(&normalized)
+            .and_then(|l| l.to_639_1())
+            .map(|s| s.to_owned())
+    }
+
     /// Returns the flag emoji for this language.
     pub fn flag_emoji(self) -> &'static str {
         match self {
