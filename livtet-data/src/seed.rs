@@ -929,6 +929,7 @@ async fn add_digital_inventory(
             dominant_color: Set(None),
             file_hash: Set(Some(file_hash)),
             file_size_bytes: Set(Some(rand::random_range(100_000i64..10_000_000i64))),
+            file_format: Set(Some("EPUB".into())),
             notes: Set(None),
             added_at: Set(timestamp),
             updated_at: Set(None),

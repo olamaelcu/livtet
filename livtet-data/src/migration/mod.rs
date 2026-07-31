@@ -12,6 +12,7 @@ pub mod m0006_search_history;
 pub mod m0007_cover_metadata;
 pub mod m0008_saved_searches;
 pub mod m0009_edition_specific_covers;
+pub mod m0010_edition_files;
 pub mod m0011_digital_inventory_unique_edition;
 pub mod m0012_merge_edition_files;
 pub mod schema;
@@ -37,6 +38,7 @@ impl MigratorTrait for Migrator {
             Box::new(crate::migration::m0007_cover_metadata::Migration),
             Box::new(crate::migration::m0008_saved_searches::Migration),
             Box::new(crate::migration::m0009_edition_specific_covers::Migration),
+            Box::new(crate::migration::m0010_edition_files::Migration),
             Box::new(crate::migration::m0011_digital_inventory_unique_edition::Migration),
             Box::new(crate::migration::m0012_merge_edition_files::Migration),
         ]

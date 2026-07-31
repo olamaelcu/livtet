@@ -66,6 +66,7 @@ fn digital_inventory_row(
         dominant_color: Set(None),
         file_hash: Set(None),
         file_size_bytes: Set(None),
+        file_format: Set(Some("EPUB".into())),
         notes: Set(None),
         added_at: Set(now()),
         updated_at: Set(None),
