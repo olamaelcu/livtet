@@ -1,25 +1,15 @@
 use strum::{Display, EnumIter, EnumString, IntoEnumIterator};
 
-/// Every named uniqueness constraint in the livtet schema whose violation
-/// we want to classify as a primary-key-style error.
+/// Composite (multi-column) primary-key indexes on junction tables
+/// and similar many-to-many link tables.
 ///
-/// This enum mixes two kinds of indexes:
+/// Each variant maps to an `Index::create().name("pk_…").unique()`
+/// call in a migration.  `Display` produces the raw index-name string
+/// with the `pk_` prefix from `strum(prefix = "pk_")`, suitable for
+/// passing directly to `.name()` via `.to_string()`.
 ///
-/// - Composite (multi-column) primary-key indexes on junction tables
-///   and similar many-to-many link tables (e.g. `pk_work_authors`,
-///   `pk_edition_tags`). These are the original use case; each maps to
-///   an `Index::create().name("pk_…").unique()` call in a migration.
-/// - Single-column UNIQUE indexes that enforce a 1:1 cardinality that
-///   the rest of the codebase already assumes (e.g.
-///   `uq_digital_inventory_edition_id` from m0011). These are
-///   semantically equivalent for downstream consumers: a duplicate
-///   insert is a duplicate row, full stop.
-///
-/// `Display` produces the raw index-name string with the `pk_` prefix
-/// from `strum(prefix = "pk_")`, suitable for passing directly to
-/// `.name()` via `.to_string()` for the composite-PK variants. The
-/// single-column UNIQUE variant intentionally diverges — see the
-/// in-line comment on `DigitalInventoryEdition` below.
+/// Single-column UNIQUE indexes live in [`crate::UniqueIndex`] instead
+/// — those are semantically different constraints.
 ///
 /// Plain single-column primary keys (e.g. `pk_db_id(…)`) use SeaORM's
 /// built-in PK machinery and need no named index here.
@@ -46,17 +36,6 @@ pub enum PrimaryKey {
 
     // ── m0005_reading_annotations ──────────────────────────────────
     ReadingListBook,
-
-    // ── m0011_digital_inventory_unique_edition ────────────────────
-    // Display intentionally diverges from the DDL name; this variant is
-    // a single-column UNIQUE, not a composite PK. `strum(prefix = "pk_")`
-    // yields `pk_digital_inventory_edition` for Display, but the actual
-    // index is `uq_digital_inventory_edition_id`. No caller invokes
-    // `DigitalInventoryEdition.to_string()` for DDL — the migration uses
-    // the literal string directly — so the divergence is safe. If you
-    // ever need the DDL name, look it up explicitly rather than relying
-    // on Display.
-    DigitalInventoryEdition,
 }
 
 impl PrimaryKey {
@@ -85,11 +64,6 @@ impl PrimaryKey {
 
             // ── m0005_reading_annotations ──────────────────────────
             Self::ReadingListBook => "Duplicate reading-list entry",
-
-            // ── m0011_digital_inventory_unique_edition ────────────
-            Self::DigitalInventoryEdition => {
-                "Another digital inventory row already exists for this edition"
-            }
         }
     }
 
@@ -139,11 +113,6 @@ impl PrimaryKey {
 
             // ── m0005_reading_annotations ──────────────────────────
             Self::ReadingListBook => &["pk_reading_list_book", "reading_list_book."],
-
-            // ── m0011_digital_inventory_unique_edition ────────────
-            Self::DigitalInventoryEdition => {
-                &["uq_digital_inventory_edition_id", "digital_inventory."]
-            }
         }
     }
 

@@ -25,7 +25,7 @@
 //! PK matching works with both PostgreSQL (index name) and SQLite
 //! (table-name prefix via [`PrimaryKey::patterns`]).
 
-use crate::{Constraint, PrimaryKey};
+use crate::{Constraint, PrimaryKey, UniqueIndex};
 
 /// A named database constraint that was violated.
 ///
@@ -37,6 +37,8 @@ pub enum ConstraintViolation {
     ForeignKey(Constraint),
     /// A composite primary-key index defined in [`PrimaryKey`] was violated.
     CompositeKey(PrimaryKey),
+    /// A single-column unique index defined in [`UniqueIndex`] was violated.
+    UniqueIndex(UniqueIndex),
 }
 
 impl ConstraintViolation {
@@ -45,6 +47,7 @@ impl ConstraintViolation {
         match self {
             Self::ForeignKey(c) => c.human_readable(),
             Self::CompositeKey(pk) => pk.human_readable(),
+            Self::UniqueIndex(ui) => ui.human_readable(),
         }
     }
 
@@ -64,6 +67,8 @@ impl ConstraintViolation {
     /// 2. Composite primary-key indexes ([`PrimaryKey::all`]) — substring
     ///    match on [`PrimaryKey::patterns`], which covers both the DDL index
     ///    name and the SQLite `table.column` format.
+    /// 3. Single-column unique indexes ([`UniqueIndex::all`]) — substring
+    ///    match on [`UniqueIndex::patterns`].
     pub fn enhance_db_err(err: sea_orm::DbErr) -> (String, Option<Self>) {
         let msg = err.to_string();
 
@@ -86,6 +91,18 @@ impl ConstraintViolation {
             PrimaryKey::all().find(|pk| pk.patterns().iter().any(|p| msg.contains(*p)))
         {
             let violation = Self::CompositeKey(pk);
+            return (
+                format!("{} ({})", violation.human_readable(), msg),
+                Some(violation),
+            );
+        }
+
+        // ── 3. Single-column unique indexes ──────────────────────────────
+        // Same two-pattern strategy as PrimaryKey above.
+        if let Some(ui) =
+            UniqueIndex::all().find(|ui| ui.patterns().iter().any(|p| msg.contains(*p)))
+        {
+            let violation = Self::UniqueIndex(ui);
             return (
                 format!("{} ({})", violation.human_readable(), msg),
                 Some(violation),
@@ -187,11 +204,11 @@ mod tests {
         assert!(
             matches!(
                 violation,
-                Some(ConstraintViolation::CompositeKey(
-                    PrimaryKey::DigitalInventoryEdition
+                Some(ConstraintViolation::UniqueIndex(
+                    UniqueIndex::DigitalInventoryEdition
                 ))
             ),
-            "expected CompositeKey(DigitalInventoryEdition), got {violation:?}"
+            "expected UniqueIndex(DigitalInventoryEdition), got {violation:?}"
         );
         assert!(
             msg.contains("Another digital inventory row already exists for this edition"),
@@ -206,11 +223,11 @@ mod tests {
         assert!(
             matches!(
                 violation,
-                Some(ConstraintViolation::CompositeKey(
-                    PrimaryKey::DigitalInventoryEdition
+                Some(ConstraintViolation::UniqueIndex(
+                    UniqueIndex::DigitalInventoryEdition
                 ))
             ),
-            "expected CompositeKey(DigitalInventoryEdition) from PostgreSQL message, got {violation:?}"
+            "expected UniqueIndex(DigitalInventoryEdition) from PostgreSQL message, got {violation:?}"
         );
     }
 
@@ -223,6 +240,11 @@ mod tests {
         assert_eq!(
             ConstraintViolation::CompositeKey(PrimaryKey::SeriesEntries).human_readable(),
             PrimaryKey::SeriesEntries.human_readable(),
+        );
+        assert_eq!(
+            ConstraintViolation::UniqueIndex(UniqueIndex::DigitalInventoryEdition)
+                .human_readable(),
+            UniqueIndex::DigitalInventoryEdition.human_readable(),
         );
     }
 }
