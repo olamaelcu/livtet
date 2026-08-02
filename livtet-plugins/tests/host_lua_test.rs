@@ -20,6 +20,9 @@ const TEST_MANIFEST_TOML: &str = include_str!("../fixtures/test-provider/livtet.
 const PROBE_SOURCE: &str = include_str!("../fixtures/host-probe/init.lua");
 const PROBE_MANIFEST_TOML: &str = include_str!("../fixtures/host-probe/livtet.toml");
 
+const WATCH_SOURCE: &str = include_str!("../fixtures/watch-fixture/init.lua");
+const WATCH_MANIFEST_TOML: &str = include_str!("../fixtures/watch-fixture/livtet.toml");
+
 struct HostProcess {
     child: Child,
 }
@@ -1285,4 +1288,364 @@ fn host_urn_rejects_empty_value() {
         .expect("expected error string from empty value");
     assert!(err.contains("value must not be empty"), "got {v:?}");
     host.child.kill().ok();
+}
+
+// =====================================================================
+// Watch capability dispatch tests
+// =====================================================================
+
+fn watch_manifest_json() -> serde_json::Value {
+    let manifest: PluginManifest =
+        toml::from_str(WATCH_MANIFEST_TOML).expect("watch manifest parse failed");
+    serde_json::to_value(&manifest).expect("watch manifest serialize failed")
+}
+
+fn load_watch() -> HostProcess {
+    let manifest_json = watch_manifest_json();
+    let mut host = HostProcess::spawn();
+    let _: HostToMain = host.read_msg();
+    host.write_msg(&MainToHost::LoadPlugin {
+        plugin_id: "watch-fixture".to_string(),
+        manifest: manifest_json,
+        source: WATCH_SOURCE.to_string(),
+        data_dir: None,
+        settings: None,
+        rocks: Vec::new(),
+    });
+    let loaded: HostToMain = host.read_msg_where(
+        |m| matches!(m, HostToMain::PluginLoaded { plugin_id, .. } if plugin_id == "watch-fixture"),
+    );
+    assert!(
+        matches!(loaded, HostToMain::PluginLoaded { ref load_state, .. } if load_state == "loaded"),
+        "expected PluginLoaded(loaded), got {loaded:?}"
+    );
+    host
+}
+
+fn call_watch_capability(
+    host: &mut HostProcess,
+    call_id: &str,
+    since: Option<String>,
+) -> serde_json::Value {
+    let args = match since {
+        Some(s) => vec![serde_json::Value::String(s)],
+        None => Vec::new(),
+    };
+    host.write_msg(&MainToHost::Call {
+        id: call_id.to_string(),
+        plugin_id: "watch-fixture".to_string(),
+        capability: "watch".to_string(),
+        args,
+    });
+    let result: HostToMain =
+        host.read_msg_where(|m| matches!(m, HostToMain::CallResult { id, .. } if id == call_id));
+    match result {
+        HostToMain::CallResult {
+            ok, value, error, ..
+        } => {
+            if !ok {
+                panic!(
+                    "expected Ok result from watch, got Err({})",
+                    error.as_deref().unwrap_or("<no error>")
+                );
+            }
+            value.unwrap_or(serde_json::Value::Null)
+        }
+        other => panic!("expected CallResult, got {other:?}"),
+    }
+}
+
+#[test]
+fn watch_first_poll_returns_batch_with_cursor() {
+    let mut host = load_watch();
+    let v = call_watch_capability(&mut host, "w1", None);
+    let changes = v["changes"].as_array().expect("changes should be array");
+    assert_eq!(changes.len(), 2, "first poll should return 2 changes");
+    assert_eq!(v["has_more"], json!(true));
+    assert_eq!(v["next_cursor"], json!("cursor:batch-1"));
+    host.child.kill().ok();
+}
+
+#[test]
+fn watch_second_poll_returns_tail_batch() {
+    let mut host = load_watch();
+    let _ = call_watch_capability(&mut host, "w2a", None);
+    let v = call_watch_capability(&mut host, "w2b", Some("cursor:batch-1".to_string()));
+    let changes = v["changes"].as_array().expect("changes should be array");
+    assert_eq!(changes.len(), 1, "second poll should return 1 change");
+    assert_eq!(v["has_more"], json!(false));
+    assert_eq!(v["next_cursor"], json!("cursor:batch-2"));
+    host.child.kill().ok();
+}
+
+#[test]
+fn watch_exhausted_cursor_returns_empty_or_null_changes() {
+    let mut host = load_watch();
+    let _ = call_watch_capability(&mut host, "w3a", None);
+    let _ = call_watch_capability(&mut host, "w3b", Some("cursor:batch-1".to_string()));
+    let v = call_watch_capability(&mut host, "w3c", Some("cursor:batch-2".to_string()));
+    let empty: Vec<serde_json::Value> = vec![];
+    let changes = v["changes"].as_array().unwrap_or(&empty);
+    assert!(changes.is_empty(), "exhausted cursor should return no changes, got {v:?}");
+    assert_eq!(v["has_more"], json!(false));
+    host.child.kill().ok();
+}
+
+// =====================================================================
+// Observe-only / error-path tests
+// =====================================================================
+
+fn wait_for_exit(host: &mut HostProcess, timeout_secs: u64) -> Option<std::process::ExitStatus> {
+    let start = std::time::Instant::now();
+    loop {
+        match host.child.try_wait().expect("try_wait failed") {
+            Some(status) => return Some(status),
+            None => {
+                if start.elapsed() > std::time::Duration::from_secs(timeout_secs) {
+                    return None;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+        }
+    }
+}
+
+#[test]
+fn call_unloaded_plugin_returns_not_found() {
+    let mut host = HostProcess::spawn();
+    let _: HostToMain = host.read_msg();
+
+    host.write_msg(&MainToHost::Call {
+        id: "notfound-1".to_string(),
+        plugin_id: "never-loaded".to_string(),
+        capability: "any".to_string(),
+        args: vec![],
+    });
+    let result: HostToMain = host.read_msg_where(
+        |m| matches!(m, HostToMain::CallResult { id, .. } if id == "notfound-1"),
+    );
+    match result {
+        HostToMain::CallResult { ok, error, .. } => {
+            assert!(!ok, "expected failure for never-loaded plugin");
+            let err = error.expect("expected error message");
+            assert!(
+                err.contains("not found"),
+                "expected 'not found' error, got {err:?}"
+            );
+        }
+        other => panic!("expected CallResult, got {other:?}"),
+    }
+    host.child.kill().ok();
+}
+
+#[test]
+fn call_unknown_capability_returns_error() {
+    let mut host = HostProcess::spawn();
+    let _: HostToMain = host.read_msg();
+
+    let manifest_json = test_manifest_json();
+    host.write_msg(&MainToHost::LoadPlugin {
+        plugin_id: "test-provider".to_string(),
+        manifest: manifest_json,
+        source: TEST_SOURCE.to_string(),
+        data_dir: None,
+        settings: None,
+        rocks: Vec::new(),
+    });
+    let loaded: HostToMain = host.read_msg();
+    assert!(
+        matches!(loaded, HostToMain::PluginLoaded { .. }),
+        "expected PluginLoaded, got {loaded:?}"
+    );
+
+    host.write_msg(&MainToHost::Call {
+        id: "no-cap".to_string(),
+        plugin_id: "test-provider".to_string(),
+        capability: "nonexistent_cap".to_string(),
+        args: vec![],
+    });
+    let result: HostToMain = host.read_msg_where(
+        |m| matches!(m, HostToMain::CallResult { id, .. } if id == "no-cap"),
+    );
+    match result {
+        HostToMain::CallResult { ok, error, .. } => {
+            assert!(!ok, "expected failure for unknown capability");
+            assert!(
+                error.is_some(),
+                "expected error message for unknown capability"
+            );
+        }
+        other => panic!("expected CallResult, got {other:?}"),
+    }
+    host.child.kill().ok();
+}
+
+#[test]
+fn load_plugin_invalid_lua_returns_error() {
+    let mut host = HostProcess::spawn();
+    let _: HostToMain = host.read_msg();
+
+    let manifest_json = test_manifest_json();
+    host.write_msg(&MainToHost::LoadPlugin {
+        plugin_id: "bad-syntax".to_string(),
+        manifest: manifest_json,
+        source: "{{{".to_string(),
+        data_dir: None,
+        settings: None,
+        rocks: Vec::new(),
+    });
+    let result: HostToMain = host.read_msg();
+    match result {
+        HostToMain::PluginLoadError { plugin_id, error } => {
+            assert_eq!(plugin_id, "bad-syntax");
+            assert!(
+                !error.is_empty(),
+                "expected non-empty parse error, got {error:?}"
+            );
+        }
+        other => panic!("expected PluginLoadError, got {other:?}"),
+    }
+    host.child.kill().ok();
+}
+
+#[test]
+fn load_plugin_empty_source_returns_error() {
+    let mut host = HostProcess::spawn();
+    let _: HostToMain = host.read_msg();
+
+    let manifest_json = test_manifest_json();
+    host.write_msg(&MainToHost::LoadPlugin {
+        plugin_id: "empty-source".to_string(),
+        manifest: manifest_json,
+        source: "".to_string(),
+        data_dir: None,
+        settings: None,
+        rocks: Vec::new(),
+    });
+    let result: HostToMain = host.read_msg();
+    match result {
+        HostToMain::PluginLoadError { plugin_id, error } => {
+            assert_eq!(plugin_id, "empty-source");
+            assert!(
+                error.contains("must return a table")
+                    || error.contains("cannot load"),
+                "expected table-return error, got {error:?}"
+            );
+        }
+        other => panic!("expected PluginLoadError, got {other:?}"),
+    }
+    host.child.kill().ok();
+}
+
+#[test]
+fn load_plugin_non_table_return_returns_error() {
+    let mut host = HostProcess::spawn();
+    let _: HostToMain = host.read_msg();
+
+    let manifest_json = test_manifest_json();
+    host.write_msg(&MainToHost::LoadPlugin {
+        plugin_id: "non-table".to_string(),
+        manifest: manifest_json,
+        source: "return 42".to_string(),
+        data_dir: None,
+        settings: None,
+        rocks: Vec::new(),
+    });
+    let result: HostToMain = host.read_msg();
+    match result {
+        HostToMain::PluginLoadError { plugin_id, error } => {
+            assert_eq!(plugin_id, "non-table");
+            assert!(
+                !error.is_empty(),
+                "expected non-empty error for non-table return, got {error:?}"
+            );
+        }
+        other => panic!("expected PluginLoadError, got {other:?}"),
+    }
+    host.child.kill().ok();
+}
+
+#[test]
+fn unload_never_loaded_plugin_returns_unloaded() {
+    let mut host = HostProcess::spawn();
+    let _: HostToMain = host.read_msg();
+
+    host.write_msg(&MainToHost::UnloadPlugin {
+        plugin_id: "never-loaded-2".to_string(),
+    });
+    let result: HostToMain = host.read_msg();
+    assert_eq!(
+        result,
+        HostToMain::PluginUnloaded {
+            plugin_id: "never-loaded-2".to_string()
+        },
+        "unloading never-loaded plugin should return PluginUnloaded (idempotent), got {result:?}"
+    );
+    host.child.kill().ok();
+}
+
+#[test]
+fn stdin_eof_triggers_clean_shutdown() {
+    let mut host = HostProcess::spawn();
+    let ready: HostToMain = host.read_msg();
+    assert_eq!(
+        ready,
+        HostToMain::Ready {
+            runtime: "lua".to_string()
+        }
+    );
+
+    drop(host.child.stdin.take());
+
+    let status = wait_for_exit(&mut host, 5).expect("process should exit within 5 seconds");
+    assert!(status.success(), "expected clean shutdown, got {status:?}");
+}
+
+#[test]
+fn garbage_message_triggers_clean_shutdown() {
+    let mut host = HostProcess::spawn();
+    let ready: HostToMain = host.read_msg();
+    assert_eq!(
+        ready,
+        HostToMain::Ready {
+            runtime: "lua".to_string()
+        }
+    );
+
+    let stdin = host.child.stdin.as_mut().expect("stdin not available");
+    let len: [u8; 4] = 10u32.to_le_bytes();
+    stdin.write_all(&len).expect("write len failed");
+    stdin.write_all(&[0xFFu8; 10]).expect("write garbage failed");
+    stdin.flush().expect("flush failed");
+
+    let status = wait_for_exit(&mut host, 5).expect("process should exit within 5 seconds");
+    assert!(
+        status.success(),
+        "garbage message should trigger clean shutdown, got {status:?}"
+    );
+}
+
+#[test]
+fn oversized_message_rejected() {
+    let mut host = HostProcess::spawn();
+    let ready: HostToMain = host.read_msg();
+    assert_eq!(
+        ready,
+        HostToMain::Ready {
+            runtime: "lua".to_string()
+        }
+    );
+
+    let stdin = host.child.stdin.as_mut().expect("stdin not available");
+    let oversize_len: u32 = 16 * 1024 * 1024 + 1;
+    stdin
+        .write_all(&oversize_len.to_le_bytes())
+        .expect("write oversize len failed");
+    stdin.flush().expect("flush failed");
+
+    let status = wait_for_exit(&mut host, 5).expect("process should exit within 5 seconds");
+    assert!(
+        status.success(),
+        "oversized message should trigger clean shutdown, got {status:?}"
+    );
 }

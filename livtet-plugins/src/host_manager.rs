@@ -1063,6 +1063,13 @@ impl PluginHostManager {
     /// disabled, or its active version failed to load. The frontend's
     /// `PluginInfo.loaded` mirrors this so the UI never offers a
     /// capability that will fail at dispatch time.
+    /// Load the persisted watch cursor for a plugin from
+    /// `plugin_settings`. Returns `None` when no cursor has been
+    /// saved yet or when no DB pool is available.
+    pub async fn load_watch_cursor(&self, plugin_id: &str) -> Option<String> {
+        self.get_setting(plugin_id, "watch.cursor").await
+    }
+
     pub fn is_active_version_loaded(&self, id: &str) -> bool {
         let Some(entry) = self.loaded_plugins.get(id) else {
             return false;

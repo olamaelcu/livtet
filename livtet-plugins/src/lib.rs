@@ -28,6 +28,7 @@ pub mod system_secrets;
 pub mod transport;
 pub mod types;
 pub mod watch;
+pub mod watch_scheduler;
 pub mod web_registry;
 
 pub use error::{PluginError, PluginResult};

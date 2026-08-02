@@ -45,6 +45,13 @@ impl MessageTransport {
         let mut len_buf = [0u8; 4];
         stdin.read_exact(&mut len_buf).await?;
         let len = u32::from_le_bytes(len_buf) as usize;
+        const MAX_MESSAGE_SIZE: usize = 16 * 1024 * 1024; // 16 MiB
+        if len > MAX_MESSAGE_SIZE {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("message length {len} exceeds max {MAX_MESSAGE_SIZE}"),
+            ));
+        }
         let mut payload = vec![0u8; len];
         stdin.read_exact(&mut payload).await?;
         rmp_serde::from_slice(&payload).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
@@ -458,13 +465,14 @@ async fn main() -> ExitCode {
 
     let (request_tx, mut request_rx) = mpsc::channel::<MainToHost>(32);
     let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
+    let (reader_death_tx, mut reader_death_rx) = tokio::sync::oneshot::channel::<()>();
     let request_tx_for_reader = request_tx.clone();
     let router_for_reader = Arc::clone(&router);
 
     let transport = MessageTransport::new();
     let transport_for_reader = transport.clone();
 
-    let _reader_handle = tokio::spawn(async move {
+    let reader_handle = tokio::spawn(async move {
         let mut shutdown_rx = shutdown_rx;
         loop {
             let msg: MainMessage = tokio::select! {
@@ -503,6 +511,15 @@ async fn main() -> ExitCode {
         }
     });
 
+    tokio::spawn(async move {
+        let result = reader_handle.await;
+        match result {
+            Ok(()) => tracing::info!("reader death watcher: reader task exited normally"),
+            Err(e) => tracing::error!("reader death watcher: reader task panicked: {e}"),
+        }
+        let _ = reader_death_tx.send(());
+    });
+
     let ready = HostToMain::Ready {
         runtime: "lua".to_string(),
     };
@@ -513,26 +530,42 @@ async fn main() -> ExitCode {
 
     let _keep_request_tx_alive = request_tx;
 
-    while let Some(req) = request_rx.recv().await {
-        if matches!(req, MainToHost::Shutdown) {
-            tracing::info!("received shutdown signal");
-            break;
-        }
-        if let MainToHost::LoadPlugin {
-            plugin_id, rocks, ..
-        } = &req
-        {
-            tracing::info!(
-                plugin = %plugin_id,
-                rocks = ?rocks,
-                "LoadPlugin: rocks declared by manifest"
-            );
-        }
-        if let Some(response) = host.handle_message(req)
-            && let Err(e) = transport.write_msg(&response).await
-        {
-            tracing::error!("failed to write response: {}", e);
-            return ExitCode::from(1);
+    loop {
+        tokio::select! {
+            req = request_rx.recv() => {
+                match req {
+                    Some(msg) => {
+                        if matches!(msg, MainToHost::Shutdown) {
+                            tracing::info!("received shutdown signal");
+                            break;
+                        }
+                        if let MainToHost::LoadPlugin {
+                            plugin_id, rocks, ..
+                        } = &msg
+                        {
+                            tracing::info!(
+                                plugin = %plugin_id,
+                                rocks = ?rocks,
+                                "LoadPlugin: rocks declared by manifest"
+                            );
+                        }
+                        if let Some(response) = host.handle_message(msg)
+                            && let Err(e) = transport.write_msg(&response).await
+                        {
+                            tracing::error!("failed to write response: {e}");
+                            break;
+                        }
+                    }
+                    None => {
+                        tracing::info!("request channel closed; shutting down");
+                        break;
+                    }
+                }
+            }
+            _ = &mut reader_death_rx => {
+                tracing::info!("shutting down due to reader task exit");
+                break;
+            }
         }
     }
 
