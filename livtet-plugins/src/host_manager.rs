@@ -17,7 +17,7 @@ use rand::{Rng as _, rng};
 use tokio::{
     io::AsyncWriteExt,
     process::{Child, ChildStdin, ChildStdout, Command},
-    sync::{Mutex, oneshot},
+    sync::Mutex,
 };
 use tracing::{error, info, warn};
 
@@ -127,11 +127,6 @@ struct LoadedPlugin {
     active_version: Option<String>,
 }
 
-struct PendingCall {
-    #[allow(dead_code)]
-    sender: oneshot::Sender<PluginResult<serde_json::Value>>,
-}
-
 /// Sink for Tauri-style event emissions.
 ///
 /// The dispatcher in `livtet-plugins` doesn't depend on
@@ -164,7 +159,6 @@ pub struct PluginHostManager {
     stdout: ChildStdout,
     child: Child,
     loaded_plugins: HashMap<String, LoadedPlugin>,
-    pending_calls: HashMap<String, PendingCall>,
     runtime: String,
     /// Pool used to answer host-side requests for library data
     /// (`host.resolve_identifier`, `host.get_edition_info`,
@@ -204,6 +198,11 @@ pub struct PluginHostManager {
     /// Outbound HTTP client used to fulfill plugin `HttpRequest`
     /// IPC messages. Route-restricted; see `handle_http_request`.
     http_client: reqwest::Client,
+    /// Installed event emitter. Fire-and-forget `EmitEvent` IPC
+    /// messages from plugins are forwarded here. Defaults to
+    /// `NullEventEmitter` (no-op); the Tauri side installs a
+    /// real emitter via `with_event_emitter`.
+    event_emitter: SharedEventEmitter,
 }
 
 /// Build the [`tokio::process::Command`] used to spawn the plugin host
@@ -342,7 +341,6 @@ impl PluginHostManager {
             stdout,
             child,
             loaded_plugins: HashMap::new(),
-            pending_calls: HashMap::new(),
             runtime: String::new(),
             db,
             disabled: HashSet::new(),
@@ -354,6 +352,7 @@ impl PluginHostManager {
             http_client: reqwest::Client::builder()
                 .build()
                 .unwrap_or_else(|_| reqwest::Client::new()),
+            event_emitter: Arc::new(NullEventEmitter),
         };
 
         manager.wait_for_ready().await?;
@@ -400,6 +399,17 @@ impl PluginHostManager {
         handler: Arc<dyn crate::host_trait::OAuthDispatchHandler>,
     ) -> &mut Self {
         self.oauth_handler = Some(handler);
+        self
+    }
+
+    /// Builder helper: install the event emitter that handles
+    /// `HostToMain::EmitEvent` IPC messages. The Tauri main process
+    /// provides an emitter that wraps `app.emit(...)` calls.
+    pub fn with_event_emitter(
+        &mut self,
+        emitter: SharedEventEmitter,
+    ) -> &mut Self {
+        self.event_emitter = emitter;
         self
     }
 
@@ -668,9 +678,6 @@ impl PluginHostManager {
         }
 
         let call_id = ulid::Ulid::new().to_string();
-        let (tx, _rx) = oneshot::channel();
-        self.pending_calls
-            .insert(call_id.clone(), PendingCall { sender: tx });
 
         self.send_main(&MainToHost::Call {
             id: call_id.clone(),
@@ -683,7 +690,6 @@ impl PluginHostManager {
         recv_loop!(self,
             [
                 HostToMain::CallResult { id, ok, value, error } if id == call_id => {
-                    let _ = self.pending_calls.remove(&call_id);
                     if ok {
                         return Ok(value.unwrap_or(serde_json::Value::Null));
                     }
@@ -995,7 +1001,6 @@ impl PluginHostManager {
             }
         }
 
-        self.pending_calls.clear();
         Ok(())
     }
 
@@ -1561,8 +1566,17 @@ impl PluginHostManager {
                 self.send_callback(&response).await?;
                 Ok(true)
             }
-            HostToMain::Log { .. }
-            | HostToMain::EmitEvent { .. } => Ok(false),
+            HostToMain::EmitEvent {
+                plugin_id,
+                event_type,
+                payload,
+            } => {
+                let name = format!("plugin:event:{event_type}");
+                self.event_emitter.emit(&name, payload);
+                tracing::debug!(%plugin_id, %event_type, "emit_event forwarded to emitter");
+                Ok(false)
+            }
+            HostToMain::Log { .. } => Ok(false),
             HostToMain::HttpRequest {
                 id,
                 method,

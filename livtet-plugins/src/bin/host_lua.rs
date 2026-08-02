@@ -454,6 +454,8 @@ async fn main() -> ExitCode {
         }
     };
 
+    host.set_ipc_writer(Arc::clone(&stdout_arc));
+
     let (request_tx, mut request_rx) = mpsc::channel::<MainToHost>(32);
     let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
     let request_tx_for_reader = request_tx.clone();

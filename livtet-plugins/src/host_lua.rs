@@ -71,6 +71,9 @@ pub struct LuaHost<H: HostBase + HostHttp + HostLog + HostSystemSecrets + HostOA
     /// every `host.require("dkjson")` re-executes the 713-line chunk.
     #[allow(clippy::arc_with_non_send_sync)]
     require_cache: Arc<Mutex<HashMap<String, Value>>>,
+    /// Shared writer for fire-and-forget IPC messages (e.g. `emit_event`).
+    /// `None` until wired by the binary or test harness.
+    ipc_writer: Option<Arc<Mutex<Box<dyn std::io::Write + Send>>>>,
 }
 
 impl<H> LuaHost<H>
@@ -106,9 +109,20 @@ where
             system_secrets_declared: Arc::new(Mutex::new(HashMap::new())),
             host_impl,
             require_cache: Arc::new(Mutex::new(HashMap::new())),
+            ipc_writer: None,
         };
         host.setup_host_functions()?;
         Ok(host)
+    }
+
+    /// Wire the IPC writer for fire-and-forget messages (e.g.
+    /// `emit_event`). Call once after construction; subsequent
+    /// calls overwrite the previous writer.
+    pub fn set_ipc_writer(
+        &mut self,
+        writer: Arc<Mutex<Box<dyn std::io::Write + Send>>>,
+    ) {
+        self.ipc_writer = Some(writer);
     }
 
     /// Record whether a plugin declares the `system_secrets`
@@ -753,7 +767,7 @@ where
         host_table.set("fs_symlink", fs_symlink)?;
 
         // -- emit_event (fire-and-forget) -----------------------------------
-        let writer = ipc_writer_for_emit();
+        let writer = self.ipc_writer.clone();
         let emit_event = self.lua.create_function(
             move |lua, (event_type, payload): (String, Value)| -> mlua::Result<()> {
                 let plugin_id = read_current_plugin_id(lua);
@@ -1764,13 +1778,6 @@ fn run_sqlite_query(
         .map_err(|e| mlua::Error::external(e.to_string()))?;
 
     Ok((Some(Value::Table(table)), None))
-}
-
-/// Return a shared writer for fire-and-forget IPC messages.
-/// Returns `None` when the globals haven't been set up — the
-/// caller should degrade gracefully.
-fn ipc_writer_for_emit() -> Option<Arc<Mutex<Box<dyn std::io::Write + Send>>>> {
-    None
 }
 
 fn load_or_cached_grant(
