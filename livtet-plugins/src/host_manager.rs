@@ -11,6 +11,7 @@ use aes_gcm::{
 };
 use camino::{Utf8Path, Utf8PathBuf};
 use fs_err as fs;
+use hex;
 use livtet_data::sql::{self, AssertSqlSafe, SqlitePool};
 use rand::{Rng as _, rng};
 use tokio::{
@@ -34,12 +35,10 @@ macro_rules! recv_loop {
                 HostToMain::Log { plugin_id, level, message } => {
                     forward_log(&plugin_id, &level, &message);
                 }
-                // TBD: the HttpRequest host bridge was removed
-                // alongside `livtet_core::crud`. Restore a
-                // generic IPC channel that routes HTTP requests
-                // through the host's outbound HTTP client.
-                HostToMain::HttpRequest { .. } => {
-                    warn!("HttpRequest dropped: host bridge removed");
+                msg @ HostToMain::HttpRequest { .. } => {
+                    if let Err(e) = $self.dispatch(msg).await {
+                        warn!(error = %e, concat!("dispatch failed during ", $log_prefix));
+                    }
                 }
                 msg @ $dispatch => {
                     if let Err(e) = $self.dispatch(msg).await {
@@ -72,6 +71,8 @@ fn decrypt_secrets_content(content: &str, hmac_key: &[u8; 32]) -> Option<HashMap
         .and_then(|j| serde_json::from_str(&j).ok())
 }
 
+use livtet_core::DbId;
+
 use crate::{
     discovery::{DiscoveredPlugin, PluginSource, scan_plugins},
     error::{PluginError, PluginResult},
@@ -79,6 +80,7 @@ use crate::{
     link_resolver::{ResolveLinksOptions, ResolveLinksResult},
     manifest::PluginManifest,
     plugin_requires::PluginRequires,
+    progress_entry::ProgressEntry,
     protocol::{HostToMain, MainToHost, MainToHostCallback},
     repository::hmac::HmacKey,
     system_secrets::PluginSystemSecret,
@@ -199,6 +201,9 @@ pub struct PluginHostManager {
     /// constructing the `OAuthBroker`. When `None`, OAuth messages
     /// fall through to the `other` arm and reply with "unhandled".
     oauth_handler: Option<Arc<dyn crate::host_trait::OAuthDispatchHandler>>,
+    /// Outbound HTTP client used to fulfill plugin `HttpRequest`
+    /// IPC messages. Route-restricted; see `handle_http_request`.
+    http_client: reqwest::Client,
 }
 
 /// Build the [`tokio::process::Command`] used to spawn the plugin host
@@ -346,6 +351,9 @@ impl PluginHostManager {
             system_secrets: HashMap::new(),
             trust_store: TrustStore::empty(),
             oauth_handler: None,
+            http_client: reqwest::Client::builder()
+                .build()
+                .unwrap_or_else(|_| reqwest::Client::new()),
         };
 
         manager.wait_for_ready().await?;
@@ -1507,21 +1515,66 @@ impl PluginHostManager {
                 self.send_callback(&response).await?;
                 Ok(true)
             }
-            HostToMain::ResolveIdentifierRequest { .. }
-            | HostToMain::ResolveIdentifiersRequest { .. }
-            | HostToMain::GetEditionIdentifiersRequest { .. }
-            | HostToMain::FetchProgressRequest { .. }
-            | HostToMain::UpsertProgressRequest { .. } => {
-                // DB-backed identifier/progress bridges were removed when
-                // `livtet_core::crud` and the identifier-resolution helpers
-                // were deleted. The host refuses these requests until a
-                // replacement is wired up.
-                warn!("received dropped DB-bridge request; ignoring");
-                Ok(false)
+            HostToMain::ResolveIdentifierRequest { id, urn, .. } => {
+                let response = self.handle_resolve_identifier(&id, &urn).await;
+                self.send_callback(&response).await?;
+                Ok(true)
+            }
+            HostToMain::ResolveIdentifiersRequest { id, urns, .. } => {
+                let response = self.handle_resolve_identifiers(&id, urns).await;
+                self.send_callback(&response).await?;
+                Ok(true)
+            }
+            HostToMain::GetEditionIdentifiersRequest {
+                id,
+                edition_id,
+                ..
+            } => {
+                let response = self
+                    .handle_get_edition_identifiers(&id, &edition_id)
+                    .await;
+                self.send_callback(&response).await?;
+                Ok(true)
+            }
+            HostToMain::FetchProgressRequest { id, urn, .. } => {
+                let response = self.handle_fetch_progress(&id, &urn).await;
+                self.send_callback(&response).await?;
+                Ok(true)
+            }
+            HostToMain::UpsertProgressRequest {
+                id,
+                urn,
+                progress,
+                last_location,
+                total_reading_time_secs,
+                ..
+            } => {
+                let response = self
+                    .handle_upsert_progress(
+                        &id,
+                        &urn,
+                        progress,
+                        last_location,
+                        total_reading_time_secs,
+                    )
+                    .await;
+                self.send_callback(&response).await?;
+                Ok(true)
             }
             HostToMain::Log { .. }
-            | HostToMain::HttpRequest { .. }
             | HostToMain::EmitEvent { .. } => Ok(false),
+            HostToMain::HttpRequest {
+                id,
+                method,
+                url,
+                body,
+                headers,
+                plugin_id: _,
+            } => {
+                let response = self.handle_http_request(&id, &method, &url, body, &headers).await;
+                self.send_callback(&response).await?;
+                Ok(true)
+            }
             HostToMain::SecretRequest {
                 id,
                 plugin_id,
@@ -1628,20 +1681,574 @@ impl PluginHostManager {
         }
     }
 
-    /// TBD: `handle_get_edition_info` was the last DB-backed host
-    /// bridge left after the CRUD module was deleted. Restore once a
-    /// replacement bridge ships.
+    /// Query the `editions` table by hex-encoded `DbId` and return the
+    /// row as a JSON object via an [`EditionInfoResult`] callback.
     async fn handle_get_edition_info(
         &self,
-        _request_id: &str,
-        _edition_id: &str,
+        request_id: &str,
+        edition_id: &str,
     ) -> MainToHostCallback {
-        panic!(
-            "TBD: handle_get_edition_info host bridge removed; see livtet-plugins/src/host_manager.rs"
-        )
+        let Some(pool) = self.db.as_ref() else {
+            return MainToHostCallback::EditionInfoResult {
+                id: request_id.to_string(),
+                info: None,
+                error: Some("no database pool available".to_string()),
+            };
+        };
+
+        let row = sql::query(AssertSqlSafe(
+            "SELECT lower(hex(id)), lower(hex(work_id)), lower(hex(group_id)), \
+             title, published_date, lower(hex(format_id)), lower(hex(language_id)), \
+             notes, description, created_at, updated_at \
+             FROM editions WHERE lower(hex(id)) = ?",
+        ))
+        .bind(edition_id.to_lowercase())
+        .fetch_optional(pool)
+        .await;
+
+        match row {
+            Ok(Some(row)) => {
+                use sql::Row;
+                let json = serde_json::json!({
+                    "id": row.try_get::<String, _>(0).unwrap_or_default(),
+                    "work_id": row.try_get::<String, _>(1).unwrap_or_default(),
+                    "group_id": row.try_get::<Option<String>, _>(2).unwrap_or(None),
+                    "title": row.try_get::<Option<String>, _>(3).unwrap_or(None),
+                    "published_date": row.try_get::<Option<String>, _>(4).unwrap_or(None),
+                    "format_id": row.try_get::<Option<String>, _>(5).unwrap_or(None),
+                    "language_id": row.try_get::<Option<String>, _>(6).unwrap_or(None),
+                    "notes": row.try_get::<Option<String>, _>(7).unwrap_or(None),
+                    "description": row.try_get::<Option<String>, _>(8).unwrap_or(None),
+                    "created_at": row.try_get::<Option<String>, _>(9).unwrap_or(None),
+                    "updated_at": row.try_get::<Option<String>, _>(10).unwrap_or(None),
+                });
+                MainToHostCallback::EditionInfoResult {
+                    id: request_id.to_string(),
+                    info: Some(json),
+                    error: None,
+                }
+            }
+            Ok(None) => MainToHostCallback::EditionInfoResult {
+                id: request_id.to_string(),
+                info: None,
+                error: Some(format!("edition not found: {edition_id}")),
+            },
+            Err(e) => MainToHostCallback::EditionInfoResult {
+                id: request_id.to_string(),
+                info: None,
+                error: Some(format!("edition query error: {e}")),
+            },
+        }
+    }
+
+    /// Resolve a URN (identifier value) to an edition id.
+    ///
+    /// First looks up the identifier in `identifiers`, then
+    /// joins through `edition_identifiers`. Falls back to the
+    /// work-level path: `work_identifiers` → first edition with
+    /// that `work_id`.
+    async fn handle_resolve_identifier(
+        &self,
+        request_id: &str,
+        urn: &str,
+    ) -> MainToHostCallback {
+        match self.resolve_urn_to_edition_id(urn).await {
+            Ok(Some(edition_id)) => MainToHostCallback::ResolveIdentifierResult {
+                id: request_id.to_string(),
+                edition_id: Some(edition_id),
+                error: None,
+            },
+            Ok(None) => MainToHostCallback::ResolveIdentifierResult {
+                id: request_id.to_string(),
+                edition_id: None,
+                error: Some(format!("URN not found: {urn}")),
+            },
+            Err(e) => MainToHostCallback::ResolveIdentifierResult {
+                id: request_id.to_string(),
+                edition_id: None,
+                error: Some(e.to_string()),
+            },
+        }
+    }
+
+    /// Batch version of [`Self::handle_resolve_identifier`].
+    async fn handle_resolve_identifiers(
+        &self,
+        request_id: &str,
+        urns: Vec<String>,
+    ) -> MainToHostCallback {
+        let mut edition_ids = Vec::with_capacity(urns.len());
+        for urn in &urns {
+            match self.resolve_urn_to_edition_id(urn).await {
+                Ok(Some(eid)) => edition_ids.push(Some(eid)),
+                Ok(None) => edition_ids.push(None),
+                Err(_) => edition_ids.push(None),
+            }
+        }
+        MainToHostCallback::ResolveIdentifiersResult {
+            id: request_id.to_string(),
+            edition_ids,
+            error: None,
+        }
+    }
+
+    /// List every URN linked to the given edition — both
+    /// edition-direct and work-level identifiers.
+    async fn handle_get_edition_identifiers(
+        &self,
+        request_id: &str,
+        edition_id: &str,
+    ) -> MainToHostCallback {
+        let Some(pool) = self.db.as_ref() else {
+            return MainToHostCallback::EditionIdentifiersResult {
+                id: request_id.to_string(),
+                urns: Vec::new(),
+                error: Some("no database pool available".to_string()),
+            };
+        };
+
+        let mut urns = Vec::new();
+
+        let q = "SELECT i.value FROM identifiers i \
+                 JOIN edition_identifiers ei ON i.id = ei.identifier_id \
+                 WHERE lower(hex(ei.edition_id)) = ?";
+        match sql::query(AssertSqlSafe(q))
+            .bind(edition_id.to_lowercase())
+            .fetch_all(pool)
+            .await
+        {
+            Ok(rows) => {
+                use sql::Row;
+                for row in &rows {
+                    if let Ok(v) = row.try_get::<String, _>(0) {
+                        urns.push(v);
+                    }
+                }
+            }
+            Err(e) => {
+                return MainToHostCallback::EditionIdentifiersResult {
+                    id: request_id.to_string(),
+                    urns: Vec::new(),
+                    error: Some(format!("edition_identifiers query error: {e}")),
+                };
+            }
+        }
+
+        let q = "SELECT i.value FROM identifiers i \
+                 JOIN work_identifiers wi ON i.id = wi.identifier_id \
+                 JOIN editions e ON wi.work_id = e.work_id \
+                 WHERE lower(hex(e.id)) = ?";
+        match sql::query(AssertSqlSafe(q))
+            .bind(edition_id.to_lowercase())
+            .fetch_all(pool)
+            .await
+        {
+            Ok(rows) => {
+                use sql::Row;
+                for row in &rows {
+                    if let Ok(v) = row.try_get::<String, _>(0) {
+                        urns.push(v);
+                    }
+                }
+            }
+            Err(e) => {
+                return MainToHostCallback::EditionIdentifiersResult {
+                    id: request_id.to_string(),
+                    urns: Vec::new(),
+                    error: Some(format!("work_identifiers query error: {e}")),
+                };
+            }
+        }
+
+        MainToHostCallback::EditionIdentifiersResult {
+            id: request_id.to_string(),
+            urns,
+            error: None,
+        }
+    }
+
+    /// Look up the reading-progress row for an edition (identified by
+    /// URN). Resolves URN → edition_id → format_id → reading_progress.
+    async fn handle_fetch_progress(
+        &self,
+        request_id: &str,
+        urn: &str,
+    ) -> MainToHostCallback {
+        let Some(pool) = self.db.as_ref() else {
+            return MainToHostCallback::FetchProgressResult {
+                id: request_id.to_string(),
+                progress: None,
+                error: Some("no database pool available".to_string()),
+            };
+        };
+
+        let edition_id = match self.resolve_urn_to_edition_id(urn).await {
+            Ok(Some(eid)) => eid,
+            Ok(None) => {
+                return MainToHostCallback::FetchProgressResult {
+                    id: request_id.to_string(),
+                    progress: None,
+                    error: Some(format!("URN not found: {urn}")),
+                };
+            }
+            Err(e) => {
+                return MainToHostCallback::FetchProgressResult {
+                    id: request_id.to_string(),
+                    progress: None,
+                    error: Some(e.to_string()),
+                };
+            }
+        };
+
+        let format_id = match self.find_default_format_for_edition(pool, &edition_id).await {
+            Ok(Some(fid)) => fid,
+            Ok(None) => {
+                return MainToHostCallback::FetchProgressResult {
+                    id: request_id.to_string(),
+                    progress: None,
+                    error: Some(format!("no format for edition {edition_id}")),
+                };
+            }
+            Err(e) => {
+                return MainToHostCallback::FetchProgressResult {
+                    id: request_id.to_string(),
+                    progress: None,
+                    error: Some(e.to_string()),
+                };
+            }
+        };
+
+        let row = sql::query(AssertSqlSafe(
+            "SELECT lower(hex(id)), lower(hex(edition_id)), lower(hex(format_id)), \
+             progress, last_location, total_reading_time_secs, created_at \
+             FROM reading_progress \
+             WHERE lower(hex(edition_id)) = ? AND lower(hex(format_id)) = ?",
+        ))
+        .bind(edition_id.to_lowercase())
+        .bind(format_id.to_lowercase())
+        .fetch_optional(pool)
+        .await;
+
+        match row {
+            Ok(Some(row)) => {
+                use sql::Row;
+                let id_hex: String = row.try_get(0).unwrap_or_default();
+                let eid_hex: String = row.try_get(1).unwrap_or_default();
+                let fid_hex: String = row.try_get(2).unwrap_or_default();
+                let progress: f64 = row.try_get(3).unwrap_or(0.0);
+                let last_location: Option<String> = row.try_get(4).ok().flatten();
+                let total_secs: i64 = row.try_get(5).unwrap_or(0);
+                let created_at: Option<String> = row.try_get(6).ok().flatten();
+
+                let id = parse_db_id_hex(&id_hex);
+                let eid = parse_db_id_hex(&eid_hex);
+                let fid = parse_db_id_hex(&fid_hex);
+
+                let entry = ProgressEntry {
+                    id,
+                    edition_id: eid,
+                    format_id: fid,
+                    progress,
+                    last_location,
+                    total_reading_time_secs: total_secs,
+                    updated_at: created_at,
+                };
+                MainToHostCallback::FetchProgressResult {
+                    id: request_id.to_string(),
+                    progress: Some(entry),
+                    error: None,
+                }
+            }
+            Ok(None) => MainToHostCallback::FetchProgressResult {
+                id: request_id.to_string(),
+                progress: None,
+                error: None,
+            },
+            Err(e) => MainToHostCallback::FetchProgressResult {
+                id: request_id.to_string(),
+                progress: None,
+                error: Some(format!("reading_progress query error: {e}")),
+            },
+        }
+    }
+
+    /// Write/overwrite the reading-progress row for an edition
+    /// (identified by URN). Resolves URN → edition_id → format_id,
+    /// then upserts into `reading_progress`.
+    async fn handle_upsert_progress(
+        &self,
+        request_id: &str,
+        urn: &str,
+        progress: f64,
+        last_location: Option<String>,
+        total_reading_time_secs: i64,
+    ) -> MainToHostCallback {
+        let Some(pool) = self.db.as_ref() else {
+            return MainToHostCallback::UpsertProgressResult {
+                id: request_id.to_string(),
+                edition_id: None,
+                format_id: None,
+                ok: false,
+                error: Some("no database pool available".to_string()),
+            };
+        };
+
+        let edition_id = match self.resolve_urn_to_edition_id(urn).await {
+            Ok(Some(eid)) => eid,
+            Ok(None) => {
+                return MainToHostCallback::UpsertProgressResult {
+                    id: request_id.to_string(),
+                    edition_id: None,
+                    format_id: None,
+                    ok: false,
+                    error: Some(format!("URN not found: {urn}")),
+                };
+            }
+            Err(e) => {
+                return MainToHostCallback::UpsertProgressResult {
+                    id: request_id.to_string(),
+                    edition_id: None,
+                    format_id: None,
+                    ok: false,
+                    error: Some(e.to_string()),
+                };
+            }
+        };
+
+        let format_id = match self.find_default_format_for_edition(pool, &edition_id).await {
+            Ok(Some(fid)) => fid,
+            Ok(None) => {
+                return MainToHostCallback::UpsertProgressResult {
+                    id: request_id.to_string(),
+                    edition_id: Some(edition_id.clone()),
+                    format_id: None,
+                    ok: false,
+                    error: Some(format!("no format for edition {edition_id}")),
+                };
+            }
+            Err(e) => {
+                return MainToHostCallback::UpsertProgressResult {
+                    id: request_id.to_string(),
+                    edition_id: Some(edition_id.clone()),
+                    format_id: None,
+                    ok: false,
+                    error: Some(e.to_string()),
+                };
+            }
+        };
+
+        let new_id = DbId::new();
+        let edition_bytes = parse_db_id_hex(&edition_id).to_bytes().to_vec();
+        let format_bytes = parse_db_id_hex(&format_id).to_bytes().to_vec();
+
+        let result = sql::query(AssertSqlSafe(
+            "INSERT INTO reading_progress (id, edition_id, format_id, progress, \
+             progress_unit, last_location, total_reading_time_secs, created_at) \
+             VALUES (?, ?, ?, ?, 'percentage', ?, ?, datetime('now')) \
+             ON CONFLICT(edition_id, format_id) DO UPDATE SET \
+             progress = excluded.progress, \
+             last_location = excluded.last_location, \
+             total_reading_time_secs = excluded.total_reading_time_secs",
+        ))
+        .bind(new_id.to_bytes().to_vec())
+        .bind(edition_bytes)
+        .bind(format_bytes)
+        .bind(progress)
+        .bind(last_location)
+        .bind(total_reading_time_secs)
+        .execute(pool)
+        .await;
+
+        match result {
+            Ok(_) => MainToHostCallback::UpsertProgressResult {
+                id: request_id.to_string(),
+                edition_id: Some(edition_id),
+                format_id: Some(format_id),
+                ok: true,
+                error: None,
+            },
+            Err(e) => MainToHostCallback::UpsertProgressResult {
+                id: request_id.to_string(),
+                edition_id: Some(edition_id),
+                format_id: Some(format_id),
+                ok: false,
+                error: Some(format!("reading_progress upsert error: {e}")),
+            },
+        }
+    }
+
+    /// Shared helper: resolve a URN (identifier value) to a
+    /// hex-encoded edition id. Returns `Ok(None)` when the URN
+    /// can't be mapped; `Err` for DB-level failures.
+    async fn resolve_urn_to_edition_id(
+        &self,
+        urn: &str,
+    ) -> PluginResult<Option<String>> {
+        let Some(pool) = self.db.as_ref() else {
+            return Err(PluginError::Ipc("no database pool available".to_string()));
+        };
+
+        let identifier_hex: Option<String> = sql::query_as(AssertSqlSafe(
+            "SELECT lower(hex(id)) FROM identifiers WHERE value = ?",
+        ))
+        .bind(urn)
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| PluginError::Ipc(format!("identifier lookup error: {e}")))?
+        .map(|(h,): (String,)| h);
+
+        let Some(ref ident_hex) = identifier_hex else {
+            return Ok(None);
+        };
+
+        // Try edition_identifiers first.
+        let edition_hex: Option<String> = sql::query_as(AssertSqlSafe(
+            "SELECT lower(hex(edition_id)) FROM edition_identifiers \
+             WHERE lower(hex(identifier_id)) = ?",
+        ))
+        .bind(ident_hex)
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| PluginError::Ipc(format!("edition_identifiers lookup error: {e}")))?
+        .map(|(h,): (String,)| h);
+
+        if let Some(ed) = edition_hex {
+            return Ok(Some(ed));
+        }
+
+        // Fall back to work_identifiers → editions.
+        let work_hex: Option<String> = sql::query_as(AssertSqlSafe(
+            "SELECT lower(hex(work_id)) FROM work_identifiers \
+             WHERE lower(hex(identifier_id)) = ?",
+        ))
+        .bind(ident_hex)
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| PluginError::Ipc(format!("work_identifiers lookup error: {e}")))?
+        .map(|(h,): (String,)| h);
+
+        let Some(ref work) = work_hex else {
+            return Ok(None);
+        };
+
+        let edition_hex: Option<String> = sql::query_as(AssertSqlSafe(
+            "SELECT lower(hex(id)) FROM editions WHERE lower(hex(work_id)) = ? LIMIT 1",
+        ))
+        .bind(work)
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| PluginError::Ipc(format!("editions by work lookup error: {e}")))?
+        .map(|(h,): (String,)| h);
+
+        Ok(edition_hex)
+    }
+
+    /// Read `editions.format_id` for the given hex-encoded edition.
+    async fn find_default_format_for_edition(
+        &self,
+        pool: &SqlitePool,
+        edition_id: &str,
+    ) -> PluginResult<Option<String>> {
+        let row: Option<(Option<String>,)> = sql::query_as(AssertSqlSafe(
+            "SELECT lower(hex(format_id)) FROM editions WHERE lower(hex(id)) = ?",
+        ))
+        .bind(edition_id.to_lowercase())
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| PluginError::Ipc(format!("edition format lookup error: {e}")))?;
+        Ok(row.and_then(|(f,)| f))
+    }
+
+    async fn handle_http_request(
+        &self,
+        request_id: &str,
+        method: &str,
+        url: &str,
+        body: Option<String>,
+        headers: &[(String, String)],
+    ) -> MainToHostCallback {
+        let method = match method.to_uppercase().as_str() {
+            "GET" => reqwest::Method::GET,
+            "POST" => reqwest::Method::POST,
+            "PUT" => reqwest::Method::PUT,
+            "PATCH" => reqwest::Method::PATCH,
+            "DELETE" => reqwest::Method::DELETE,
+            other => {
+                return MainToHostCallback::HttpResponse {
+                    id: request_id.to_string(),
+                    status: 405,
+                    body: Some(format!("unsupported HTTP method: {other}")),
+                    headers: Vec::new(),
+                };
+            }
+        };
+
+        let mut req = self.http_client.request(method, url);
+
+        for (key, value) in headers {
+            req = req.header(key.as_str(), value.as_str());
+        }
+
+        if let Some(b) = body {
+            req = req.body(b);
+        }
+
+        match req.send().await {
+            Ok(resp) => {
+                let status = resp.status().as_u16();
+                let resp_headers: Vec<(String, String)> = resp
+                    .headers()
+                    .iter()
+                    .map(|(k, v)| {
+                        (
+                            k.as_str().to_string(),
+                            v.to_str().unwrap_or("<non-utf8>").to_string(),
+                        )
+                    })
+                    .collect();
+                match resp.text().await {
+                    Ok(text_body) => MainToHostCallback::HttpResponse {
+                        id: request_id.to_string(),
+                        status,
+                        body: Some(text_body),
+                        headers: resp_headers,
+                    },
+                    Err(_) => MainToHostCallback::HttpResponse {
+                        id: request_id.to_string(),
+                        status,
+                        body: None,
+                        headers: resp_headers,
+                    },
+                }
+            }
+            Err(e) => {
+                let status = if e.is_timeout() {
+                    504
+                } else if e.is_connect() {
+                    502
+                } else {
+                    500
+                };
+                MainToHostCallback::HttpResponse {
+                    id: request_id.to_string(),
+                    status,
+                    body: Some(format!("HTTP request failed: {e}")),
+                    headers: Vec::new(),
+                }
+            }
+        }
     }
 }
 
+/// Parse a hex-encoded DbId string, falling back to a random id on
+/// malformed input so callers can always produce a valid struct.
+fn parse_db_id_hex(hex: &str) -> DbId {
+    hex::decode(hex)
+        .ok()
+        .and_then(|b| <[u8; 16]>::try_from(b).ok())
+        .map(DbId::from_bytes)
+        .unwrap_or_default()
+}
 impl crate::host_trait::HostBase for PluginHostManager {}
 
 impl crate::host_trait::HostSystemSecrets for PluginHostManager {
