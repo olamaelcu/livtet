@@ -24,6 +24,10 @@ impl Transport {
         Ok(())
     }
 
+    pub fn stdin_mut(&mut self) -> &mut ChildStdin {
+        &mut self.stdin
+    }
+
     pub async fn recv<T: serde::de::DeserializeOwned>(&mut self) -> PluginResult<T> {
         let mut len_buf = [0u8; 4];
         self.stdout.read_exact(&mut len_buf).await?;

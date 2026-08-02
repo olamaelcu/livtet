@@ -73,6 +73,22 @@ pub struct SeriesOrderResult {
     pub available_orders: Vec<String>,
 }
 
+/// One entry in the batch result returned by
+/// `provider.detect_series_batch(editions_array)`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Type)]
+pub struct DetectSeriesBatchEntry {
+    pub edition_id: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub series: Vec<Series>,
+}
+
+/// Full response shape for `provider.detect_series_batch(editions_array)`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Type)]
+pub struct DetectSeriesBatchResult {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub entries: Vec<DetectSeriesBatchEntry>,
+}
+
 #[cfg(test)]
 mod tests {
     use serde_json::json;
@@ -164,6 +180,37 @@ mod tests {
         let parsed: SeriesOrderRequest = serde_json::from_value(req).unwrap();
         assert_eq!(parsed.name, "Dune Chronicles");
         assert!(parsed.order_type.is_none());
+    }
+
+    #[test]
+    fn detect_series_batch_entry_round_trips() {
+        let entry = json!({
+            "edition_id": "OL123M",
+            "series": [{
+                "name": "Dune Chronicles",
+                "external_id": "openlibrary:series:OL_works_Dune",
+                "series_type": "novel",
+            }],
+        });
+        let parsed: DetectSeriesBatchEntry = serde_json::from_value(entry).unwrap();
+        assert_eq!(parsed.edition_id, "OL123M");
+        assert_eq!(parsed.series.len(), 1);
+        assert_eq!(parsed.series[0].name, "Dune Chronicles");
+    }
+
+    #[test]
+    fn detect_series_batch_result_handles_empty_entries() {
+        let result = json!({ "entries": [] });
+        let parsed: DetectSeriesBatchResult = serde_json::from_value(result).unwrap();
+        assert!(parsed.entries.is_empty());
+    }
+
+    #[test]
+    fn detect_series_batch_entry_without_series() {
+        let entry = json!({ "edition_id": "OL123M" });
+        let parsed: DetectSeriesBatchEntry = serde_json::from_value(entry).unwrap();
+        assert_eq!(parsed.edition_id, "OL123M");
+        assert!(parsed.series.is_empty());
     }
 
     #[test]

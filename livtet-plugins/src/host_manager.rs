@@ -14,11 +14,7 @@ use fs_err as fs;
 use hex;
 use livtet_data::sql::{self, AssertSqlSafe, SqlitePool};
 use rand::{Rng as _, rng};
-use tokio::{
-    io::AsyncWriteExt,
-    process::{Child, ChildStdin, ChildStdout, Command},
-    sync::Mutex,
-};
+use tokio::process::{Child, Command};
 use tracing::{error, info, warn};
 
 /// Shared message-dispatch loop for host operations that need to process
@@ -84,6 +80,7 @@ use crate::{
     protocol::{HostToMain, MainToHost, MainToHostCallback},
     repository::hmac::HmacKey,
     system_secrets::PluginSystemSecret,
+    transport::Transport,
 };
 
 const LOAD_STATE_LOADED: &str = "loaded";
@@ -155,8 +152,7 @@ impl EventEmitter for NullEventEmitter {
 }
 
 pub struct PluginHostManager {
-    stdin: Arc<Mutex<ChildStdin>>,
-    stdout: ChildStdout,
+    transport: Transport,
     child: Child,
     loaded_plugins: HashMap<String, LoadedPlugin>,
     runtime: String,
@@ -337,8 +333,7 @@ impl PluginHostManager {
             .ok_or_else(|| PluginError::HostCrashed("host stdout not available".into()))?;
 
         let mut manager = Self {
-            stdin: Arc::new(Mutex::new(stdin)),
-            stdout,
+            transport: Transport::new(stdin, stdout),
             child,
             loaded_plugins: HashMap::new(),
             runtime: String::new(),
@@ -835,6 +830,21 @@ impl PluginHostManager {
         self.call(plugin_id, "detect_series", args).await
     }
 
+    /// Dispatch the `series` capability: batch detect series for
+    /// multiple editions at once. `editions_array` is the JSON
+    /// array of edition_info tables. Returns the raw JSON value
+    /// the plugin sent (the typed shape is in
+    /// `crate::series::DetectSeriesBatchResult` for callers that
+    /// want a typed decode).
+    pub async fn call_detect_series_batch(
+        &mut self,
+        plugin_id: &str,
+        editions_array: serde_json::Value,
+    ) -> PluginResult<serde_json::Value> {
+        let args = vec![editions_array];
+        self.call(plugin_id, "detect_series_batch", args).await
+    }
+
     /// Dispatch the `series` capability: get the full ordering for
     /// a detected series. `series_info` is the table shape defined
     /// in the spec: `{ name, external_id, order_type }`. Returns
@@ -981,8 +991,9 @@ impl PluginHostManager {
     }
 
     pub async fn shutdown(&mut self) -> PluginResult<()> {
+        use tokio::io::AsyncWriteExt;
         self.send_main(&MainToHost::Shutdown).await?;
-        self.stdin.lock().await.shutdown().await.ok();
+        self.transport.stdin_mut().shutdown().await.ok();
 
         // Wait for the child to exit with a generous timeout.
         // On macOS, `ChildStdin::shutdown()` is a socket-only
@@ -1069,14 +1080,8 @@ impl PluginHostManager {
         &self.runtime
     }
 
-    async fn send_main(&self, msg: &MainToHost) -> PluginResult<()> {
-        let payload = rmp_serde::to_vec_named(msg).map_err(|e| PluginError::Ipc(e.to_string()))?;
-        let len = (payload.len() as u32).to_le_bytes();
-        let mut guard = self.stdin.lock().await;
-        guard.write_all(&len).await?;
-        guard.write_all(&payload).await?;
-        guard.flush().await?;
-        Ok(())
+    async fn send_main(&mut self, msg: &MainToHost) -> PluginResult<()> {
+        self.transport.send(msg).await
     }
 
     /// Like [`Self::send_main`] but for `MainToHostCallback`
@@ -1086,36 +1091,12 @@ impl PluginHostManager {
     /// blocked on. The wire format is identical to `send_main`
     /// — length-prefixed MessagePack over stdin — only the
     /// `serde` type differs.
-    async fn send_callback(&self, msg: &MainToHostCallback) -> PluginResult<()> {
-        let payload = rmp_serde::to_vec_named(msg).map_err(|e| PluginError::Ipc(e.to_string()))?;
-        let len = (payload.len() as u32).to_le_bytes();
-        let mut guard = self.stdin.lock().await;
-        guard.write_all(&len).await?;
-        guard.write_all(&payload).await?;
-        guard.flush().await?;
-        Ok(())
+    async fn send_callback(&mut self, msg: &MainToHostCallback) -> PluginResult<()> {
+        self.transport.send(msg).await
     }
 
     async fn recv(&mut self) -> PluginResult<HostToMain> {
-        use tokio::io::AsyncReadExt;
-        let mut len_buf = [0u8; 4];
-        self.stdout
-            .read_exact(&mut len_buf)
-            .await
-            .map_err(|e| PluginError::Ipc(format!("read len: {e}")))?;
-        let len = u32::from_le_bytes(len_buf) as usize;
-        let mut payload = vec![0u8; len];
-        self.stdout
-            .read_exact(&mut payload)
-            .await
-            .map_err(|e| PluginError::Ipc(format!("read payload: {e}")))?;
-        rmp_serde::from_slice(&payload).map_err(|e| {
-            let preview = String::from_utf8_lossy(&payload[..payload.len().min(512)]);
-            PluginError::Ipc(format!(
-                "{e} (payload_len={}, preview={preview:?})",
-                payload.len()
-            ))
-        })
+        self.transport.recv().await
     }
 
     /// Process a single `HostToMain` request message and send the
@@ -1510,7 +1491,7 @@ impl PluginHostManager {
         }
     }
 
-    pub async fn dispatch(&self, msg: HostToMain) -> PluginResult<bool> {
+    pub async fn dispatch(&mut self, msg: HostToMain) -> PluginResult<bool> {
         match msg {
             // TBD: `get_edition_info` was the last DB-backed host
             // bridge left after the CRUD module was deleted. Restore

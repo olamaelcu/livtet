@@ -33,6 +33,36 @@ function provider.detect_series(edition_info)
   }
 end
 
+function provider.detect_series_batch(editions_array)
+  if not editions_array then
+    return { entries = {} }
+  end
+  local entries = {}
+  for _, ed in ipairs(editions_array) do
+    if ed and ed.id then
+      entries[#entries + 1] = {
+        edition_id = ed.id,
+        series = {
+          {
+            name = "Dune Chronicles",
+            series_type = "novel",
+            external_id = "fixture:series:dune-chronicles",
+            source_url = "https://example.com/series/dune-chronicles",
+            position = 1,
+            total_entries = 6,
+          },
+        },
+      }
+    else
+      entries[#entries + 1] = {
+        edition_id = ed and ed.id or "",
+        series = {},
+      }
+    end
+  end
+  return { entries = entries }
+end
+
 function provider.get_series_order(series_info)
   if not series_info or series_info.external_id ~= "fixture:series:dune-chronicles" then
     return {
