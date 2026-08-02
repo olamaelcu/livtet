@@ -132,6 +132,7 @@ fn repo_init_creates_skeleton_with_repo_toml_and_index_json() {
 
     isolated_cmd(&tmp)
         .args([
+            "plugin",
             "repo",
             "init",
             "--repo-dir",
@@ -178,6 +179,7 @@ fn repo_init_succeeds_on_existing_dir() {
 
     isolated_cmd(&tmp)
         .args([
+            "plugin",
             "repo",
             "init",
             "--repo-dir",
@@ -227,7 +229,7 @@ async fn repo_add_returns_needs_tofu_for_unknown_repo() {
     );
 
     isolated_cmd(&ctx.tmp)
-        .args(["repo", "add", "--url", &ctx.server.base_url])
+        .args(["plugin", "repo", "add", "--url", &ctx.server.base_url])
         .assert()
         .success()
         .stdout(predicate::str::contains("Resolving"))
@@ -248,7 +250,7 @@ async fn repo_add_fails_for_unreachable_server() {
     let dead_url = format!("http://{addr}");
 
     isolated_cmd(&ctx.tmp)
-        .args(["repo", "add", "--url", &dead_url])
+        .args(["plugin", "repo", "add", "--url", &dead_url])
         .assert()
         .failure()
         .code(predicate::ne(0));
@@ -306,7 +308,7 @@ async fn repo_confirm_add_caches_index_for_trusted_repo() {
     let _pubkey = seed_trust_store(&ctx.tmp, "olamaelcu", &verifying_key);
 
     isolated_cmd(&ctx.tmp)
-        .args(["repo", "confirm-add", "--url", &ctx.server.base_url])
+        .args(["plugin", "repo", "confirm-add", "--url", &ctx.server.base_url])
         .assert()
         .success()
         .stdout(predicate::str::contains("Added. Fetched index.json:"))
@@ -354,7 +356,7 @@ async fn repo_confirm_add_fails_for_untrusted_repo() {
 
     // No trust store seeding → confirm-add must fail.
     isolated_cmd(&ctx.tmp)
-        .args(["repo", "confirm-add", "--url", &ctx.server.base_url])
+        .args(["plugin", "repo", "confirm-add", "--url", &ctx.server.base_url])
         .assert()
         .failure()
         .code(predicate::ne(0));
@@ -368,7 +370,7 @@ async fn repo_confirm_add_fails_for_untrusted_repo() {
 fn repo_list_json_returns_empty_array_for_fresh_config() {
     let tmp = TempDir::new().expect("tempdir");
     isolated_cmd(&tmp)
-        .args(["repo", "list", "--json"])
+        .args(["plugin", "repo", "list", "--json"])
         .assert()
         .success()
         .stdout(predicate::str::contains("[]"));
@@ -378,7 +380,7 @@ fn repo_list_json_returns_empty_array_for_fresh_config() {
 fn repo_list_human_reports_no_repositories_for_fresh_config() {
     let tmp = TempDir::new().expect("tempdir");
     isolated_cmd(&tmp)
-        .args(["repo", "list"])
+        .args(["plugin", "repo", "list"])
         .assert()
         .success()
         .stderr(predicate::str::contains("No repositories configured"));
@@ -413,12 +415,12 @@ async fn repo_list_prints_repo_row_after_add() {
     // going straight through confirm-add with the pre-trusted key.
     let _pubkey = seed_trust_store(&ctx.tmp, "olamaelcu", &verifying_key);
     isolated_cmd(&ctx.tmp)
-        .args(["repo", "confirm-add", "--url", &ctx.server.base_url])
+        .args(["plugin", "repo", "confirm-add", "--url", &ctx.server.base_url])
         .assert()
         .success();
 
     isolated_cmd(&ctx.tmp)
-        .args(["repo", "list"])
+        .args(["plugin", "repo", "list"])
         .assert()
         .success()
         .stdout(predicate::str::contains("olamaelcu"))
@@ -454,12 +456,12 @@ async fn repo_remove_drops_repository_from_repositories_toml() {
     );
     let _pubkey = seed_trust_store(&ctx.tmp, "olamaelcu", &verifying_key);
     isolated_cmd(&ctx.tmp)
-        .args(["repo", "confirm-add", "--url", &ctx.server.base_url])
+        .args(["plugin", "repo", "confirm-add", "--url", &ctx.server.base_url])
         .assert()
         .success();
 
     isolated_cmd(&ctx.tmp)
-        .args(["repo", "remove", "--name-or-url", "olamaelcu"])
+        .args(["plugin", "repo", "remove", "--name-or-url", "olamaelcu"])
         .assert()
         .success()
         .stdout(predicate::str::contains("Removed olamaelcu"));
@@ -480,7 +482,7 @@ async fn repo_remove_drops_repository_from_repositories_toml() {
 fn repo_remove_fails_for_unknown_repo() {
     let tmp = TempDir::new().expect("tempdir");
     isolated_cmd(&tmp)
-        .args(["repo", "remove", "--name-or-url", "never-existed"])
+        .args(["plugin", "repo", "remove", "--name-or-url", "never-existed"])
         .assert()
         .failure()
         .code(predicate::ne(0));
@@ -521,7 +523,7 @@ async fn repo_update_with_key_rollover_returns_nonzero_exit_code() {
 
     // confirm-add so repositories.toml has an entry.
     isolated_cmd(&ctx.tmp)
-        .args(["repo", "confirm-add", "--url", &ctx.server.base_url])
+        .args(["plugin", "repo", "confirm-add", "--url", &ctx.server.base_url])
         .assert()
         .success();
 
@@ -562,7 +564,7 @@ async fn repo_update_with_key_rollover_returns_nonzero_exit_code() {
     // message that names the new fingerprint and points at
     // `repo confirm-update`.
     isolated_cmd(&ctx.tmp)
-        .args(["repo", "update", "--name-or-url", "olamaelcu"])
+        .args(["plugin", "repo", "update", "--name-or-url", "olamaelcu"])
         .assert()
         .failure()
         .code(predicate::ne(0))
@@ -574,7 +576,7 @@ async fn repo_update_with_key_rollover_returns_nonzero_exit_code() {
 fn repo_update_fails_for_unknown_repo() {
     let tmp = TempDir::new().expect("tempdir");
     isolated_cmd(&tmp)
-        .args(["repo", "update", "--name-or-url", "never-existed"])
+        .args(["plugin", "repo", "update", "--name-or-url", "never-existed"])
         .assert()
         .failure()
         .code(predicate::ne(0));
@@ -588,7 +590,7 @@ fn repo_update_fails_for_unknown_repo() {
 fn repo_confirm_update_fails_for_unknown_repo() {
     let tmp = TempDir::new().expect("tempdir");
     isolated_cmd(&tmp)
-        .args(["repo", "confirm-update", "never-existed"])
+        .args(["plugin", "repo", "confirm-update", "never-existed"])
         .assert()
         .failure()
         .code(predicate::ne(0));
@@ -604,6 +606,7 @@ fn repo_keygen_writes_minisign_keypair() {
 
     isolated_cmd(&tmp)
         .args([
+            "plugin",
             "repo",
             "keygen",
             "--name",
@@ -642,7 +645,7 @@ fn repo_keygen_requires_name_flag() {
     // exit and a stderr message that mentions the flag.
     let tmp = TempDir::new().expect("tempdir");
     isolated_cmd(&tmp)
-        .args(["repo", "keygen", "--passphrase", "disabled"])
+        .args(["plugin", "repo", "keygen", "--passphrase", "disabled"])
         .assert()
         .failure()
         .code(predicate::ne(0))
@@ -683,6 +686,7 @@ fn repo_publish_appends_signed_index_entry() {
 
     isolated_cmd(&tmp)
         .args([
+            "plugin",
             "repo",
             "publish",
             "--repo-dir",
@@ -722,6 +726,7 @@ fn repo_publish_fails_for_untrusted_archive() {
     // DO NOT trust the plugin's signing key.
     isolated_cmd(&tmp)
         .args([
+            "plugin",
             "repo",
             "publish",
             "--repo-dir",
@@ -750,6 +755,7 @@ fn repo_sign_writes_signed_index() {
 
     isolated_cmd(&tmp)
         .args([
+            "plugin",
             "repo",
             "sign",
             "--repo-dir",
@@ -778,6 +784,7 @@ fn repo_sign_fails_for_missing_repo_key() {
 
     isolated_cmd(&tmp)
         .args([
+            "plugin",
             "repo",
             "sign",
             "--repo-dir",
@@ -812,6 +819,7 @@ fn repo_unpublish_specific_version_drops_archive_and_index_entry() {
     // starting point.
     isolated_cmd(&tmp)
         .args([
+            "plugin",
             "repo",
             "sign",
             "--repo-dir",
@@ -822,6 +830,7 @@ fn repo_unpublish_specific_version_drops_archive_and_index_entry() {
 
     isolated_cmd(&tmp)
         .args([
+            "plugin",
             "repo",
             "unpublish",
             "--repo-dir",
@@ -864,6 +873,7 @@ fn repo_unpublish_for_missing_version_is_noop_success() {
     );
     isolated_cmd(&tmp)
         .args([
+            "plugin",
             "repo",
             "sign",
             "--repo-dir",
@@ -874,6 +884,7 @@ fn repo_unpublish_for_missing_version_is_noop_success() {
 
     isolated_cmd(&tmp)
         .args([
+            "plugin",
             "repo",
             "unpublish",
             "--repo-dir",

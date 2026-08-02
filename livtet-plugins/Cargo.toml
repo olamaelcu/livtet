@@ -70,6 +70,7 @@ globset = "0.4"
 livtet-core = { workspace = true }
 livtet-types = { workspace = true }
 livtet-data = { workspace = true }
+livtet-plugins-lua = { path = "../livtet-plugins-lua" }
 webpki-roots = "1"
 futures-util = "0.3"
 which = "8"

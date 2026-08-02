@@ -113,7 +113,7 @@ fn repo_list_json_returns_empty_array_with_fresh_config() {
     // literally `"[]"` followed by a newline (rendered by
     // `serde_json::to_string_pretty` on an empty `Vec`).
     isolated_cmd(&tmp)
-        .args(["repo", "list", "--json"])
+        .args(["plugin", "repo", "list", "--json"])
         .assert()
         .success()
         .stdout(predicate::str::contains("[]"));

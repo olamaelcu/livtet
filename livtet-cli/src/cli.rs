@@ -26,7 +26,6 @@ pub struct Cli {
 #[derive(Subcommand, Debug)]
 pub enum Command {
     Plugin(PluginArgs),
-    Repo(RepoArgs),
     /// Populate the local database with realistic demo data.
     /// Only available in builds with the `fake` feature enabled.
     #[cfg(feature = "fake")]
@@ -56,7 +55,6 @@ impl Command {
     pub fn run(self) -> Result<()> {
         match self {
             Command::Plugin(args) => crate::plugin::run(args),
-            Command::Repo(args) => crate::repo::run(args),
             #[cfg(feature = "fake")]
             Command::Seed(args) => {
                 let rt =
@@ -226,6 +224,7 @@ pub enum PluginCommand {
         #[arg(long)]
         output: Option<Utf8PathBuf>,
     },
+    Repo(RepoArgs),
 }
 
 #[derive(Args, Debug)]

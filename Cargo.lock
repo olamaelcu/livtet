@@ -3294,6 +3294,7 @@ dependencies = [
  "keyring",
  "livtet-core",
  "livtet-data",
+ "livtet-plugins-lua",
  "livtet-test-utils",
  "livtet-types",
  "miette",

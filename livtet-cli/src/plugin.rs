@@ -133,6 +133,7 @@ pub fn run(args: PluginArgs) -> Result<()> {
             ));
             Ok(())
         }
+        PluginCommand::Repo(args) => crate::repo::run(args),
     }
 }
 

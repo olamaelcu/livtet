@@ -6,6 +6,7 @@ use std::{
 
 use hex;
 use livtet_data::sql::AssertSqlSafe;
+use livtet_plugins_lua;
 use mlua::{
     Function, HookTriggers, Lua, LuaOptions, LuaSerdeExt, StdLib, Table, UserData, UserDataMethods,
     Value, VmState,
@@ -1026,25 +1027,18 @@ where
         // -- require (controlled loader) ------------------------------------
         // The Lua sandbox strips the global `require` at startup
         // (see `build_sandboxed_lua`), so plugins MUST go through
-        // `host.require(name)`. Today this resolves the name
-        // against the in-process `livtet-lua-stdlib` index: the
-        // rock's source bytes are loaded as a Lua chunk and
-        // executed, with the chunk's first return value handed
-        // back to the caller.
+        // `host.require(name)`.
         //
-        // TODO: when the Tauri parent pre-installs rocks via
-        // `luarocks` and exports `LUA_PATH` / `LUA_CPATH` to the
-        // sidecar, extend this resolver to first try the bundled
-        // index, then fall back to the parent-installed rock
-        // tree. The fall-back requires re-exposing `package` (or
-        // a sandboxed subset of it) so we can drive Lua's
-        // `require` machinery; today's sandbox nulls `package`
-        // out for safety. Tracking the cross-cutting design in
-        // `docs/plans/in-progress/lua-http-and-luarocks.md`.
+        // Resolution order:
+        //   1. require_cache (in-memory, avoids re-executing chunks)
+        //   2. livtet-plugins-lua bundled rock registry (compile-time)
+        //   3. LuaRocks tree via LUA_PATH env var (parent-installed)
+        //   4. Error: rock not found in any registry
         let require_cache = Arc::clone(&self.require_cache);
         let require =
             self.lua
-                .create_function(move |_lua, (target,): (String,)| -> mlua::Result<Value> {
+                .create_function(move |lua, (target,): (String,)| -> mlua::Result<Value> {
+                    // 1. Check the require_cache first.
                     if let Some(cached) = require_cache
                         .lock()
                         .ok()
@@ -1052,18 +1046,48 @@ where
                     {
                         return Ok(cached);
                     }
-                    // TBD: the bundled Lua stdlib lookup (`livtet_lua_stdlib`)
-                    // was removed when the empty stub crate was deleted.
-                    // Wire a replacement that resolves `target` to either
-                    // a vendored rocks source or a fallback error before
-                    // re-enabling this code path. For now every
-                    // `host.require` call returns an error so plugins
-                    // fail fast rather than silently loading nothing.
+
+                    // 2. Check the bundled rock registry (compile-time embedded).
+                    if let Some(source) = livtet_plugins_lua::get_rock_source(&target) {
+                        let val = lua
+                            .load(source)
+                            .set_name(format!("@rock_{target}.lua"))
+                            .eval::<Value>()?;
+                        if let Ok(mut cache) = require_cache.lock() {
+                            cache.insert(target.clone(), val.clone());
+                        }
+                        return Ok(val);
+                    }
+
+                    // 3. Fall back to LuaRocks tree via LUA_PATH.
+                    if let Ok(lua_path) = std::env::var("LUA_PATH") {
+                        let module_path = target.replace('.', "/");
+                        for template in lua_path.split(';') {
+                            let filepath = template.replace('?', &module_path);
+                            if std::path::Path::new(&filepath).exists() {
+                                match fs_err::read_to_string(&filepath) {
+                                    Ok(source) => {
+                                        let val = lua
+                                            .load(source)
+                                            .set_name(format!("@{filepath}"))
+                                            .eval::<Value>()?;
+                                        if let Ok(mut cache) = require_cache.lock() {
+                                            cache.insert(target.clone(), val.clone());
+                                        }
+                                        return Ok(val);
+                                    }
+                                    Err(_) => continue,
+                                }
+                            }
+                        }
+                    }
+
+                    // 4. Not found anywhere.
                     Err(mlua::Error::external(format!(
-                        "host.require: bundled-lua stdlib not wired (TBD); \
-                         declare `rocks = [\"{target}\"]` in livtet.toml so \
-                         the parent can install it via luarocks and expose \
-                         it through LUA_PATH"
+                        "host.require: rock '{target}' not found in bundled stdlib \
+                         or LUA_PATH; declare `rocks = [\"{target}\"]` in livtet.toml \
+                         so the parent can install it via luarocks and expose it \
+                         through LUA_PATH"
                     )))
                 })?;
         host_table.set("require", require)?;
@@ -1300,6 +1324,10 @@ where
                 data_dir,
                 settings,
                 ..
+                // `rocks` (declared in livtet.toml) are resolved at
+                // call time by `host.require(name)` against:
+                //   1. The bundled stdlib (livtet-plugins-lua rock registry)
+                //   2. The LuaRocks tree (parent-installed, via LUA_PATH)
             } => Some(self.load_plugin_source(&plugin_id, &source, data_dir, settings)),
             MainToHost::UnloadPlugin { plugin_id } => Some(self.unload_plugin(&plugin_id)),
             MainToHost::Call {

@@ -110,6 +110,7 @@ pub fn write_signed_repo(
 pub fn setup_signed_repo(tmp: &TempDir, name: &str, url: &str, fingerprint: &str) -> Utf8PathBuf {
     let repo_dir = tmp.path().to_path_buf().join("repo");
     isolated_cmd(tmp)
+        .arg("plugin")
         .arg("repo")
         .arg("init")
         .arg("--repo-dir")
@@ -125,6 +126,7 @@ pub fn setup_signed_repo(tmp: &TempDir, name: &str, url: &str, fingerprint: &str
     // `repo keygen` writes to the config dir (isolated via env vars),
     // not to the repo dir — no `--repo-dir` flag on this subcommand.
     isolated_cmd(tmp)
+        .arg("plugin")
         .arg("repo")
         .arg("keygen")
         .arg("--name")
