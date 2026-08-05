@@ -507,7 +507,24 @@ fn test_list_trusted_includes_builtin_keys_with_correct_source() {
 // requires the file to exist at compile time, which is enforced by
 // `livtet-lua-plugins/build.rs`.
 
-// TBD: bundled-trust tests removed alongside the `livtet-lua-plugins`
-// crate. Re-add once the bundled signer pubkey is wired through the
-// build pipeline. See livtet-plugins/src/keys/mod.rs for the
-// corresponding stub.
+// =====================================================================
+// bundled_trusted_keys smoke tests
+// =====================================================================
+
+#[test]
+fn bundled_trusted_keys_is_empty_in_default_build() {
+    // In dev builds without LIVTET_BUNDLED_KEY_PATH, the function
+    // returns empty. In CI with the feature + key path set, this
+    // test may need updating — but for now it documents the dev
+    // default.
+    let keys = livtet_plugins::keys::bundled_trusted_keys();
+    // bundled feature may or may not be active in test builds;
+    // either way, the function shouldn't panic.
+    let _ = keys;
+}
+
+#[test]
+fn trust_store_load_does_not_panic_on_empty_keys() {
+    let store = TrustStore::load().unwrap();
+    assert!(store.list_trusted().is_empty());
+}

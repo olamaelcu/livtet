@@ -11,12 +11,14 @@ pub struct DiscoveredPlugin {
     pub path: Utf8PathBuf,
     pub manifest: PluginManifest,
     pub source: PluginSource,
+    pub bundled_bytes: Option<Vec<u8>>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum PluginSource {
     Folder,
     LegacyFile,
+    Bundled,
 }
 
 pub fn scan_plugins(dir: &Utf8Path) -> PluginResult<Vec<DiscoveredPlugin>> {
@@ -49,6 +51,7 @@ pub fn scan_plugins(dir: &Utf8Path) -> PluginResult<Vec<DiscoveredPlugin>> {
                     path,
                     manifest,
                     source: PluginSource::LegacyFile,
+                    bundled_bytes: None,
                 });
             }
             continue;
@@ -64,6 +67,7 @@ pub fn scan_plugins(dir: &Utf8Path) -> PluginResult<Vec<DiscoveredPlugin>> {
                 path,
                 manifest,
                 source: PluginSource::Folder,
+                bundled_bytes: None,
             });
             continue;
         }
@@ -106,6 +110,7 @@ pub fn scan_plugins(dir: &Utf8Path) -> PluginResult<Vec<DiscoveredPlugin>> {
                         path: sub_path,
                         manifest,
                         source: PluginSource::Folder,
+                        bundled_bytes: None,
                     });
                 }
                 Err(e) => {

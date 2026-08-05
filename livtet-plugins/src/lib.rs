@@ -2,6 +2,8 @@ pub use mlua;
 
 pub mod annotations;
 pub mod archive;
+#[cfg(feature = "bundled")]
+pub mod bundled;
 pub mod capability;
 pub mod discovery;
 pub mod embedded_host;

@@ -342,7 +342,10 @@ impl PluginHostManager {
             plugin_dir: plugin_dir.clone(),
             hmac_key,
             system_secrets: HashMap::new(),
-            trust_store: TrustStore::empty(),
+            trust_store: TrustStore::load().unwrap_or_else(|e| {
+                tracing::error!(%e, "failed to load builtin trust keys");
+                TrustStore::empty()
+            }),
             oauth_handler: None,
             http_client: reqwest::Client::builder()
                 .build()
@@ -422,14 +425,26 @@ impl PluginHostManager {
     }
 
     async fn discover(&mut self, plugin_dir: &Utf8PathBuf) -> PluginResult<()> {
-        // First-party plugins compiled into the binary (when the
-        // `bundled` feature is enabled). These are added first so
+        // First-party plugins compiled into the binary. These are added
+        // first so a disk-installed plugin with the same id can override
+        // the bundled version during development.
+        #[cfg(feature = "bundled")]
+        {
+            for entry in crate::bundled::bundled_index() {
+                self.register_discovered(DiscoveredPlugin {
+                    id: entry.id.clone(),
+                    path: Utf8PathBuf::from("__bundled__"),
+                    manifest: entry.manifest,
+                    source: PluginSource::Bundled,
+                    bundled_bytes: Some(entry.source_bytes.to_vec()),
+                });
+            }
+        }
         // User-installed disk plugins from the providers/ directory.
         let plugins = scan_plugins(plugin_dir)?;
         for plugin in plugins {
             self.register_discovered(plugin);
         }
-
         Ok(())
     }
 
@@ -439,6 +454,33 @@ impl PluginHostManager {
         let entry_path = plugin.manifest.plugin.entry.clone();
 
         let source = match plugin.source {
+            PluginSource::Bundled => {
+                // Security gate: bundled source bytes are only loaded when
+                // the embedded signer key is present in the trust store.
+                let bundled_key_present = self
+                    .trust_store
+                    .has_builtin_key_label("bundled-signer");
+                if !bundled_key_present {
+                    warn!(
+                        plugin = %id, version = %version,
+                        "bundled plugin signer key not trusted; skipping"
+                    );
+                    return;
+                }
+                match plugin.bundled_bytes {
+                    Some(bytes) => match String::from_utf8(bytes) {
+                        Ok(s) => s,
+                        Err(e) => {
+                            warn!(plugin = %id, version = %version, "bundled source not valid UTF-8: {e}");
+                            String::new()
+                        }
+                    },
+                    None => {
+                        warn!(plugin = %id, version = %version, "bundled plugin has no source bytes");
+                        String::new()
+                    }
+                }
+            }
             PluginSource::Folder => {
                 let path = plugin.path.join(&entry_path);
                 match fs_err::read_to_string(&path) {

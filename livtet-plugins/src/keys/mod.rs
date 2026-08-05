@@ -20,12 +20,32 @@ pub const BUILTIN_TRUSTED_KEYS: &[(&str, &str)] = &[];
 
 /// Trust keys compiled into the binary alongside bundled plugins.
 ///
-/// TBD: the bundled Lua plugin signer pubkey used to be embedded by
-/// the `livtet-lua-plugins` crate (now removed). Once the build
-/// pipeline is wired to inject the production key at link time,
-/// parse it here and return the parsed `VerifyingKey`.
+/// Parses the build-time-injected minisign `signer.pub` text via
+/// the `LIVTET_BUNDLED_KEY_PATH` env var. Returns an empty vec
+/// when the `bundled` feature is disabled OR when no key was
+/// provided at build time (development builds).
+///
+/// The label is `"bundled-signer"` — a single shared key across
+/// every bundled plugin.
 pub fn bundled_trusted_keys() -> Vec<(String, VerifyingKey)> {
-    Vec::new()
+    #[cfg(feature = "bundled")]
+    {
+        let text = crate::bundled::bundled_signer_pub();
+        if text.is_empty() {
+            return Vec::new();
+        }
+        match signing::parse_pubkey_text(text) {
+            Ok(vk) => vec![("bundled-signer".to_string(), vk)],
+            Err(e) => {
+                tracing::error!(%e, "bundled signer pubkey parse failed");
+                Vec::new()
+            }
+        }
+    }
+    #[cfg(not(feature = "bundled"))]
+    {
+        Vec::new()
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -93,6 +113,10 @@ impl TrustStore {
 
     pub fn is_revoked(&self, fingerprint: &str) -> bool {
         self.revoked.contains(fingerprint)
+    }
+
+    pub fn has_builtin_key_label(&self, label: &str) -> bool {
+        self.builtin_keys.iter().any(|(l, _)| l == label)
     }
 
     pub fn is_trusted(&self, key: &VerifyingKey) -> bool {
