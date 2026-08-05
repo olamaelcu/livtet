@@ -10,6 +10,10 @@ pub fn bundled_signer_pub() -> &'static str {
     option_env!("LIVTET_BUNDLED_SIGNER_PUB_TEXT").unwrap_or("")
 }
 
+#[cfg(feature = "bundled")]
+include!(concat!(env!("OUT_DIR"), "/bundled_gen.rs"));
+
+#[cfg(not(feature = "bundled"))]
 pub fn bundled_index() -> Vec<BundledPluginEntry> {
     Vec::new()
 }
