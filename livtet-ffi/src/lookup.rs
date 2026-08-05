@@ -34,10 +34,32 @@
 //! plugin is loaded.
 
 use std::collections::HashMap;
-
-use livtet_plugins::permissions::permissions_dir;
+use std::sync::{Arc, Mutex};
 
 use crate::MobileError;
+
+// ── Globals ────────────────────────────────────────────────────────────
+
+type LuaInner = livtet_plugins::host_lua::LuaHost<livtet_plugins::embedded_host::EmbeddedHost>;
+
+struct PluginHost(Mutex<LuaInner>);
+
+unsafe impl Sync for PluginHost {}
+unsafe impl Send for PluginHost {}
+
+#[allow(dead_code)]
+impl PluginHost {
+    fn lock(&self) -> std::sync::MutexGuard<'_, LuaInner> {
+        self.0.lock().unwrap()
+    }
+}
+
+static PLUGIN_HOST: std::sync::OnceLock<PluginHost> = std::sync::OnceLock::new();
+static PENDING_SECRETS: Mutex<
+    Option<HashMap<livtet_plugins::system_secrets::PluginSystemSecret, String>>,
+> = Mutex::new(None);
+
+// ── PluginHitMobile ────────────────────────────────────────────────────
 
 #[derive(uniffi::Record)]
 pub struct PluginHitMobile {
@@ -54,103 +76,319 @@ pub struct PluginHitMobile {
     pub source_url: Option<String>,
 }
 
-/// Install compile-time system secrets before the Lua host is
-/// initialised. The embedder (Kotlin `BuildConfig.*`, etc.) calls
-/// this once at process startup; the values are consumed (and the
-/// static cleared) by the first [`init_plugins`] call.
-///
-/// Keys are the snake_case variant names of
-/// [`PluginSystemSecret`](livtet_plugins::system_secrets::PluginSystemSecret)
-/// (e.g. `"google_books_api_key"`). Unknown keys are silently dropped
-/// so a future enum variant added server-side does not break older
-/// mobile clients. Empty values are also dropped.
+#[allow(dead_code)]
+impl PluginHitMobile {
+    fn from_json(value: &serde_json::Value, source: &str) -> Option<Self> {
+        let obj = value.as_object()?;
+        Some(Self {
+            title: obj
+                .get("title")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string(),
+            authors: obj
+                .get("authors")
+                .and_then(|v| v.as_array())
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|v| v.as_str().map(String::from))
+                        .collect()
+                })
+                .unwrap_or_default(),
+            identifiers: obj
+                .get("identifiers")
+                .and_then(|v| v.as_array())
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|v| v.as_str().map(String::from))
+                        .collect()
+                })
+                .unwrap_or_default(),
+            cover_url: obj
+                .get("cover_url")
+                .and_then(|v| v.as_str())
+                .map(String::from),
+            publisher: obj
+                .get("publisher")
+                .and_then(|v| v.as_str())
+                .map(String::from),
+            published_date: obj
+                .get("published_date")
+                .and_then(|v| v.as_str())
+                .map(String::from),
+            page_count: obj.get("page_count").and_then(|v| v.as_i64()).map(|n| n as i32),
+            language: obj
+                .get("language")
+                .and_then(|v| v.as_str())
+                .map(String::from),
+            description: obj
+                .get("description")
+                .and_then(|v| v.as_str())
+                .map(String::from),
+            source: source.to_string(),
+            source_url: obj
+                .get("source_url")
+                .and_then(|v| v.as_str())
+                .map(String::from),
+        })
+    }
+}
+
+// ── System secrets ────────────────────────────────────────────────────
+
 #[uniffi::export]
 pub fn set_system_secrets(secrets: HashMap<String, String>) {
-    let sanitized: HashMap<String, String> =
-        secrets.into_iter().filter(|(_, v)| !v.is_empty()).collect();
-    let _ = sanitized;
+    use livtet_plugins::system_secrets::PluginSystemSecret;
+
+    let mut parsed = HashMap::new();
+    for (key, value) in secrets {
+        if value.is_empty() {
+            continue;
+        }
+        let variant = match key.as_str() {
+            "google_books_api_key" => PluginSystemSecret::GoogleBooksApiKey,
+            "platform_unauthenticated_allowed" => PluginSystemSecret::PlatformUnauthenticatedAllowed,
+            _ => {
+                tracing::debug!(%key, "unknown system secret key; skipping");
+                continue;
+            }
+        };
+        parsed.insert(variant, value);
+    }
+    if let Ok(mut guard) = PENDING_SECRETS.lock() {
+        *guard = Some(parsed);
+    }
 }
 
-/// Create default permission-grant sidecars for bundled plugins that
-/// declare `system_secrets = true` in their manifest. Without these
-/// sidecars the host's two-gate check (manifest declaration + grant
-/// allowlist) blocks `host.get_system_secret` and plugins return
-/// "API key not configured" instead of the seeded `BuildConfig`
-/// value. On desktop the Tauri UI calls `plugin_grant_paths` to
-/// create them at runtime; on mobile there is no UI flow, so we
-/// pre-write the grants during `init_plugins()` and let the user
-/// revoke via the Settings screen in a follow-up.
-///
-/// Only writes when the sidecar is missing — never overwrites a
-/// user-edited grant. Plugin manifests are the source of truth for
-/// *which* secrets a plugin needs, so the allowlist is built
-/// dynamically from the manifest's `requires.system_secrets = true`
-/// gate and the canonical [`PluginSystemSecret`] enum.
-fn ensure_default_grants() -> Result<(), MobileError> {
-    let perms_dir = permissions_dir();
-    tracing::info!(perms_dir = %perms_dir, "ensure_default_grants: resolving perms dir");
-    if let Err(e) = fs_err::create_dir_all(&perms_dir) {
-        tracing::warn!(
-            perms_dir = %perms_dir,
-            "could not create permissions directory; plugins will fall back to missing-sidecar errors: {e}"
-        );
-        return Ok(());
-    }
-    tracing::info!(perms_dir = %perms_dir, "ensure_default_grants: perms dir ensured");
+// ── Grant sidecars ────────────────────────────────────────────────────
 
-    // TBD: bundled Lua plugin iteration removed alongside the
-    // `livtet_lua_plugins` crate. Restore once the bundling pipeline lands.
+#[allow(dead_code)]
+fn ensure_default_grants(
+    manifests: &[livtet_plugins::manifest::PluginManifest],
+) -> Result<(), MobileError> {
+    use livtet_plugins::permissions;
+    use livtet_plugins::plugin_requires::PluginRequires;
+
+    let perms_dir = permissions::permissions_dir();
+    fs_err::create_dir_all(&perms_dir)
+        .map_err(|e| MobileError::Platform(format!("permissions dir: {e}")))?;
+
+    for manifest in manifests {
+        let plugin_id = &manifest.plugin.id;
+        if permissions::load_grant(plugin_id, &perms_dir)
+            .ok()
+            .flatten()
+            .is_some()
+        {
+            continue;
+        }
+
+        let requires_filesystem = manifest
+            .plugin
+            .requires
+            .get(&PluginRequires::Filesystem)
+            .copied()
+            .unwrap_or(false);
+        let requires_system_secrets = manifest
+            .plugin
+            .requires
+            .get(&PluginRequires::SystemSecrets)
+            .copied()
+            .unwrap_or(false);
+
+        let grant = permissions::PluginGrant {
+            version: 1,
+            read_paths: if requires_filesystem {
+                vec!["**".into()]
+            } else {
+                vec![]
+            },
+            sqlite_paths: vec![],
+            allow_writes: false,
+            write_paths: vec![],
+            system_secrets: if requires_system_secrets {
+                vec![
+                    "google_books_api_key".into(),
+                    "platform_unauthenticated_allowed".into(),
+                ]
+            } else {
+                vec![]
+            },
+            embeddings: false,
+            oauth_providers: vec![],
+            http_proxy_url: None,
+        };
+
+        let grant_path =
+            permissions::default_grant_path(&perms_dir, plugin_id, permissions::GrantFormat::Toml);
+        let toml_str = toml::to_string_pretty(&grant)
+            .map_err(|e| MobileError::Platform(format!("grant TOML: {e}")))?;
+        if let Some(parent) = grant_path.parent() {
+            fs_err::create_dir_all(parent)?;
+        }
+        fs_err::write(&grant_path, toml_str)?;
+        tracing::info!(%plugin_id, "wrote default grant sidecar");
+    }
     Ok(())
 }
 
-/// Safe to call multiple times — already-loaded plugin ids are
-/// skipped via a local `HashSet`, so a second call won't re-load
-/// the same plugin into the same `LuaHost`.
+// ── init_plugins ───────────────────────────────────────────────────────
+
 #[uniffi::export]
 pub async fn init_plugins() -> Result<(), MobileError> {
-    ensure_default_grants()?;
+    use livtet_plugins::embedded_host::EmbeddedHost;
+    use livtet_plugins::host_lua::LuaHost;
 
-    // TBD: bundled Lua plugin iteration removed alongside the
-    // `livtet_lua_plugins` crate. Restore once the bundling pipeline lands.
+    let secrets = PENDING_SECRETS.lock().unwrap().take().unwrap_or_default();
+    let host = EmbeddedHost::with_system_secrets(secrets);
+    let lua_host = LuaHost::new(Arc::new(host))
+        .map_err(|e| MobileError::Platform(format!("LuaHost::new: {e}")))?;
+
+    PLUGIN_HOST
+        .set(PluginHost(Mutex::new(lua_host)))
+        .map_err(|_| MobileError::Init("plugins already initialized".into()))?;
+
+    #[cfg(feature = "bundled")]
+    {
+        let bundled = livtet_plugins::bundled::bundled_index();
+        tracing::info!(count = bundled.len(), "loading bundled plugins");
+
+        if bundled.is_empty() {
+            tracing::warn!("bundled feature enabled but no plugins found");
+            return Ok(());
+        }
+
+        let mut manifests = Vec::with_capacity(bundled.len());
+        let guard = PLUGIN_HOST.get().unwrap();
+
+        for entry in &bundled {
+            manifests.push(entry.manifest.clone());
+            let source = String::from_utf8_lossy(entry.source_bytes);
+            let mut host = guard.lock();
+            let result = host.load_plugin_source(&entry.id, &source, None, None);
+            match result {
+                livtet_plugins::protocol::HostToMain::PluginLoaded { plugin_id, .. } => {
+                    tracing::info!(%plugin_id, "bundled plugin loaded");
+                }
+                livtet_plugins::protocol::HostToMain::PluginLoadError {
+                    plugin_id, error, ..
+                } => {
+                    tracing::error!(%plugin_id, %error, "failed to load bundled plugin");
+                }
+                other => {
+                    tracing::warn!(
+                        plugin_id = %entry.id,
+                        message = ?other,
+                        "unexpected load result"
+                    );
+                }
+            }
+        }
+
+        ensure_default_grants(&manifests)?;
+    }
+
     Ok(())
 }
 
-/// Look up a single identifier (URN) via the first bundled provider
-/// whose `lookup` capability returns a non-null hit. Iterates
-/// `embedded_index()` in id order and returns the first hit from a
-/// plugin whose manifest's `capabilities.lookup == true` and whose
-/// Lua-side `lookup` call returns a non-null
-/// `serde_json::Value::Object` (NOT an array, NOT nil — `lookup`
-/// returns a single hit table). Returns `Ok(None)` if no provider
-/// resolves the URN.
-#[uniffi::export]
-pub async fn lookup_identifier(urn: String) -> Result<Option<PluginHitMobile>, MobileError> {
-    let _urn = urn;
+// ── lookup_identifier ──────────────────────────────────────────────────
 
-    // TBD: bundled Lua plugin iteration removed alongside the
-    // `livtet_lua_plugins` crate. Restore once the bundling pipeline lands.
+#[uniffi::export]
+pub async fn lookup_identifier(_urn: String) -> Result<Option<PluginHitMobile>, MobileError> {
+    let _host = PLUGIN_HOST
+        .get()
+        .ok_or(MobileError::Init("plugins not initialized".into()))?;
+
+    #[cfg(feature = "bundled")]
+    {
+        let urn = _urn;
+        for entry in livtet_plugins::bundled::bundled_index() {
+            let has_lookup = entry
+                .manifest
+                .plugin
+                .capabilities
+                .iter()
+                .any(|(cap, enabled)| *enabled && cap.as_str() == "lookup");
+            if !has_lookup {
+                continue;
+            }
+
+            let mut guard = _host.lock();
+            let result = guard.call_capability(
+                &ulid::Ulid::new().to_string(),
+                &entry.id,
+                "lookup",
+                &[serde_json::Value::String(urn.clone())],
+            );
+
+            if let livtet_plugins::protocol::HostToMain::CallResult { ok, value, .. } = result {
+                if ok {
+                    if let Some(ref val) = value {
+                        if val.is_object() && !val.is_null() {
+                            if let Some(hit) = PluginHitMobile::from_json(val, &entry.id) {
+                                return Ok(Some(hit));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     Ok(None)
 }
 
-/// Search for books by keyword via the first bundled provider whose
-/// `search` capability returns a non-empty hit list. Iterates
-/// `embedded_index()` in id order and returns the first non-empty
-/// result array from a plugin whose manifest's
-/// `capabilities.search == true`. An empty array from a `search`
-/// plugin is treated as "no hits" and we try the next provider.
-///
-/// If every provider either errors or returns no hits, the bridge
-/// surfaces the highest-priority `__livtet_error` it saw as
-/// [`MobileError::ProviderError`]. Priority order:
-/// needs_auth > rate_limited > provider_down > timeout > not_found.
-/// A successful hit from any provider wins regardless of errors from
-/// others — the user sees real results first.
-#[uniffi::export]
-pub async fn search_providers(query: String) -> Result<Vec<PluginHitMobile>, MobileError> {
-    let _query = query;
+// ── search_providers ───────────────────────────────────────────────────
 
-    // TBD: bundled Lua plugin iteration removed alongside the
-    // `livtet_lua_plugins` crate. Restore once the bundling pipeline lands.
+#[uniffi::export]
+pub async fn search_providers(_query: String) -> Result<Vec<PluginHitMobile>, MobileError> {
+    let _host = PLUGIN_HOST
+        .get()
+        .ok_or(MobileError::Init("plugins not initialized".into()))?;
+
+    #[cfg(feature = "bundled")]
+    {
+        let query = _query;
+        for entry in livtet_plugins::bundled::bundled_index() {
+            let has_search = entry
+                .manifest
+                .plugin
+                .capabilities
+                .iter()
+                .any(|(cap, enabled)| *enabled && cap.as_str() == "search");
+            if !has_search {
+                continue;
+            }
+
+            let mut guard = _host.lock();
+            let result = guard.call_capability(
+                &ulid::Ulid::new().to_string(),
+                &entry.id,
+                "search",
+                &[
+                    serde_json::Value::String(query.clone()),
+                    serde_json::Value::Object(serde_json::Map::new()),
+                ],
+            );
+
+            if let livtet_plugins::protocol::HostToMain::CallResult { ok, value, .. } = result {
+                if ok {
+                    if let Some(serde_json::Value::Array(arr)) = value {
+                        if !arr.is_empty() {
+                            let hits: Vec<PluginHitMobile> = arr
+                                .iter()
+                                .filter_map(|v| PluginHitMobile::from_json(v, &entry.id))
+                                .collect();
+                            if !hits.is_empty() {
+                                return Ok(hits);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     Ok(vec![])
 }
 

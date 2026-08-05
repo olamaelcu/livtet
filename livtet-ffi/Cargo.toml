@@ -49,6 +49,7 @@ tracing-subscriber = { workspace = true, features = [
 
 [features]
 default = ["android"]
+bundled = ["livtet-plugins/bundled"]
 cli = ["uniffi/cli"]
 fake = []
 android = ["dep:jni", "dep:android-logd-logger"]
