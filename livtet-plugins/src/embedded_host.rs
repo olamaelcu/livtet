@@ -19,6 +19,9 @@
 
 use std::sync::Arc;
 
+use camino::Utf8PathBuf;
+use livtet_data::sql::SqlitePool;
+
 use super::host_trait::{
     GetEmbeddingResponse, HostBase, HostDatabase, HostEmbeddings, HostError, HostFiles, HostHttp,
     HostHttpResponse, HostLog, HostOAuth, HostSecrets, HostSettings, HostSystemSecrets,
@@ -465,22 +468,55 @@ fn panic_msg(payload: &Box<dyn std::any::Any + Send>) -> String {
 
 /// Embedded host suitable for use in mobile FFI contexts.
 /// Provides HTTP + logging + pure computation host functions.
-/// Everything else returns `HostError::Unsupported`.
+/// When constructed with [`Self::new_with_db`], also provides
+/// database, secrets, and settings bridges.
 pub struct EmbeddedHost {
     system_secrets: std::collections::HashMap<PluginSystemSecret, String>,
+    db: Option<SqlitePool>,
+    db_runtime: Option<Arc<tokio::runtime::Runtime>>,
+    #[allow(dead_code)]
+    data_dir: Option<Utf8PathBuf>,
 }
 
 impl EmbeddedHost {
     pub fn new() -> Self {
         Self {
             system_secrets: std::collections::HashMap::new(),
+            db: None,
+            db_runtime: None,
+            data_dir: None,
+        }
+    }
+
+    pub fn new_with_db(
+        pool: SqlitePool,
+        data_dir: Utf8PathBuf,
+        system_secrets: std::collections::HashMap<PluginSystemSecret, String>,
+    ) -> Self {
+        let rt = Arc::new(
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("embedded-host db runtime"),
+        );
+        let _guard = rt.enter();
+        Self {
+            system_secrets,
+            db: Some(pool),
+            db_runtime: Some(rt),
+            data_dir: Some(data_dir),
         }
     }
 
     pub fn with_system_secrets(
         system_secrets: std::collections::HashMap<PluginSystemSecret, String>,
     ) -> Self {
-        Self { system_secrets }
+        Self {
+            system_secrets,
+            db: None,
+            db_runtime: None,
+            data_dir: None,
+        }
     }
 }
 
@@ -600,12 +636,26 @@ impl HostLog for EmbeddedHost {
 }
 
 impl HostSecrets for EmbeddedHost {
-    fn get_secret(&self, _plugin_id: &str, _name: &str) -> Result<Option<String>, HostError> {
-        Err(HostError::Unsupported)
+    fn get_secret(&self, plugin_id: &str, name: &str) -> Result<Option<String>, HostError> {
+        let key = format!("{plugin_id}:{name}");
+        match keyring::Entry::new(livtet_core::paths::BUNDLE_ID, &key) {
+            Ok(entry) => match entry.get_password() {
+                Ok(value) => Ok(Some(value)),
+                Err(keyring::Error::NoEntry) => Ok(None),
+                Err(e) => Err(HostError::Message(format!("keyring read: {e}"))),
+            },
+            Err(e) => Err(HostError::Message(format!("keyring: {e}"))),
+        }
     }
 
-    fn set_secret(&self, _plugin_id: &str, _name: &str, _value: &str) -> Result<(), HostError> {
-        Err(HostError::Unsupported)
+    fn set_secret(&self, plugin_id: &str, name: &str, value: &str) -> Result<(), HostError> {
+        let key = format!("{plugin_id}:{name}");
+        match keyring::Entry::new(livtet_core::paths::BUNDLE_ID, &key) {
+            Ok(entry) => entry
+                .set_password(value)
+                .map_err(|e| HostError::Message(format!("keyring write: {e}"))),
+            Err(e) => Err(HostError::Message(format!("keyring: {e}"))),
+        }
     }
 }
 
@@ -631,47 +681,171 @@ impl HostOAuth for EmbeddedHost {
 }
 
 impl HostSettings for EmbeddedHost {
-    fn get_setting(&self, _plugin_id: &str, _key: &str) -> Option<String> {
-        None
+    fn get_setting(&self, plugin_id: &str, key: &str) -> Option<String> {
+        let pool = self.db.as_ref()?;
+        let rt = self.db_runtime.as_ref()?;
+        rt.block_on(crate::host_db_queries::get_plugin_setting(
+            pool,
+            plugin_id,
+            key,
+        ))
+        .ok()
+        .flatten()
     }
 
-    fn set_setting(&self, _plugin_id: &str, _key: &str, _value: &str) -> Result<(), HostError> {
-        Err(HostError::Unsupported)
+    fn set_setting(&self, plugin_id: &str, key: &str, value: &str) -> Result<(), HostError> {
+        let pool = self
+            .db
+            .as_ref()
+            .ok_or(HostError::Message("no database".into()))?;
+        let rt = self
+            .db_runtime
+            .as_ref()
+            .ok_or(HostError::Message("no runtime".into()))?;
+        rt.block_on(crate::host_db_queries::set_plugin_setting(
+            pool,
+            plugin_id,
+            key,
+            value,
+        ))
+        .map_err(|e| HostError::Message(e.to_string()))
     }
 }
 
 impl HostDatabase for EmbeddedHost {
-    fn resolve_identifier(&self, _urn: &str) -> Result<Option<String>, HostError> {
-        Err(HostError::Unsupported)
+    fn resolve_identifier(&self, urn: &str) -> Result<Option<String>, HostError> {
+        let pool = self
+            .db
+            .as_ref()
+            .ok_or(HostError::Message("no database".into()))?;
+        let rt = self
+            .db_runtime
+            .as_ref()
+            .ok_or(HostError::Message("no runtime".into()))?;
+        rt.block_on(crate::host_db_queries::resolve_urn_to_edition_id(
+            pool, urn,
+        ))
+        .map_err(|e| HostError::Message(e.to_string()))
     }
 
-    fn resolve_identifiers(&self, _urns: &[String]) -> Result<Vec<Option<String>>, HostError> {
-        Err(HostError::Unsupported)
+    fn resolve_identifiers(&self, urns: &[String]) -> Result<Vec<Option<String>>, HostError> {
+        let pool = self
+            .db
+            .as_ref()
+            .ok_or(HostError::Message("no database".into()))?;
+        let rt = self
+            .db_runtime
+            .as_ref()
+            .ok_or(HostError::Message("no runtime".into()))?;
+        let mut edition_ids = Vec::with_capacity(urns.len());
+        for urn in urns {
+            let result = rt.block_on(
+                crate::host_db_queries::resolve_urn_to_edition_id(pool, urn),
+            );
+            match result {
+                Ok(Some(eid)) => edition_ids.push(Some(eid)),
+                Ok(None) => edition_ids.push(None),
+                Err(_) => edition_ids.push(None),
+            }
+        }
+        Ok(edition_ids)
     }
 
-    fn get_edition_info(&self, _edition_id: &str) -> Result<Option<serde_json::Value>, HostError> {
-        Err(HostError::Unsupported)
+    fn get_edition_info(&self, edition_id: &str) -> Result<Option<serde_json::Value>, HostError> {
+        let pool = self
+            .db
+            .as_ref()
+            .ok_or(HostError::Message("no database".into()))?;
+        let rt = self
+            .db_runtime
+            .as_ref()
+            .ok_or(HostError::Message("no runtime".into()))?;
+        rt.block_on(crate::host_db_queries::get_edition_info_query(
+            pool,
+            edition_id,
+        ))
+        .map_err(|e| HostError::Message(e.to_string()))
     }
 
-    fn get_edition_identifiers(&self, _edition_id: &str) -> Result<Vec<String>, HostError> {
-        Err(HostError::Unsupported)
+    fn get_edition_identifiers(&self, edition_id: &str) -> Result<Vec<String>, HostError> {
+        let pool = self
+            .db
+            .as_ref()
+            .ok_or(HostError::Message("no database".into()))?;
+        let rt = self
+            .db_runtime
+            .as_ref()
+            .ok_or(HostError::Message("no runtime".into()))?;
+        rt.block_on(
+            crate::host_db_queries::get_edition_identifiers_query(pool, edition_id),
+        )
+        .map_err(|e| HostError::Message(e.to_string()))
     }
 
     fn fetch_progress(
         &self,
-        _urn: &str,
+        urn: &str,
     ) -> Result<Option<crate::progress_entry::ProgressEntry>, HostError> {
-        Err(HostError::Unsupported)
+        let pool = self
+            .db
+            .as_ref()
+            .ok_or(HostError::Message("no database".into()))?;
+        let rt = self
+            .db_runtime
+            .as_ref()
+            .ok_or(HostError::Message("no runtime".into()))?;
+        rt.block_on(crate::host_db_queries::fetch_progress_query(pool, urn))
+            .map_err(|e| HostError::Message(e.to_string()))
     }
 
     fn upsert_progress(
         &self,
-        _urn: &str,
-        _progress: f64,
-        _last_location: Option<String>,
-        _total_reading_time_secs: i64,
+        urn: &str,
+        progress: f64,
+        last_location: Option<String>,
+        total_reading_time_secs: i64,
     ) -> Result<serde_json::Value, HostError> {
-        Err(HostError::Unsupported)
+        let pool = self
+            .db
+            .as_ref()
+            .ok_or(HostError::Message("no database".into()))?;
+        let rt = self
+            .db_runtime
+            .as_ref()
+            .ok_or(HostError::Message("no runtime".into()))?;
+        let result = rt.block_on(
+            crate::host_db_queries::upsert_progress_query(
+                pool,
+                urn,
+                progress,
+                last_location,
+                total_reading_time_secs,
+            ),
+        );
+        match result {
+            Ok((edition_id, format_id)) => {
+                let mut map = serde_json::Map::new();
+                map.insert("ok".to_string(), serde_json::Value::Bool(true));
+                map.insert(
+                    "edition_id".to_string(),
+                    serde_json::Value::String(edition_id),
+                );
+                map.insert(
+                    "format_id".to_string(),
+                    serde_json::Value::String(format_id),
+                );
+                Ok(serde_json::Value::Object(map))
+            }
+            Err(e) => {
+                let mut map = serde_json::Map::new();
+                map.insert("ok".to_string(), serde_json::Value::Bool(false));
+                map.insert(
+                    "error".to_string(),
+                    serde_json::Value::String(e.to_string()),
+                );
+                Ok(serde_json::Value::Object(map))
+            }
+        }
     }
 }
 

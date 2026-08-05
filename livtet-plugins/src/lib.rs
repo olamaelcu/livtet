@@ -8,6 +8,7 @@ pub mod capability;
 pub mod discovery;
 pub mod embedded_host;
 pub mod error;
+pub mod host_db_queries;
 pub mod host_lua;
 pub mod host_manager;
 pub mod host_trait;
