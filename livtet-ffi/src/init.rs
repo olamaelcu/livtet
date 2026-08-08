@@ -8,22 +8,48 @@ use livtet_core::{
 use crate::{MobileError, state};
 
 static LOG_ONCE: Once = Once::new();
+static PANIC_HOOK_ONCE: Once = Once::new();
+
+fn install_panic_hook() {
+    use std::panic::{self, PanicHookInfo};
+    let prev = panic::take_hook();
+    panic::set_hook(Box::new(move |info: &PanicHookInfo| {
+        // Forward to logcat via the `log` crate so the panic message
+        // is visible even with stderr disconnected on Android.
+        // Falls through to the default hook for any default behavior
+        // (backtrace, etc.).
+        log::error!("PANIC [ffilt]: {}", info);
+        prev(info);
+    }));
+}
 
 fn init_logger() {
+    PANIC_HOOK_ONCE.call_once(install_panic_hook);
+
     // FIXME: Extract LIVTET_RUST_LOG as LIVTET_LOG
     let log_level = std::env::var("LIVTET_RUST_LOG").unwrap_or_else(|_| "trace".to_string());
     let env_filter = tracing_subscriber::EnvFilter::new(&log_level);
     LOG_ONCE.call_once(|| {
         #[cfg(target_os = "android")]
         {
-            use std::str::FromStr;
-
-            let filter_level = log::LevelFilter::from_str(&log_level).unwrap();
-            let _ = android_logd_logger::builder()
-                .filter_level(filter_level)
-                .tag("LivtetRust")
-                .prepend_module(true)
-                .init();
+            // Wrap the builder init in catch_unwind so a logger init panic
+            // (e.g. on Android emulators where /dev/pmsg0 is absent and the
+            // pstore path panics) does not bring the app down. The panic is
+            // forwarded to logcat by install_panic_hook above.
+            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                use std::str::FromStr;
+                let filter_level = log::LevelFilter::from_str(&log_level).unwrap();
+                let _ = android_logd_logger::builder()
+                    .filter_level(filter_level)
+                    .tag("LivtetRust")
+                    .prepend_module(true)
+                    // android-logd-logger v0.5.0 enables pstore by default,
+                    // which lazy-opens /dev/pmsg0 via `.expect()` and panics
+                    // on emulators that don't expose that device. We don't
+                    // need pstore for normal logcat output — logd is enough.
+                    .pstore(false)
+                    .init();
+            }));
         }
         #[cfg(target_os = "ios")]
         {

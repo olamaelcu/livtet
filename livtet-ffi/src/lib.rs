@@ -1,3 +1,4 @@
+mod books;
 mod init;
 mod lookup;
 mod pino_layer;
@@ -163,6 +164,31 @@ pub struct NetworkAddressesMobile {
     pub addresses: Vec<String>,
 }
 
+// ── Book listing records ──────────────────────────────────────────────────
+//
+// Returned by `list_books`. The shape is intentionally narrow — only
+// the fields the Android Library row UI currently consumes. Authors,
+// edition metadata, and cover information are joined at the SQL layer
+// in follow-up exports (see `books.rs` for the ordering rationale).
+
+/// A book (work) in the user's library. Returned by `list_books`.
+#[derive(uniffi::Record)]
+pub struct Book {
+    pub id: DbId,
+    pub title: String,
+    pub description: Option<String>,
+}
+
+/// Sort order for `list_books`. Maps to `ORDER BY works.created_at`
+/// in the matching direction.
+#[derive(Debug, Copy, Clone, uniffi::Enum)]
+pub enum BookSearchSortOrder {
+    /// Oldest first — `ORDER BY created_at ASC`.
+    Ascending,
+    /// Newest first — `ORDER BY created_at DESC`.
+    Descending,
+}
+
 // ── Error type ──────────────────────────────────────────────────────────────
 
 #[derive(Debug, thiserror::Error, uniffi::Error)]
@@ -275,6 +301,37 @@ fn get_state() -> Result<livtet_core::SharedState, MobileError> {
     livtet_core::get_state().cloned().map_err(MobileError::from)
 }
 
+// ── FFI boundary panic safety ───────────────────────────────────────────────
+//
+// Panics that cross the FFI boundary are undefined behavior in Rust. On
+// Android they manifest as SIGABRT with no panic message because the default
+// panic hook writes to stderr, which is disconnected (`/dev/null`) for apps.
+//
+// `catch` wraps an FFI export body so a panic is converted into a `MobileError`
+// before the FFI returns. Combined with the panic hook installed in
+// `init_logger()`, this makes the panic message visible in logcat and stops
+// the process from aborting.
+fn catch<F>(label: &'static str, f: F) -> Result<(), MobileError>
+where
+    F: FnOnce() -> Result<(), MobileError>,
+{
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));
+    match result {
+        Ok(r) => r,
+        Err(payload) => {
+            let msg = if let Some(s) = payload.downcast_ref::<&'static str>() {
+                (*s).to_string()
+            } else if let Some(s) = payload.downcast_ref::<String>() {
+                s.clone()
+            } else {
+                "non-string panic payload".to_string()
+            };
+            log::error!("PANIC caught at FFI boundary [{}]: {}", label, msg);
+            Err(MobileError::Init(format!("panic [{}]: {}", label, msg)))
+        }
+    }
+}
+
 // ── FFI Exports ─────────────────────────────────────────────────────────────
 
 /// Initialize the shared database pool. Must be called once at app startup.
@@ -284,9 +341,11 @@ fn get_state() -> Result<livtet_core::SharedState, MobileError> {
 #[tracing::instrument(name = "ffi_init_db_pool")]
 #[uniffi::export]
 pub fn init_db_pool(database_path: String) -> Result<(), MobileError> {
-    let _ = fs_err::remove_file(&database_path);
-    runtime::block_on(crate::state::init_db_pool(&database_path)).map_err(MobileError::from)?;
-    Ok(())
+    catch("init_db_pool", || {
+        let _ = fs_err::remove_file(&database_path);
+        runtime::block_on(crate::state::init_db_pool(&database_path)).map_err(MobileError::from)?;
+        Ok(())
+    })
 }
 
 /// Initialize the library with a database path.
@@ -295,7 +354,9 @@ pub fn init_db_pool(database_path: String) -> Result<(), MobileError> {
 #[tracing::instrument(name = "ffi_init")]
 #[uniffi::export]
 pub fn init(database_path: String) -> Result<(), MobileError> {
-    runtime::block_on(init::init_inner(&database_path))
+    catch("init", || {
+        runtime::block_on(init::init_inner(&database_path))
+    })
 }
 
 /// Check if the library has been initialized.
