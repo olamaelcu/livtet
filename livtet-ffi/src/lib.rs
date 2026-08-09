@@ -95,12 +95,19 @@ pub struct WorkStatusInfo {
 
 // ── Literary quotations ────────────────────────────────────────────────────
 //
-// These two records are the FFI-facing view of `livtet_core`'s
+// These two records are the FFI-facing view of `livtet_core::quotes`'s
 // `Greeting` and `EmptyMessage` types. The shape is preserved so the
 // existing Android/iOS consumers of `Greeting` are unchanged, while
 // the new `EmptyMessage` is intentionally narrow (no `label`, no
 // `period`) so the UI can render it directly into any empty-state
 // surface.
+//
+// `Greeting` and `EmptyMessage` are defined as UniFFI records here
+// rather than in `livtet-core` because `#[derive(uniffi::Record)]`
+// is a proc-macro that only exists where `uniffi` is a dependency.
+// The fields are kept identical to the core types so `From` impls
+// (defined next to `get_greeting` / `get_empty_state_quotation`
+// below) convert between them at the FFI boundary.
 
 // ── Literary greeting ──────────────────────────────────────────────────────
 
@@ -372,41 +379,45 @@ pub fn is_sync_pool_initialized() -> bool {
 }
 
 /// Return a literary greeting drawn from African American and African
-/// diaspora authors, chosen at random from a set matching the current
-/// time of day (Early Morning, Late Morning, Afternoon, Evening, Night,
-/// or Late Night).
-///
-/// **TBD fallback:** the real implementation requires a quote source
-/// that isn't yet wired into `livtet-core`. Until that lands we
-/// return an empty `Greeting` so callers (the Android dashboard)
-/// render a normal screen instead of an error banner. UniFFI's panic
-/// boundary was converting the previous `panic!` into a Kotlin
-/// exception that the dashboard surfaced as "Could not load
-/// dashboard: TBD: …".
+/// diaspora authors. The period (Early Morning, Late Morning,
+/// Afternoon, Evening, Night, or Late Night) and the quote + label
+/// are derived deterministically from the device's local clock via
+/// `livtet_core::quotes::pick_greeting`: the same `(period, hour)`
+/// bucket always returns the same quote, so the user sees the same
+/// greeting until the wall clock rolls over.
 #[uniffi::export]
 pub fn get_greeting() -> Greeting {
-    Greeting {
-        label: String::new(),
-        text: String::new(),
-        author: String::new(),
-        material: String::new(),
-        period: String::new(),
-    }
+    livtet_core::quotes::pick_greeting().into()
 }
 
 /// Return an empty-state filler — a literary quotation without a
 /// greeting label or time-of-day period. Use this when a list or view
 /// would otherwise be empty. The quote is picked deterministically
-/// from `livtet_core::data::quotes::empty.txt` per call.
-///
-/// **TBD fallback:** see `get_greeting` above. Returns an empty
-/// `EmptyMessage` until the quote source is wired into `livtet-core`.
+/// from `livtet_core::quotes::empty.txt` per hour.
 #[uniffi::export]
 pub fn get_empty_state_quotation() -> EmptyMessage {
-    EmptyMessage {
-        text: String::new(),
-        author: String::new(),
-        material: String::new(),
+    livtet_core::quotes::pick_empty().into()
+}
+
+impl From<livtet_core::quotes::Greeting> for Greeting {
+    fn from(g: livtet_core::quotes::Greeting) -> Self {
+        Self {
+            label: g.label,
+            text: g.text,
+            author: g.author,
+            material: g.material,
+            period: g.period,
+        }
+    }
+}
+
+impl From<livtet_core::quotes::EmptyMessage> for EmptyMessage {
+    fn from(e: livtet_core::quotes::EmptyMessage) -> Self {
+        Self {
+            text: e.text,
+            author: e.author,
+            material: e.material,
+        }
     }
 }
 
@@ -520,3 +531,48 @@ async fn reset_and_seed_impl(num_works: i32) -> Result<SeedResultMobile, MobileE
 }
 
 uniffi::setup_scaffolding!();
+
+#[cfg(test)]
+mod greeting_tests {
+    use super::{get_empty_state_quotation, get_greeting};
+
+    #[test]
+    fn get_greeting_populates_all_fields() {
+        // No way to pin the clock here, so just assert every field is
+        // populated — i.e. the FFI is wired and reaching the corpus.
+        let g = get_greeting();
+        assert!(!g.text.is_empty(), "text");
+        assert!(!g.author.is_empty(), "author");
+        assert!(!g.material.is_empty(), "material");
+        assert!(!g.label.is_empty(), "label");
+        assert!(!g.period.is_empty(), "period");
+    }
+
+    #[test]
+    fn get_greeting_period_is_one_of_six() {
+        // The corpus only knows these six display names; anything else is
+        // a bucketing bug.
+        let g = get_greeting();
+        let valid = [
+            "Early Morning",
+            "Late Morning",
+            "Afternoon",
+            "Evening",
+            "Night",
+            "Late Night",
+        ];
+        assert!(
+            valid.contains(&g.period.as_str()),
+            "unexpected period: {:?}",
+            g.period
+        );
+    }
+
+    #[test]
+    fn get_empty_state_quotation_populates_all_fields() {
+        let e = get_empty_state_quotation();
+        assert!(!e.text.is_empty(), "text");
+        assert!(!e.author.is_empty(), "author");
+        assert!(!e.material.is_empty(), "material");
+    }
+}

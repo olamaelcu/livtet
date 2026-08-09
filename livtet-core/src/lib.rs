@@ -11,6 +11,7 @@ pub mod cover;
 pub mod error;
 pub mod migrator;
 pub mod paths;
+pub mod quotes;
 #[cfg(feature = "fake")]
 pub mod seed;
 pub mod user_agent;
@@ -22,6 +23,7 @@ pub use livtet_covers::{
 };
 pub use livtet_data as data;
 pub use livtet_search as search;
+pub use quotes::{EmptyMessage, Greeting, Period};
 pub use livtet_types::{Address, DbId, DiskPath, Urn, now_primitive, CommonLanguages, Isbn};
 #[cfg(feature = "fake")]
 pub use seed::{SeedConfig, SeedResult, seed_database};

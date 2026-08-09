@@ -32,7 +32,7 @@ specta = { workspace = true }
 strsim = "0.11"
 strum = { workspace = true }
 thiserror = { workspace = true }
-time = { version = "0.3", features = ["serde"] }
+time = { version = "0.3", features = ["serde", "local-offset"] }
 tokio = { workspace = true }
 tracing = { workspace = true }
 ulid.workspace = true
