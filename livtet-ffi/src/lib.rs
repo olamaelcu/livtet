@@ -375,22 +375,39 @@ pub fn is_sync_pool_initialized() -> bool {
 /// diaspora authors, chosen at random from a set matching the current
 /// time of day (Early Morning, Late Morning, Afternoon, Evening, Night,
 /// or Late Night).
+///
+/// **TBD fallback:** the real implementation requires a quote source
+/// that isn't yet wired into `livtet-core`. Until that lands we
+/// return an empty `Greeting` so callers (the Android dashboard)
+/// render a normal screen instead of an error banner. UniFFI's panic
+/// boundary was converting the previous `panic!` into a Kotlin
+/// exception that the dashboard surfaced as "Could not load
+/// dashboard: TBD: …".
 #[uniffi::export]
 pub fn get_greeting() -> Greeting {
-    // TBD: the `livtet_core::Greeting` type and the quote source are not
-    // yet wired in `livtet-core`. Restore the real implementation once
-    // the greeting literal pool lands.
-    panic!("TBD: Greeting/EmptyMessage quote source not in livtet-core")
+    Greeting {
+        label: String::new(),
+        text: String::new(),
+        author: String::new(),
+        material: String::new(),
+        period: String::new(),
+    }
 }
 
 /// Return an empty-state filler — a literary quotation without a
 /// greeting label or time-of-day period. Use this when a list or view
 /// would otherwise be empty. The quote is picked deterministically
 /// from `livtet_core::data::quotes::empty.txt` per call.
+///
+/// **TBD fallback:** see `get_greeting` above. Returns an empty
+/// `EmptyMessage` until the quote source is wired into `livtet-core`.
 #[uniffi::export]
 pub fn get_empty_state_quotation() -> EmptyMessage {
-    // TBD: see `get_greeting` above. Same root cause.
-    panic!("TBD: Greeting/EmptyMessage quote source not in livtet-core")
+    EmptyMessage {
+        text: String::new(),
+        author: String::new(),
+        material: String::new(),
+    }
 }
 
 // ── Seed (debug) ───────────────────────────────────────────────────────────
@@ -425,6 +442,68 @@ pub async fn seed_database(works: i32) -> Result<SeedResultMobile, MobileError> 
     };
     let result = runtime::block_on(livtet_core::seed::seed_database(&state.db_conn(), &config))
         .map_err(MobileError::from)?;
+    Ok(SeedResultMobile {
+        works_created: result.works_created as i32,
+        editions_created: result.editions_created as i32,
+        authors_created: result.authors_created as i32,
+        publishers_created: result.publishers_created as i32,
+        reading_status_count: result.reading_status_count as i32,
+        annotations_created: result.annotations_created as i32,
+        digital_inventory_created: result.digital_inventory_created as i32,
+        loans_created: result.loans_created as i32,
+        reading_sessions_created: result.reading_sessions_created as i32,
+        saved_searches_created: result.saved_searches_created as i32,
+        reading_lists_created: result.reading_lists_created as i32,
+    })
+}
+
+/// Wipe every row in every user-data table of the local database, then
+/// seed it with `num_works` demo books. The wipe is performed by querying
+/// `sqlite_master` for non-internal tables and `DELETE FROM`-ing each in
+/// a single transaction, all on the same connection the seed runs against
+/// — no file deletion, no pool rebuild.
+///
+/// Returns the same `SeedResultMobile` shape as `seed_database` so the
+/// caller can show a "Seeded N works / M editions" confirmation.
+///
+/// Intended for the "Reset and seed library" debug button in the mobile
+/// Settings UI. The Kotlin side gates visibility on `BuildConfig.DEBUG`,
+/// but the function itself compiles into all flavors because the
+/// `fake` feature (and therefore the seed module) is unconditionally
+/// enabled on `livtet-core` in this workspace.
+///
+/// **Why this is `pub fn` instead of `pub async fn`:** UniFFI's async
+/// exports poll the future on a callback-driven executor (not tokio),
+/// so `tokio::runtime::Handle::try_current()` inside sqlx returns `Err`
+/// and `missing_rt` panics. Wrapping the async body in our own
+/// `runtime::block_on` keeps the future pinned to the FFI thread
+/// where the leaked `EnterGuard` from `runtime.rs` is in scope.
+#[tracing::instrument(name = "ffi_reset_and_seed", skip_all, err)]
+#[uniffi::export]
+pub fn reset_and_seed(num_works: i32) -> Result<SeedResultMobile, MobileError> {
+    runtime::block_on(reset_and_seed_impl(num_works))
+}
+
+async fn reset_and_seed_impl(num_works: i32) -> Result<SeedResultMobile, MobileError> {
+    let state = get_state()?;
+    let conn = state.db_conn();
+
+    // 1. Wipe every user table on the same connection.
+    state::wipe_user_tables().await.map_err(|e| {
+        tracing::error!(e = %e, "wipe_user_tables failed");
+        e
+    })?;
+
+    // 2. Seed. `seed_database` starts its own transaction internally
+    //    and runs incremental_vacuum on the same pool when it's done.
+    let config = livtet_core::seed::SeedConfig {
+        num_works: num_works.max(16_384) as u32,
+        ..Default::default()
+    };
+    let result = livtet_core::seed::seed_database(&conn, &config)
+        .await
+        .map_err(MobileError::from)?;
+
     Ok(SeedResultMobile {
         works_created: result.works_created as i32,
         editions_created: result.editions_created as i32,

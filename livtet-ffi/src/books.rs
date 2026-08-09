@@ -7,7 +7,7 @@
 //! (`list_books_with_filters`, `get_editions_for_work`, etc.) will follow
 //! as separate commits.
 
-use livtet_database::{
+use livtet_data::{
     orm::{EntityTrait, QueryOrder, QuerySelect},
     works,
 };
@@ -17,9 +17,24 @@ use crate::{Book, BookSearchSortOrder, MobileError, get_state};
 /// Return the user's stored books, paginated by `limit`/`offset` and
 /// ordered by `works.created_at` per `order`. Negative `limit` or
 /// `offset` is clamped to `0` so the query never errors on bad inputs.
+///
+/// **Why this is `pub fn` instead of `pub async fn`:** UniFFI's async
+/// exports poll the future on a callback-driven executor (not tokio),
+/// so `tokio::runtime::Handle::try_current()` inside sqlx returns
+/// `Err` and `missing_rt` panics. Wrapping the async body in our own
+/// `runtime::block_on` keeps the future pinned to the FFI thread
+/// where the leaked `EnterGuard` from `runtime.rs` is in scope.
 #[tracing::instrument(name = "ffi_list_books", skip_all, err)]
 #[uniffi::export]
-pub async fn list_books(
+pub fn list_books(
+    limit: i32,
+    offset: i32,
+    order: BookSearchSortOrder,
+) -> Result<Vec<Book>, MobileError> {
+    crate::runtime::block_on(list_books_impl(limit, offset, order))
+}
+
+async fn list_books_impl(
     limit: i32,
     offset: i32,
     order: BookSearchSortOrder,
@@ -61,12 +76,12 @@ mod tests {
     use livtet_core::{
         SeedConfig, SharedState, get_state, init_state, is_initialized, seed_database,
     };
-    use livtet_database::{
+    use livtet_data::{
         orm::{EntityTrait, PaginatorTrait},
         works,
     };
 
-    use super::{Book, BookSearchSortOrder, list_books};
+    use super::{Book, BookSearchSortOrder, list_books_impl};
 
     /// Serialises the tests so they don't fight over the single shared
     /// in-memory pool. SQLite WAL allows multi-connection reads but the
@@ -143,7 +158,7 @@ mod tests {
             let total = count_works().await;
             assert!(total >= 5, "seed should produce >=5 works, got {total}");
 
-            let books = list_books(100, 0, BookSearchSortOrder::Descending)
+            let books = list_books_impl(100, 0, BookSearchSortOrder::Descending)
                 .await
                 .expect("list_books ok");
             assert!(
@@ -161,7 +176,7 @@ mod tests {
             let total = count_works().await;
             assert!(total >= 2, "seed should produce >=2 works, got {total}");
 
-            let books = list_books(2, 0, BookSearchSortOrder::Ascending)
+            let books = list_books_impl(2, 0, BookSearchSortOrder::Ascending)
                 .await
                 .expect("list_books ok");
             assert_eq!(books.len(), 2, "limit=2 caps the result count");
@@ -175,10 +190,10 @@ mod tests {
             let total = count_works().await;
             assert!(total >= 3, "seed should produce >=3 works, got {total}");
 
-            let first = list_books(1, 0, BookSearchSortOrder::Ascending)
+            let first = list_books_impl(1, 0, BookSearchSortOrder::Ascending)
                 .await
                 .expect("list_books(1,0) ok");
-            let second = list_books(1, 1, BookSearchSortOrder::Ascending)
+            let second = list_books_impl(1, 1, BookSearchSortOrder::Ascending)
                 .await
                 .expect("list_books(1,1) ok");
             assert_eq!(first.len(), 1);
@@ -198,10 +213,10 @@ mod tests {
             // ASC and DESC both return the same first row by tie-break.
             // We instead assert that the order parameter doesn't filter
             // anything out: both directions return the same total count.
-            let asc = list_books(100, 0, BookSearchSortOrder::Ascending)
+            let asc = list_books_impl(100, 0, BookSearchSortOrder::Ascending)
                 .await
                 .expect("asc ok");
-            let desc = list_books(100, 0, BookSearchSortOrder::Descending)
+            let desc = list_books_impl(100, 0, BookSearchSortOrder::Descending)
                 .await
                 .expect("desc ok");
             assert_eq!(asc.len(), desc.len(), "ASC and DESC return the same count");
@@ -212,7 +227,7 @@ mod tests {
     #[tokio::test]
     async fn list_books_clamps_negative_limit_and_offset() {
         run_serialised(|| async {
-            let books = list_books(-5, -3, BookSearchSortOrder::Descending)
+            let books = list_books_impl(-5, -3, BookSearchSortOrder::Descending)
                 .await
                 .expect("negative inputs clamp rather than error");
             let _ = books;
@@ -223,7 +238,7 @@ mod tests {
     #[tokio::test]
     async fn book_carries_title() {
         run_serialised(|| async {
-            let books = list_books(10, 0, BookSearchSortOrder::Ascending)
+            let books = list_books_impl(10, 0, BookSearchSortOrder::Ascending)
                 .await
                 .expect("list_books ok");
             let any_book: Book = books
