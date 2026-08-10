@@ -108,6 +108,15 @@ pub async fn wipe_user_tables() -> Result<Vec<String>, crate::MobileError> {
     //    `writable_schema` lets us nuke every user-table row from
     //    `sqlite_master` in one shot; the engine then unlinks the
     //    tables and their indexes on the next access.
+    //
+    //    The UNIQUE-constraint autoindexes (named
+    //    `sqlite_autoindex_<table>_<N>`) are *not* dropped by SQLite
+    //    when their table is removed via `writable_schema`. Leaving
+    //    them behind blocks the next `init` with SQLITE_CORRUPT
+    //    "orphan index" (the `after_connect` callback never runs to
+    //    completion). The dedicated `DELETE` below removes any
+    //    autoindex whose table no longer exists, so the next `init`
+    //    sees a clean schema.
     let mut tx = pool
         .begin()
         .await
@@ -124,6 +133,14 @@ pub async fn wipe_user_tables() -> Result<Vec<String>, crate::MobileError> {
     .execute(&mut *tx)
     .await
     .map_err(|e| crate::MobileError::Database(format!("wipe: DELETE sqlite_master: {e}")))?;
+    livtet_data::sql::query(AssertSqlSafe(
+        "DELETE FROM sqlite_master \
+         WHERE type='index' \
+           AND tbl_name NOT IN (SELECT name FROM sqlite_master WHERE type='table')",
+    ))
+    .execute(&mut *tx)
+    .await
+    .map_err(|e| crate::MobileError::Database(format!("wipe: DELETE orphan indexes: {e}")))?;
     livtet_data::sql::query(AssertSqlSafe("PRAGMA writable_schema = OFF"))
         .execute(&mut *tx)
         .await
