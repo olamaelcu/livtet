@@ -4,68 +4,6 @@
   "baseline_kind": "accepted-duplication",
   "families": [
     {
-      "id": "00ec9f90df59d4e4",
-      "note": "local duplication — extract a method from the repeated block — high-parameter (7 varying spots): divergence readability; a smaller helper for the invariant core may fit better",
-      "members": [
-        {
-          "id": "e7846f40357cceac",
-          "source_digest": "fnv1a64:bcb1591e547573dd",
-          "file": "livtet-plugins/src/host_lua.rs",
-          "lang": "rust",
-          "start_line": 1847,
-          "end_line": 1888,
-          "kind": "Block",
-          "is_fragment": false
-        },
-        {
-          "id": "669cfcf50ded756b",
-          "source_digest": "fnv1a64:fb491bd3f0f75938",
-          "file": "livtet-plugins/src/host_lua.rs",
-          "lang": "rust",
-          "start_line": 1895,
-          "end_line": 1933,
-          "kind": "Block",
-          "is_fragment": false
-        }
-      ]
-    },
-    {
-      "id": "03e48750a2d35a20",
-      "note": "local duplication — extract a method from the repeated block — test scaffolding: consolidate only a genuinely shared fixture/helper, not per-scenario setup",
-      "members": [
-        {
-          "id": "35b8eaba5bae77f6",
-          "source_digest": "fnv1a64:fe4b5ecd2954aab5",
-          "file": "livtet-plugins/tests/protocol_test.rs",
-          "lang": "rust",
-          "start_line": 74,
-          "end_line": 92,
-          "kind": "Block",
-          "is_fragment": false
-        },
-        {
-          "id": "5bde2e2d17e8e7f5",
-          "source_digest": "fnv1a64:13575a289012cc3d",
-          "file": "livtet-plugins/tests/protocol_test.rs",
-          "lang": "rust",
-          "start_line": 293,
-          "end_line": 310,
-          "kind": "Block",
-          "is_fragment": false
-        },
-        {
-          "id": "f4a2831678cdf4a7",
-          "source_digest": "fnv1a64:1f3cd2fe8d976c0a",
-          "file": "livtet-plugins/tests/protocol_test.rs",
-          "lang": "rust",
-          "start_line": 182,
-          "end_line": 195,
-          "kind": "Block",
-          "is_fragment": false
-        }
-      ]
-    },
-    {
       "id": "05698669e2cb6c7c",
       "note": "local duplication — extract a method from the repeated block — high-parameter (8 varying spots): divergence readability; a smaller helper for the invariant core may fit better",
       "members": [
@@ -164,212 +102,6 @@
           "lang": "rust",
           "start_line": 41,
           "end_line": 58,
-          "kind": "Block",
-          "is_fragment": false
-        }
-      ]
-    },
-    {
-      "id": "0baf9b2b46afa863",
-      "note": "local duplication — extract a method from the repeated block — test scaffolding: consolidate only a genuinely shared fixture/helper, not per-scenario setup",
-      "members": [
-        {
-          "id": "9c18505e179ac44a",
-          "source_digest": "fnv1a64:57016799f24cea58",
-          "file": "livtet-plugins/tests/protocol_test.rs",
-          "lang": "rust",
-          "start_line": 276,
-          "end_line": 298,
-          "kind": "Block",
-          "is_fragment": false
-        },
-        {
-          "id": "7a7fc680a7ecc22a",
-          "source_digest": "fnv1a64:720ca8c8001d3d75",
-          "file": "livtet-plugins/tests/protocol_test.rs",
-          "lang": "rust",
-          "start_line": 397,
-          "end_line": 419,
-          "kind": "Block",
-          "is_fragment": false
-        },
-        {
-          "id": "b894e07f8875d39f",
-          "source_digest": "fnv1a64:2c2c66ee6af7a798",
-          "file": "livtet-plugins/tests/protocol_test.rs",
-          "lang": "rust",
-          "start_line": 14,
-          "end_line": 35,
-          "kind": "Block",
-          "is_fragment": false
-        },
-        {
-          "id": "ba5836fcc4f7d0aa",
-          "source_digest": "fnv1a64:0de2b1b8df1d47bf",
-          "file": "livtet-plugins/tests/protocol_test.rs",
-          "lang": "rust",
-          "start_line": 89,
-          "end_line": 107,
-          "kind": "Block",
-          "is_fragment": false
-        },
-        {
-          "id": "d427d7c947a3f9e6",
-          "source_digest": "fnv1a64:5fd1d5ff39519e85",
-          "file": "livtet-plugins/tests/protocol_test.rs",
-          "lang": "rust",
-          "start_line": 261,
-          "end_line": 279,
-          "kind": "Block",
-          "is_fragment": false
-        },
-        {
-          "id": "5835c15376a0500a",
-          "source_digest": "fnv1a64:d886221e19c1218f",
-          "file": "livtet-plugins/tests/protocol_test.rs",
-          "lang": "rust",
-          "start_line": 331,
-          "end_line": 349,
-          "kind": "Block",
-          "is_fragment": false
-        },
-        {
-          "id": "174362e23e6c8e2f",
-          "source_digest": "fnv1a64:58fff7304a17fcc5",
-          "file": "livtet-plugins/tests/protocol_test.rs",
-          "lang": "rust",
-          "start_line": 416,
-          "end_line": 433,
-          "kind": "Block",
-          "is_fragment": false
-        },
-        {
-          "id": "fed14c28a10161f8",
-          "source_digest": "fnv1a64:06925049da65f09c",
-          "file": "livtet-plugins/tests/protocol_test.rs",
-          "lang": "rust",
-          "start_line": 42,
-          "end_line": 58,
-          "kind": "Block",
-          "is_fragment": false
-        },
-        {
-          "id": "4f913cdb820ecccc",
-          "source_digest": "fnv1a64:cef6aaf21beae3af",
-          "file": "livtet-plugins/tests/protocol_test.rs",
-          "lang": "rust",
-          "start_line": 63,
-          "end_line": 79,
-          "kind": "Block",
-          "is_fragment": false
-        },
-        {
-          "id": "9cf844b8fe47f74c",
-          "source_digest": "fnv1a64:dae47a5dae3b1cbf",
-          "file": "livtet-plugins/tests/protocol_test.rs",
-          "lang": "rust",
-          "start_line": 76,
-          "end_line": 92,
-          "kind": "Block",
-          "is_fragment": false
-        },
-        {
-          "id": "e9800cb5977a170c",
-          "source_digest": "fnv1a64:c08b2db3e78e7d93",
-          "file": "livtet-plugins/tests/protocol_test.rs",
-          "lang": "rust",
-          "start_line": 159,
-          "end_line": 175,
-          "kind": "Block",
-          "is_fragment": false
-        },
-        {
-          "id": "928a5e225b12f30c",
-          "source_digest": "fnv1a64:1dce27270c21714a",
-          "file": "livtet-plugins/tests/protocol_test.rs",
-          "lang": "rust",
-          "start_line": 236,
-          "end_line": 252,
-          "kind": "Block",
-          "is_fragment": false
-        },
-        {
-          "id": "e42b2e802e77c645",
-          "source_digest": "fnv1a64:05bbbcdc60ebe427",
-          "file": "livtet-plugins/tests/protocol_test.rs",
-          "lang": "rust",
-          "start_line": 116,
-          "end_line": 131,
-          "kind": "Block",
-          "is_fragment": false
-        },
-        {
-          "id": "7a3194de0cf9b902",
-          "source_digest": "fnv1a64:b73ff10ef5fbd753",
-          "file": "livtet-plugins/tests/protocol_test.rs",
-          "lang": "rust",
-          "start_line": 249,
-          "end_line": 264,
-          "kind": "Block",
-          "is_fragment": false
-        },
-        {
-          "id": "764d375309cec54f",
-          "source_digest": "fnv1a64:f1e16d3f34b9b9b8",
-          "file": "livtet-plugins/tests/protocol_test.rs",
-          "lang": "rust",
-          "start_line": 307,
-          "end_line": 322,
-          "kind": "Block",
-          "is_fragment": false
-        },
-        {
-          "id": "70a155fff4fac6f7",
-          "source_digest": "fnv1a64:acafc53b710c4680",
-          "file": "livtet-plugins/tests/protocol_test.rs",
-          "lang": "rust",
-          "start_line": 319,
-          "end_line": 334,
-          "kind": "Block",
-          "is_fragment": false
-        },
-        {
-          "id": "378221b83e785cb5",
-          "source_digest": "fnv1a64:7692bb2f7502ca95",
-          "file": "livtet-plugins/tests/protocol_test.rs",
-          "lang": "rust",
-          "start_line": 358,
-          "end_line": 373,
-          "kind": "Block",
-          "is_fragment": false
-        },
-        {
-          "id": "676f09c0ca9d3af2",
-          "source_digest": "fnv1a64:3841fbc7a88bc7d1",
-          "file": "livtet-plugins/tests/protocol_test.rs",
-          "lang": "rust",
-          "start_line": 148,
-          "end_line": 162,
-          "kind": "Block",
-          "is_fragment": false
-        },
-        {
-          "id": "afe642b6ed177103",
-          "source_digest": "fnv1a64:2ef3247d693e1d14",
-          "file": "livtet-plugins/tests/protocol_test.rs",
-          "lang": "rust",
-          "start_line": 32,
-          "end_line": 45,
-          "kind": "Block",
-          "is_fragment": false
-        },
-        {
-          "id": "e5dfc31b7aee32ff",
-          "source_digest": "fnv1a64:4da4dd7db2135712",
-          "file": "livtet-plugins/tests/protocol_test.rs",
-          "lang": "rust",
-          "start_line": 138,
-          "end_line": 151,
           "kind": "Block",
           "is_fragment": false
         }
@@ -888,52 +620,6 @@
       ]
     },
     {
-      "id": "1ab03718fb745cf5",
-      "note": "local duplication — extract a method from the repeated block",
-      "members": [
-        {
-          "id": "74258ac966210d50",
-          "source_digest": "fnv1a64:88356376d3e07e24",
-          "file": "livtet-plugins/src/host_lua.rs",
-          "lang": "rust",
-          "start_line": 1200,
-          "end_line": 1219,
-          "kind": "Block",
-          "is_fragment": false
-        },
-        {
-          "id": "5ce416cf5c6a2f80",
-          "source_digest": "fnv1a64:7f7d561b249d9b22",
-          "file": "livtet-plugins/src/host_lua.rs",
-          "lang": "rust",
-          "start_line": 1230,
-          "end_line": 1249,
-          "kind": "Block",
-          "is_fragment": false
-        },
-        {
-          "id": "77dd9a5c87168138",
-          "source_digest": "fnv1a64:87905b9d7e8aef7f",
-          "file": "livtet-plugins/src/host_lua.rs",
-          "lang": "rust",
-          "start_line": 1260,
-          "end_line": 1279,
-          "kind": "Block",
-          "is_fragment": false
-        },
-        {
-          "id": "5c8d81ceaf6b3eec",
-          "source_digest": "fnv1a64:3b78e735f1915e76",
-          "file": "livtet-plugins/src/host_lua.rs",
-          "lang": "rust",
-          "start_line": 1296,
-          "end_line": 1315,
-          "kind": "Block",
-          "is_fragment": false
-        }
-      ]
-    },
-    {
       "id": "1b50203bc074470c",
       "note": "local duplication — extract a method from the repeated block — test scaffolding: consolidate only a genuinely shared fixture/helper, not per-scenario setup",
       "members": [
@@ -954,32 +640,6 @@
           "lang": "rust",
           "start_line": 5,
           "end_line": 19,
-          "kind": "Block",
-          "is_fragment": false
-        }
-      ]
-    },
-    {
-      "id": "1d1341ad25290987",
-      "note": "local duplication — extract a method from the repeated block",
-      "members": [
-        {
-          "id": "546162b736746678",
-          "source_digest": "fnv1a64:b95e36ddffaf8012",
-          "file": "livtet-plugins/src/host_lua.rs",
-          "lang": "rust",
-          "start_line": 211,
-          "end_line": 224,
-          "kind": "Block",
-          "is_fragment": false
-        },
-        {
-          "id": "c22773c8d9e79d0c",
-          "source_digest": "fnv1a64:a73d771d9054c7cb",
-          "file": "livtet-plugins/src/host_lua.rs",
-          "lang": "rust",
-          "start_line": 315,
-          "end_line": 328,
           "kind": "Block",
           "is_fragment": false
         }
@@ -1084,6 +744,52 @@
           "lang": "rust",
           "start_line": 133,
           "end_line": 147,
+          "kind": "Block",
+          "is_fragment": false
+        }
+      ]
+    },
+    {
+      "id": "230319c0c5d21411",
+      "note": "local duplication — extract a method from the repeated block",
+      "members": [
+        {
+          "id": "5243fd54fdf07130",
+          "source_digest": "fnv1a64:88356376d3e07e24",
+          "file": "livtet-plugins/src/host_lua.rs",
+          "lang": "rust",
+          "start_line": 1160,
+          "end_line": 1179,
+          "kind": "Block",
+          "is_fragment": false
+        },
+        {
+          "id": "3676c39896324e20",
+          "source_digest": "fnv1a64:7f7d561b249d9b22",
+          "file": "livtet-plugins/src/host_lua.rs",
+          "lang": "rust",
+          "start_line": 1190,
+          "end_line": 1209,
+          "kind": "Block",
+          "is_fragment": false
+        },
+        {
+          "id": "209a0f235a5a2c48",
+          "source_digest": "fnv1a64:87905b9d7e8aef7f",
+          "file": "livtet-plugins/src/host_lua.rs",
+          "lang": "rust",
+          "start_line": 1220,
+          "end_line": 1239,
+          "kind": "Block",
+          "is_fragment": false
+        },
+        {
+          "id": "5034fa59b20f51f0",
+          "source_digest": "fnv1a64:3b78e735f1915e76",
+          "file": "livtet-plugins/src/host_lua.rs",
+          "lang": "rust",
+          "start_line": 1256,
+          "end_line": 1275,
           "kind": "Block",
           "is_fragment": false
         }
@@ -1308,6 +1014,32 @@
       ]
     },
     {
+      "id": "2b315f5ba1453b08",
+      "note": "duplicated across 2 directories — extract a method from the repeated block",
+      "members": [
+        {
+          "id": "5b9483e217395ab0",
+          "source_digest": "fnv1a64:6f75e618f9933ca0",
+          "file": "livtet-plugins/src/host_lua.rs",
+          "lang": "rust",
+          "start_line": 1812,
+          "end_line": 1819,
+          "kind": "Block",
+          "is_fragment": false
+        },
+        {
+          "id": "17aa59fd6fb8144f",
+          "source_digest": "fnv1a64:910fd60c85f32f28",
+          "file": "livtet-plugins/tests/mocked_http_test.rs",
+          "lang": "rust",
+          "start_line": 394,
+          "end_line": 401,
+          "kind": "Block",
+          "is_fragment": false
+        }
+      ]
+    },
+    {
       "id": "2d057db997714cdd",
       "note": "local duplication — extract a method from the repeated block",
       "members": [
@@ -1354,32 +1086,6 @@
           "lang": "rust",
           "start_line": 1931,
           "end_line": 1969,
-          "kind": "Block",
-          "is_fragment": false
-        }
-      ]
-    },
-    {
-      "id": "2d3215a856c08649",
-      "note": "local duplication — extract a method from the repeated block — test scaffolding: consolidate only a genuinely shared fixture/helper, not per-scenario setup",
-      "members": [
-        {
-          "id": "a834ed9a01f429aa",
-          "source_digest": "fnv1a64:3d06d1846aab8600",
-          "file": "livtet-plugins/tests/protocol_test.rs",
-          "lang": "rust",
-          "start_line": 355,
-          "end_line": 373,
-          "kind": "Block",
-          "is_fragment": false
-        },
-        {
-          "id": "ac413d61f4805bba",
-          "source_digest": "fnv1a64:92cd06f292f09660",
-          "file": "livtet-plugins/tests/protocol_test.rs",
-          "lang": "rust",
-          "start_line": 367,
-          "end_line": 385,
           "kind": "Block",
           "is_fragment": false
         }
@@ -1814,32 +1520,6 @@
       ]
     },
     {
-      "id": "3f9cbfa10356d821",
-      "note": "local duplication — extract a method from the repeated block",
-      "members": [
-        {
-          "id": "4d78edd765103245",
-          "source_digest": "fnv1a64:3ee2f9a1be1f426f",
-          "file": "livtet-plugins/src/host_lua.rs",
-          "lang": "rust",
-          "start_line": 538,
-          "end_line": 562,
-          "kind": "Block",
-          "is_fragment": false
-        },
-        {
-          "id": "a691b7d9a3f93f09",
-          "source_digest": "fnv1a64:62ef74f47b1e184f",
-          "file": "livtet-plugins/src/host_lua.rs",
-          "lang": "rust",
-          "start_line": 396,
-          "end_line": 412,
-          "kind": "Block",
-          "is_fragment": false
-        }
-      ]
-    },
-    {
       "id": "3fb8ef913915ae9b",
       "note": "local duplication — extract a method from the repeated block — test scaffolding: consolidate only a genuinely shared fixture/helper, not per-scenario setup",
       "members": [
@@ -2228,6 +1908,32 @@
       ]
     },
     {
+      "id": "4aeaa41dde219d5e",
+      "note": "local duplication — extract a method from the repeated block",
+      "members": [
+        {
+          "id": "e032ca8852c5641f",
+          "source_digest": "fnv1a64:0ff9fdebb055daf0",
+          "file": "livtet-plugins/src/host_lua.rs",
+          "lang": "rust",
+          "start_line": 543,
+          "end_line": 561,
+          "kind": "Block",
+          "is_fragment": false
+        },
+        {
+          "id": "82f17e0e7c05e9ba",
+          "source_digest": "fnv1a64:b67a5fd2c754f61c",
+          "file": "livtet-plugins/src/host_lua.rs",
+          "lang": "rust",
+          "start_line": 526,
+          "end_line": 539,
+          "kind": "Block",
+          "is_fragment": false
+        }
+      ]
+    },
+    {
       "id": "4be87fd0762f4b4d",
       "note": "local duplication — extract a method from the repeated block — test scaffolding: consolidate only a genuinely shared fixture/helper, not per-scenario setup",
       "members": [
@@ -2486,62 +2192,6 @@
           "lang": "rust",
           "start_line": 1213,
           "end_line": 1240,
-          "kind": "Block",
-          "is_fragment": false
-        }
-      ]
-    },
-    {
-      "id": "55e821190c1220aa",
-      "note": "local duplication — extract a method from the repeated block — test scaffolding: consolidate only a genuinely shared fixture/helper, not per-scenario setup",
-      "members": [
-        {
-          "id": "7ec8f50f3eaaf83d",
-          "source_digest": "fnv1a64:c0d83f0a49d5f069",
-          "file": "livtet-plugins/tests/protocol_test.rs",
-          "lang": "rust",
-          "start_line": 12,
-          "end_line": 35,
-          "kind": "Block",
-          "is_fragment": false
-        },
-        {
-          "id": "83494fb202cb0bba",
-          "source_digest": "fnv1a64:dd20f963b467a197",
-          "file": "livtet-plugins/tests/protocol_test.rs",
-          "lang": "rust",
-          "start_line": 343,
-          "end_line": 361,
-          "kind": "Block",
-          "is_fragment": false
-        },
-        {
-          "id": "b04edefa74774773",
-          "source_digest": "fnv1a64:bf6e61fff1575999",
-          "file": "livtet-plugins/tests/protocol_test.rs",
-          "lang": "rust",
-          "start_line": 102,
-          "end_line": 119,
-          "kind": "Block",
-          "is_fragment": false
-        },
-        {
-          "id": "ef7df31e16a79983",
-          "source_digest": "fnv1a64:c0f5f86ebf646df7",
-          "file": "livtet-plugins/tests/protocol_test.rs",
-          "lang": "rust",
-          "start_line": 170,
-          "end_line": 187,
-          "kind": "Block",
-          "is_fragment": false
-        },
-        {
-          "id": "2fd217efef613925",
-          "source_digest": "fnv1a64:85382c7734b32056",
-          "file": "livtet-plugins/tests/protocol_test.rs",
-          "lang": "rust",
-          "start_line": 126,
-          "end_line": 141,
           "kind": "Block",
           "is_fragment": false
         }
@@ -3224,6 +2874,32 @@
       ]
     },
     {
+      "id": "7559d2f5c0864809",
+      "note": "local duplication — extract a method from the repeated block",
+      "members": [
+        {
+          "id": "865a7faa7756233f",
+          "source_digest": "fnv1a64:55d1f1c2c8a41306",
+          "file": "livtet-plugins/src/host_lua.rs",
+          "lang": "rust",
+          "start_line": 857,
+          "end_line": 871,
+          "kind": "Block",
+          "is_fragment": false
+        },
+        {
+          "id": "62ec61642d21dcbf",
+          "source_digest": "fnv1a64:1b7cbb599592be96",
+          "file": "livtet-plugins/src/host_lua.rs",
+          "lang": "rust",
+          "start_line": 922,
+          "end_line": 936,
+          "kind": "Block",
+          "is_fragment": false
+        }
+      ]
+    },
+    {
       "id": "75831ff33347434f",
       "note": "local duplication — extract a method from the repeated block",
       "members": [
@@ -3556,26 +3232,36 @@
       ]
     },
     {
-      "id": "7cbdf6d98f6bb0b9",
-      "note": "local duplication — extract a method from the repeated block — test scaffolding: consolidate only a genuinely shared fixture/helper, not per-scenario setup",
+      "id": "7c8535358fe949d8",
+      "note": "local duplication — extract a method from the repeated block",
       "members": [
         {
-          "id": "f20d497b2b1b3ca4",
-          "source_digest": "fnv1a64:9ec024c8d47a6a06",
-          "file": "livtet-plugins/tests/protocol_test.rs",
+          "id": "77c77f1c993533a2",
+          "source_digest": "fnv1a64:e174f81068025341",
+          "file": "livtet-plugins/src/host_lua.rs",
           "lang": "rust",
-          "start_line": 329,
-          "end_line": 349,
+          "start_line": 501,
+          "end_line": 508,
           "kind": "Block",
           "is_fragment": false
         },
         {
-          "id": "d52a67c6c02deb84",
-          "source_digest": "fnv1a64:323cd63b891fa9ad",
-          "file": "livtet-plugins/tests/protocol_test.rs",
+          "id": "32a038538b285dfc",
+          "source_digest": "fnv1a64:b315a116bc57d5f7",
+          "file": "livtet-plugins/src/host_lua.rs",
           "lang": "rust",
-          "start_line": 380,
-          "end_line": 400,
+          "start_line": 512,
+          "end_line": 519,
+          "kind": "Block",
+          "is_fragment": false
+        },
+        {
+          "id": "42dfadc47fae26ac",
+          "source_digest": "fnv1a64:a762fe0932148c8e",
+          "file": "livtet-plugins/src/host_lua.rs",
+          "lang": "rust",
+          "start_line": 532,
+          "end_line": 539,
           "kind": "Block",
           "is_fragment": false
         }
@@ -3710,32 +3396,6 @@
           "lang": "rust",
           "start_line": 488,
           "end_line": 524,
-          "kind": "Block",
-          "is_fragment": false
-        }
-      ]
-    },
-    {
-      "id": "800f899ef8ea9e79",
-      "note": "local duplication — extract a method from the repeated block",
-      "members": [
-        {
-          "id": "eb52670c2a232c0f",
-          "source_digest": "fnv1a64:55d1f1c2c8a41306",
-          "file": "livtet-plugins/src/host_lua.rs",
-          "lang": "rust",
-          "start_line": 897,
-          "end_line": 911,
-          "kind": "Block",
-          "is_fragment": false
-        },
-        {
-          "id": "65a953c60fda50cf",
-          "source_digest": "fnv1a64:1b7cbb599592be96",
-          "file": "livtet-plugins/src/host_lua.rs",
-          "lang": "rust",
-          "start_line": 962,
-          "end_line": 976,
           "kind": "Block",
           "is_fragment": false
         }
@@ -4266,32 +3926,6 @@
       ]
     },
     {
-      "id": "91e0541f0d9c0e8e",
-      "note": "local duplication — extract a method from the repeated block",
-      "members": [
-        {
-          "id": "cd98b4082ec67f9f",
-          "source_digest": "fnv1a64:0ff9fdebb055daf0",
-          "file": "livtet-plugins/src/host_lua.rs",
-          "lang": "rust",
-          "start_line": 583,
-          "end_line": 601,
-          "kind": "Block",
-          "is_fragment": false
-        },
-        {
-          "id": "a245b28d9333735a",
-          "source_digest": "fnv1a64:b67a5fd2c754f61c",
-          "file": "livtet-plugins/src/host_lua.rs",
-          "lang": "rust",
-          "start_line": 566,
-          "end_line": 579,
-          "kind": "Block",
-          "is_fragment": false
-        }
-      ]
-    },
-    {
       "id": "95b830a193b2dac9",
       "note": "local duplication — extract a method from the repeated block — test scaffolding: consolidate only a genuinely shared fixture/helper, not per-scenario setup",
       "members": [
@@ -4680,32 +4314,6 @@
       ]
     },
     {
-      "id": "a66a1122cc3fca79",
-      "note": "local duplication — extract a method from the repeated block — high-parameter (13 varying spots): divergence readability; a smaller helper for the invariant core may fit better",
-      "members": [
-        {
-          "id": "fecd0e745faa5878",
-          "source_digest": "fnv1a64:90aecbbda12255e4",
-          "file": "livtet-plugins/src/host_lua.rs",
-          "lang": "rust",
-          "start_line": 642,
-          "end_line": 765,
-          "kind": "Block",
-          "is_fragment": false
-        },
-        {
-          "id": "5c7ee9a8c86bbc2e",
-          "source_digest": "fnv1a64:f3f3a7b391bbe584",
-          "file": "livtet-plugins/src/host_lua.rs",
-          "lang": "rust",
-          "start_line": 536,
-          "end_line": 629,
-          "kind": "Block",
-          "is_fragment": false
-        }
-      ]
-    },
-    {
       "id": "a69deddf6443ec43",
       "note": "local duplication — extract a method from the repeated block — test scaffolding: consolidate only a genuinely shared fixture/helper, not per-scenario setup",
       "members": [
@@ -5082,32 +4690,6 @@
           "lang": "rust",
           "start_line": 183,
           "end_line": 205,
-          "kind": "Block",
-          "is_fragment": false
-        }
-      ]
-    },
-    {
-      "id": "b5f6e1f6e759d9fd",
-      "note": "local duplication — extract a method from the repeated block",
-      "members": [
-        {
-          "id": "f1240f64863262a1",
-          "source_digest": "fnv1a64:912a61a04548b2d4",
-          "file": "livtet-plugins/src/host_lua.rs",
-          "lang": "rust",
-          "start_line": 212,
-          "end_line": 224,
-          "kind": "Block",
-          "is_fragment": false
-        },
-        {
-          "id": "f54a34d25b4bf801",
-          "source_digest": "fnv1a64:5c7902a71d7e1b48",
-          "file": "livtet-plugins/src/host_lua.rs",
-          "lang": "rust",
-          "start_line": 239,
-          "end_line": 251,
           "kind": "Block",
           "is_fragment": false
         }
@@ -5618,6 +5200,62 @@
       ]
     },
     {
+      "id": "d652541620cabc28",
+      "note": "local duplication — extract a method from the repeated block",
+      "members": [
+        {
+          "id": "a8539eb42c071882",
+          "source_digest": "fnv1a64:98bb9f7a938b1750",
+          "file": "livtet-plugins/src/host_lua.rs",
+          "lang": "rust",
+          "start_line": 219,
+          "end_line": 234,
+          "kind": "Block",
+          "is_fragment": false
+        },
+        {
+          "id": "bdc3a08db139f0f4",
+          "source_digest": "fnv1a64:80a1923fc1618d9e",
+          "file": "livtet-plugins/src/host_lua.rs",
+          "lang": "rust",
+          "start_line": 238,
+          "end_line": 253,
+          "kind": "Block",
+          "is_fragment": false
+        },
+        {
+          "id": "d5286317f46ee042",
+          "source_digest": "fnv1a64:199cfaad97a6ecbe",
+          "file": "livtet-plugins/src/host_lua.rs",
+          "lang": "rust",
+          "start_line": 257,
+          "end_line": 272,
+          "kind": "Block",
+          "is_fragment": false
+        },
+        {
+          "id": "25e8002bb1a21ad8",
+          "source_digest": "fnv1a64:c02cec5c5e61c82b",
+          "file": "livtet-plugins/src/host_lua.rs",
+          "lang": "rust",
+          "start_line": 204,
+          "end_line": 215,
+          "kind": "Block",
+          "is_fragment": false
+        },
+        {
+          "id": "9e0f857a185a1f6c",
+          "source_digest": "fnv1a64:5dc9a0db016badff",
+          "file": "livtet-plugins/src/host_lua.rs",
+          "lang": "rust",
+          "start_line": 276,
+          "end_line": 287,
+          "kind": "Block",
+          "is_fragment": false
+        }
+      ]
+    },
+    {
       "id": "d68afbe6b077ec4d",
       "note": "local duplication — extract a method from the repeated block — test scaffolding: consolidate only a genuinely shared fixture/helper, not per-scenario setup",
       "members": [
@@ -5726,6 +5364,32 @@
       ]
     },
     {
+      "id": "d88d6de104b5dc75",
+      "note": "local duplication — extract a method from the repeated block",
+      "members": [
+        {
+          "id": "06530fda067862cd",
+          "source_digest": "fnv1a64:a779866feca25c8b",
+          "file": "livtet-plugins/src/host_lua.rs",
+          "lang": "rust",
+          "start_line": 857,
+          "end_line": 869,
+          "kind": "Block",
+          "is_fragment": false
+        },
+        {
+          "id": "6ab3387e67c1c04d",
+          "source_digest": "fnv1a64:a779866feca25c8b",
+          "file": "livtet-plugins/src/host_lua.rs",
+          "lang": "rust",
+          "start_line": 889,
+          "end_line": 901,
+          "kind": "Block",
+          "is_fragment": false
+        }
+      ]
+    },
+    {
       "id": "d9c2236f9824217f",
       "note": "local duplication — extract a method from the repeated block — test scaffolding: consolidate only a genuinely shared fixture/helper, not per-scenario setup",
       "members": [
@@ -5746,6 +5410,32 @@
           "lang": "rust",
           "start_line": 309,
           "end_line": 318,
+          "kind": "Block",
+          "is_fragment": false
+        }
+      ]
+    },
+    {
+      "id": "d9e6b29715377760",
+      "note": "local duplication — extract a method from the repeated block — high-parameter (13 varying spots): divergence readability; a smaller helper for the invariant core may fit better",
+      "members": [
+        {
+          "id": "5018a63c2d1868a8",
+          "source_digest": "fnv1a64:90aecbbda12255e4",
+          "file": "livtet-plugins/src/host_lua.rs",
+          "lang": "rust",
+          "start_line": 602,
+          "end_line": 725,
+          "kind": "Block",
+          "is_fragment": false
+        },
+        {
+          "id": "2979a872e3e04ffd",
+          "source_digest": "fnv1a64:f3f3a7b391bbe584",
+          "file": "livtet-plugins/src/host_lua.rs",
+          "lang": "rust",
+          "start_line": 496,
+          "end_line": 589,
           "kind": "Block",
           "is_fragment": false
         }
@@ -5798,62 +5488,6 @@
           "lang": "rust",
           "start_line": 249,
           "end_line": 253,
-          "kind": "Block",
-          "is_fragment": false
-        }
-      ]
-    },
-    {
-      "id": "dbfff5cfde7a53b9",
-      "note": "local duplication — extract a method from the repeated block",
-      "members": [
-        {
-          "id": "2616fe1641b235aa",
-          "source_digest": "fnv1a64:c09911c1e3752040",
-          "file": "livtet-plugins/src/host_lua.rs",
-          "lang": "rust",
-          "start_line": 227,
-          "end_line": 250,
-          "kind": "Block",
-          "is_fragment": false
-        },
-        {
-          "id": "cebcc4a726f6f7dd",
-          "source_digest": "fnv1a64:77c10f7253291d3a",
-          "file": "livtet-plugins/src/host_lua.rs",
-          "lang": "rust",
-          "start_line": 254,
-          "end_line": 277,
-          "kind": "Block",
-          "is_fragment": false
-        },
-        {
-          "id": "2ccbbb1b73dbc3ba",
-          "source_digest": "fnv1a64:ef10c13ccade821a",
-          "file": "livtet-plugins/src/host_lua.rs",
-          "lang": "rust",
-          "start_line": 281,
-          "end_line": 304,
-          "kind": "Block",
-          "is_fragment": false
-        },
-        {
-          "id": "d95d958dc9565fc0",
-          "source_digest": "fnv1a64:94336be068dbe46f",
-          "file": "livtet-plugins/src/host_lua.rs",
-          "lang": "rust",
-          "start_line": 204,
-          "end_line": 223,
-          "kind": "Block",
-          "is_fragment": false
-        },
-        {
-          "id": "d779466f2c689994",
-          "source_digest": "fnv1a64:3fd48c7e6074454b",
-          "file": "livtet-plugins/src/host_lua.rs",
-          "lang": "rust",
-          "start_line": 308,
-          "end_line": 327,
           "kind": "Block",
           "is_fragment": false
         }
@@ -5938,58 +5572,6 @@
       ]
     },
     {
-      "id": "dde8345941279a40",
-      "note": "duplicated across 2 directories — extract a method from the repeated block",
-      "members": [
-        {
-          "id": "e7f749cf8c6563c8",
-          "source_digest": "fnv1a64:6f75e618f9933ca0",
-          "file": "livtet-plugins/src/host_lua.rs",
-          "lang": "rust",
-          "start_line": 1832,
-          "end_line": 1839,
-          "kind": "Block",
-          "is_fragment": false
-        },
-        {
-          "id": "17aa59fd6fb8144f",
-          "source_digest": "fnv1a64:910fd60c85f32f28",
-          "file": "livtet-plugins/tests/mocked_http_test.rs",
-          "lang": "rust",
-          "start_line": 394,
-          "end_line": 401,
-          "kind": "Block",
-          "is_fragment": false
-        }
-      ]
-    },
-    {
-      "id": "dfea96e6feb15f15",
-      "note": "local duplication — extract a method from the repeated block",
-      "members": [
-        {
-          "id": "abec28ac47b0e4dd",
-          "source_digest": "fnv1a64:a779866feca25c8b",
-          "file": "livtet-plugins/src/host_lua.rs",
-          "lang": "rust",
-          "start_line": 897,
-          "end_line": 909,
-          "kind": "Block",
-          "is_fragment": false
-        },
-        {
-          "id": "6147df86035f381d",
-          "source_digest": "fnv1a64:a779866feca25c8b",
-          "file": "livtet-plugins/src/host_lua.rs",
-          "lang": "rust",
-          "start_line": 929,
-          "end_line": 941,
-          "kind": "Block",
-          "is_fragment": false
-        }
-      ]
-    },
-    {
       "id": "e359385072248fe1",
       "note": "local duplication — extract a method from the repeated block",
       "members": [
@@ -6068,6 +5650,32 @@
       ]
     },
     {
+      "id": "e6916fd4ff1116c5",
+      "note": "local duplication — extract a method from the repeated block — test scaffolding: consolidate only a genuinely shared fixture/helper, not per-scenario setup",
+      "members": [
+        {
+          "id": "bd280194bf195d09",
+          "source_digest": "fnv1a64:0eb86549edcb4611",
+          "file": "livtet-plugins/tests/link_resolver_test.rs",
+          "lang": "rust",
+          "start_line": 10,
+          "end_line": 44,
+          "kind": "Block",
+          "is_fragment": false
+        },
+        {
+          "id": "0f81a1df6ff41639",
+          "source_digest": "fnv1a64:bea9dde18d6071c4",
+          "file": "livtet-plugins/tests/link_resolver_test.rs",
+          "lang": "rust",
+          "start_line": 47,
+          "end_line": 77,
+          "kind": "Block",
+          "is_fragment": false
+        }
+      ]
+    },
+    {
       "id": "e6c17e8022e8f855",
       "note": "local duplication — extract a method from the repeated block — test scaffolding: consolidate only a genuinely shared fixture/helper, not per-scenario setup",
       "members": [
@@ -6120,36 +5728,26 @@
       ]
     },
     {
-      "id": "ea589edb17003368",
-      "note": "local duplication — extract a method from the repeated block",
+      "id": "e8f037a663a5fb94",
+      "note": "local duplication — extract a method from the repeated block — high-parameter (7 varying spots): divergence readability; a smaller helper for the invariant core may fit better",
       "members": [
         {
-          "id": "4a0bfeb907a9a102",
-          "source_digest": "fnv1a64:e174f81068025341",
+          "id": "77161eb8e832c5fc",
+          "source_digest": "fnv1a64:bcb1591e547573dd",
           "file": "livtet-plugins/src/host_lua.rs",
           "lang": "rust",
-          "start_line": 541,
-          "end_line": 548,
+          "start_line": 1827,
+          "end_line": 1868,
           "kind": "Block",
           "is_fragment": false
         },
         {
-          "id": "4b65edb56638114c",
-          "source_digest": "fnv1a64:b315a116bc57d5f7",
+          "id": "3f301f2c93238d33",
+          "source_digest": "fnv1a64:fb491bd3f0f75938",
           "file": "livtet-plugins/src/host_lua.rs",
           "lang": "rust",
-          "start_line": 552,
-          "end_line": 559,
-          "kind": "Block",
-          "is_fragment": false
-        },
-        {
-          "id": "e39f458a3cec8fdc",
-          "source_digest": "fnv1a64:a762fe0932148c8e",
-          "file": "livtet-plugins/src/host_lua.rs",
-          "lang": "rust",
-          "start_line": 572,
-          "end_line": 579,
+          "start_line": 1875,
+          "end_line": 1913,
           "kind": "Block",
           "is_fragment": false
         }
@@ -6310,32 +5908,6 @@
           "lang": "rust",
           "start_line": 639,
           "end_line": 649,
-          "kind": "Block",
-          "is_fragment": false
-        }
-      ]
-    },
-    {
-      "id": "ed55c362f3e6eca1",
-      "note": "local duplication — extract a method from the repeated block — test scaffolding: consolidate only a genuinely shared fixture/helper, not per-scenario setup",
-      "members": [
-        {
-          "id": "bd9272b73975d306",
-          "source_digest": "fnv1a64:13a1f0389ae1e7af",
-          "file": "livtet-plugins/tests/link_resolver_test.rs",
-          "lang": "rust",
-          "start_line": 59,
-          "end_line": 104,
-          "kind": "Block",
-          "is_fragment": false
-        },
-        {
-          "id": "a8ce46615d1a0568",
-          "source_digest": "fnv1a64:58288d6a0562c7d2",
-          "file": "livtet-plugins/tests/link_resolver_test.rs",
-          "lang": "rust",
-          "start_line": 103,
-          "end_line": 130,
           "kind": "Block",
           "is_fragment": false
         }
@@ -6620,26 +6192,26 @@
       ]
     },
     {
-      "id": "f908f1849a49f69f",
-      "note": "local duplication — extract a method from the repeated block — test scaffolding: consolidate only a genuinely shared fixture/helper, not per-scenario setup",
+      "id": "f940d08a34c2b4a6",
+      "note": "local duplication — extract a method from the repeated block",
       "members": [
         {
-          "id": "f20a81725c407016",
-          "source_digest": "fnv1a64:0c79a4c61a44db55",
-          "file": "livtet-plugins/tests/link_resolver_test.rs",
+          "id": "ac4d932c8df75a0a",
+          "source_digest": "fnv1a64:3ee2f9a1be1f426f",
+          "file": "livtet-plugins/src/host_lua.rs",
           "lang": "rust",
-          "start_line": 15,
-          "end_line": 60,
+          "start_line": 498,
+          "end_line": 522,
           "kind": "Block",
           "is_fragment": false
         },
         {
-          "id": "7af6678bf6c96e82",
-          "source_digest": "fnv1a64:393d152e83b9e9d8",
-          "file": "livtet-plugins/tests/link_resolver_test.rs",
+          "id": "a2e5efe4d4cd55e9",
+          "source_digest": "fnv1a64:62ef74f47b1e184f",
+          "file": "livtet-plugins/src/host_lua.rs",
           "lang": "rust",
-          "start_line": 63,
-          "end_line": 104,
+          "start_line": 356,
+          "end_line": 372,
           "kind": "Block",
           "is_fragment": false
         }

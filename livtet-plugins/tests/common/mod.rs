@@ -10,6 +10,7 @@
 use std::sync::Arc;
 
 use camino::Utf8PathBuf;
+use camino_tempfile::Utf8TempDir;
 use fs_err as fs;
 use livtet_plugins::repository::hmac::HmacKey;
 
@@ -24,6 +25,33 @@ pub fn fixture_path(relative: &str) -> Utf8PathBuf {
     Utf8PathBuf::from(crate_root)
         .join("fixtures")
         .join(relative)
+}
+
+/// Spawn a fresh `PluginHostManager` with the bundled test-provider
+/// fixture in a tempdir, using a deterministic HMAC key. Returns
+/// `(tempdir_handle, manager)` — drop the handle to clean up.
+///
+/// This absorbs the three-line "make tempdir, copy fixture, spawn
+/// manager" preamble that every host integration test opens with.
+pub async fn spawn_test_provider_manager() -> (Utf8TempDir, livtet_plugins::host_manager::PluginHostManager) {
+    use std::time::Duration;
+    use camino::Utf8Path;
+    use camino_tempfile::Utf8TempDir;
+    use livtet_plugins::host_manager::PluginHostManager;
+    use tokio::time::timeout;
+
+    let temp = Utf8TempDir::new().expect("tempdir");
+    let temp_path = temp.path().to_path_buf();
+    copy_test_provider(&temp_path);
+    let binary = Utf8Path::new(env!("CARGO_BIN_EXE_livtet-plugins-host-lua"));
+    let manager = timeout(
+        Duration::from_secs(10),
+        PluginHostManager::spawn(binary, temp_path.clone(), test_hmac_key()),
+    )
+    .await
+    .expect("spawn timed out")
+    .expect("spawn failed");
+    (temp, manager)
 }
 
 /// Copy a named fixture (livtet.toml + init.lua) into `target`.
