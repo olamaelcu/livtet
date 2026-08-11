@@ -5650,6 +5650,32 @@
       ]
     },
     {
+      "id": "e6916fd4ff1116c5",
+      "note": "local duplication — extract a method from the repeated block — test scaffolding: consolidate only a genuinely shared fixture/helper, not per-scenario setup",
+      "members": [
+        {
+          "id": "bd280194bf195d09",
+          "source_digest": "fnv1a64:0eb86549edcb4611",
+          "file": "livtet-plugins/tests/link_resolver_test.rs",
+          "lang": "rust",
+          "start_line": 10,
+          "end_line": 44,
+          "kind": "Block",
+          "is_fragment": false
+        },
+        {
+          "id": "0f81a1df6ff41639",
+          "source_digest": "fnv1a64:bea9dde18d6071c4",
+          "file": "livtet-plugins/tests/link_resolver_test.rs",
+          "lang": "rust",
+          "start_line": 47,
+          "end_line": 77,
+          "kind": "Block",
+          "is_fragment": false
+        }
+      ]
+    },
+    {
       "id": "e6c17e8022e8f855",
       "note": "local duplication — extract a method from the repeated block — test scaffolding: consolidate only a genuinely shared fixture/helper, not per-scenario setup",
       "members": [
@@ -5882,32 +5908,6 @@
           "lang": "rust",
           "start_line": 639,
           "end_line": 649,
-          "kind": "Block",
-          "is_fragment": false
-        }
-      ]
-    },
-    {
-      "id": "ed55c362f3e6eca1",
-      "note": "local duplication — extract a method from the repeated block — test scaffolding: consolidate only a genuinely shared fixture/helper, not per-scenario setup",
-      "members": [
-        {
-          "id": "bd9272b73975d306",
-          "source_digest": "fnv1a64:13a1f0389ae1e7af",
-          "file": "livtet-plugins/tests/link_resolver_test.rs",
-          "lang": "rust",
-          "start_line": 59,
-          "end_line": 104,
-          "kind": "Block",
-          "is_fragment": false
-        },
-        {
-          "id": "a8ce46615d1a0568",
-          "source_digest": "fnv1a64:58288d6a0562c7d2",
-          "file": "livtet-plugins/tests/link_resolver_test.rs",
-          "lang": "rust",
-          "start_line": 103,
-          "end_line": 130,
           "kind": "Block",
           "is_fragment": false
         }
@@ -6186,32 +6186,6 @@
           "lang": "rust",
           "start_line": 1234,
           "end_line": 1240,
-          "kind": "Block",
-          "is_fragment": false
-        }
-      ]
-    },
-    {
-      "id": "f908f1849a49f69f",
-      "note": "local duplication — extract a method from the repeated block — test scaffolding: consolidate only a genuinely shared fixture/helper, not per-scenario setup",
-      "members": [
-        {
-          "id": "f20a81725c407016",
-          "source_digest": "fnv1a64:0c79a4c61a44db55",
-          "file": "livtet-plugins/tests/link_resolver_test.rs",
-          "lang": "rust",
-          "start_line": 15,
-          "end_line": 60,
-          "kind": "Block",
-          "is_fragment": false
-        },
-        {
-          "id": "7af6678bf6c96e82",
-          "source_digest": "fnv1a64:393d152e83b9e9d8",
-          "file": "livtet-plugins/tests/link_resolver_test.rs",
-          "lang": "rust",
-          "start_line": 63,
-          "end_line": 104,
           "kind": "Block",
           "is_fragment": false
         }
