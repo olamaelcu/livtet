@@ -57,3 +57,61 @@ pub use test_db::TestDb;
 
 pub use sea_orm as orm;
 pub use sqlx as sql;
+
+/// Generate a "vocabulary table" SeaORM entity — a small lookup table
+/// keyed by `DbId` with `name`, `value`, and timestamp columns.
+///
+/// Vocabulary tables are the client-side enum-by-ULID tables that back
+/// foreign-key references (e.g. `device_types`, `pairing_statuses`).
+/// They share an identical shape, so this macro generates the
+/// boilerplate (`Model`, `Relation`, `ActiveModelBehavior`) and lets
+/// the caller add entity-specific query helpers in the trailing
+/// block.
+///
+/// # Usage
+///
+/// ```ignore
+/// livtet_data::vocab_table!("device_types", {
+///     pub async fn display_name_for(db: &DbConn, fk: livtet_types::DbId) -> Result<String, DbErr> {
+///         // ...
+///     }
+/// });
+/// ```
+///
+/// The trailing block is wrapped in `impl Entity { ... }`. Omit it
+/// (pass nothing) for tables that need no extra methods.
+#[macro_export]
+macro_rules! vocab_table {
+    ($table_name:literal) => {
+        vocab_table!($table_name, {});
+    };
+    ($table_name:literal, { $($body:tt)* }) => {
+        use ::livtet_types::DbId;
+        use ::sea_orm::entity::prelude::*;
+
+        $crate::vocab_table!(@model $table_name);
+
+        #[cfg_attr(feature = "fake", derive(::fake::Dummy))]
+        #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+        pub enum Relation {}
+
+        impl ActiveModelBehavior for ActiveModel {}
+
+        impl Entity {
+            $($body)*
+        }
+    };
+    (@model $table_name:literal) => {
+        #[cfg_attr(feature = "fake", derive(::fake::Dummy))]
+        #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
+        #[sea_orm(table_name = $table_name)]
+        pub struct Model {
+            #[sea_orm(primary_key, auto_increment = false)]
+            pub id: DbId,
+            pub name: String,
+            pub value: i32,
+            pub created_at: ::time::PrimitiveDateTime,
+            pub updated_at: Option<::time::PrimitiveDateTime>,
+        }
+    };
+}
