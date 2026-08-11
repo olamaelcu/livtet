@@ -16,8 +16,8 @@ use scraper::{Html as ScraperHtml, Selector};
 use crate::{
     error::PluginError,
     host_trait::{
-        HostBase, HostDatabase, HostEmbeddings, HostFiles, HostHttp, HostLog, HostOAuth,
-        HostSecrets, HostSettings, HostSystemSecrets, SandboxConfig,
+        HostBase, HostDatabase, HostEmbeddings, HostFiles, HostHttp, HostHttpResponse, HostLog,
+        HostOAuth, HostSecrets, HostSettings, HostSystemSecrets, SandboxConfig,
     },
     permissions::{
         ResolvedGrant, check_embeddings, check_oauth, check_read, check_sqlite,
@@ -211,15 +211,7 @@ where
                 let resp = host
                     .http_get(&url, &headers)
                     .map_err(|e| mlua::Error::external(e.to_string()))?;
-                let t = lua.create_table()?;
-                t.set("status", resp.status)?;
-                t.set("body", resp.body)?;
-                let hdrs = lua.create_table()?;
-                for (k, v) in &resp.headers {
-                    hdrs.set(k.as_str(), v.as_str())?;
-                }
-                t.set("headers", hdrs)?;
-                Ok(t)
+                http_response_to_lua_table(lua, &resp)
             })?;
         host_table.set("http_get", http_get)?;
 
@@ -238,15 +230,7 @@ where
                 let resp = host
                     .http_post(&url, body.as_deref(), &headers)
                     .map_err(|e| mlua::Error::external(e.to_string()))?;
-                let t = lua.create_table()?;
-                t.set("status", resp.status)?;
-                t.set("body", resp.body)?;
-                let hdrs = lua.create_table()?;
-                for (k, v) in &resp.headers {
-                    hdrs.set(k.as_str(), v.as_str())?;
-                }
-                t.set("headers", hdrs)?;
-                Ok(t)
+                http_response_to_lua_table(lua, &resp)
             })?;
         host_table.set("http_post", http_post)?;
 
@@ -265,15 +249,7 @@ where
                 let resp = host
                     .http_put(&url, body.as_deref(), &headers)
                     .map_err(|e| mlua::Error::external(e.to_string()))?;
-                let t = lua.create_table()?;
-                t.set("status", resp.status)?;
-                t.set("body", resp.body)?;
-                let hdrs = lua.create_table()?;
-                for (k, v) in &resp.headers {
-                    hdrs.set(k.as_str(), v.as_str())?;
-                }
-                t.set("headers", hdrs)?;
-                Ok(t)
+                http_response_to_lua_table(lua, &resp)
             })?;
         host_table.set("http_put", http_put)?;
 
@@ -292,15 +268,7 @@ where
                 let resp = host
                     .http_patch(&url, body.as_deref(), &headers)
                     .map_err(|e| mlua::Error::external(e.to_string()))?;
-                let t = lua.create_table()?;
-                t.set("status", resp.status)?;
-                t.set("body", resp.body)?;
-                let hdrs = lua.create_table()?;
-                for (k, v) in &resp.headers {
-                    hdrs.set(k.as_str(), v.as_str())?;
-                }
-                t.set("headers", hdrs)?;
-                Ok(t)
+                http_response_to_lua_table(lua, &resp)
             })?;
         host_table.set("http_patch", http_patch)?;
 
@@ -315,15 +283,7 @@ where
                 let resp = host
                     .http_delete(&url, &headers)
                     .map_err(|e| mlua::Error::external(e.to_string()))?;
-                let t = lua.create_table()?;
-                t.set("status", resp.status)?;
-                t.set("body", resp.body)?;
-                let hdrs = lua.create_table()?;
-                for (k, v) in &resp.headers {
-                    hdrs.set(k.as_str(), v.as_str())?;
-                }
-                t.set("headers", hdrs)?;
-                Ok(t)
+                http_response_to_lua_table(lua, &resp)
             })?;
         host_table.set("http_delete", http_delete)?;
 
@@ -1620,6 +1580,26 @@ fn extract_headers_from_opts(opts: Value) -> mlua::Result<Vec<(String, String)>>
         }
     }
     Ok(Vec::new())
+}
+
+/// Build the Lua table that the host functions return for an HTTP
+/// response: a `{ status, body, headers }` table where `headers` is
+/// itself a flat `{ name → value }` table. Shared by http_get,
+/// http_post, http_put, http_patch, and http_delete in
+/// `setup_host_functions` so the response shape stays consistent.
+fn http_response_to_lua_table(
+    lua: &Lua,
+    resp: &HostHttpResponse,
+) -> mlua::Result<Table> {
+    let t = lua.create_table()?;
+    t.set("status", resp.status)?;
+    t.set("body", resp.body.clone())?;
+    let hdrs = lua.create_table()?;
+    for (k, v) in &resp.headers {
+        hdrs.set(k.as_str(), v.as_str())?;
+    }
+    t.set("headers", hdrs)?;
+    Ok(t)
 }
 
 /// Serialize a serde_json::Value to a Lua literal string for
