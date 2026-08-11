@@ -1,2 +1,4 @@
 target/
 docs/superpowers
+check-dupes.json
+check-dupes.sarif
