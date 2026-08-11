@@ -156,16 +156,7 @@ impl HostHttp for IpcHost {
         url: &str,
         headers: &[(String, String)],
     ) -> Result<HostHttpResponse, HostError> {
-        let req = HostToMain::HttpRequest {
-            id: ulid::Ulid::new().to_string(),
-            plugin_id: "ipc_host".to_string(),
-            method: "GET".to_string(),
-            url: url.to_string(),
-            body: None,
-            headers: headers.to_vec(),
-        };
-        self.blocking_http_request(&req)
-            .map_err(|e| HostError::Http(e.to_string()))
+        dispatch_http_impl(self, "GET", url, None, headers)
     }
 
     fn http_post(
@@ -174,16 +165,7 @@ impl HostHttp for IpcHost {
         body: Option<&str>,
         headers: &[(String, String)],
     ) -> Result<HostHttpResponse, HostError> {
-        let req = HostToMain::HttpRequest {
-            id: ulid::Ulid::new().to_string(),
-            plugin_id: "ipc_host".to_string(),
-            method: "POST".to_string(),
-            url: url.to_string(),
-            body: body.map(|s| s.to_string()),
-            headers: headers.to_vec(),
-        };
-        self.blocking_http_request(&req)
-            .map_err(|e| HostError::Http(e.to_string()))
+        dispatch_http_impl(self, "POST", url, body, headers)
     }
 
     fn http_put(
@@ -192,16 +174,7 @@ impl HostHttp for IpcHost {
         body: Option<&str>,
         headers: &[(String, String)],
     ) -> Result<HostHttpResponse, HostError> {
-        let req = HostToMain::HttpRequest {
-            id: ulid::Ulid::new().to_string(),
-            plugin_id: "ipc_host".to_string(),
-            method: "PUT".to_string(),
-            url: url.to_string(),
-            body: body.map(|s| s.to_string()),
-            headers: headers.to_vec(),
-        };
-        self.blocking_http_request(&req)
-            .map_err(|e| HostError::Http(e.to_string()))
+        dispatch_http_impl(self, "PUT", url, body, headers)
     }
 
     fn http_patch(
@@ -210,16 +183,7 @@ impl HostHttp for IpcHost {
         body: Option<&str>,
         headers: &[(String, String)],
     ) -> Result<HostHttpResponse, HostError> {
-        let req = HostToMain::HttpRequest {
-            id: ulid::Ulid::new().to_string(),
-            plugin_id: "ipc_host".to_string(),
-            method: "PATCH".to_string(),
-            url: url.to_string(),
-            body: body.map(|s| s.to_string()),
-            headers: headers.to_vec(),
-        };
-        self.blocking_http_request(&req)
-            .map_err(|e| HostError::Http(e.to_string()))
+        dispatch_http_impl(self, "PATCH", url, body, headers)
     }
 
     fn http_delete(
@@ -227,17 +191,30 @@ impl HostHttp for IpcHost {
         url: &str,
         headers: &[(String, String)],
     ) -> Result<HostHttpResponse, HostError> {
-        let req = HostToMain::HttpRequest {
-            id: ulid::Ulid::new().to_string(),
-            plugin_id: "ipc_host".to_string(),
-            method: "DELETE".to_string(),
-            url: url.to_string(),
-            body: None,
-            headers: headers.to_vec(),
-        };
-        self.blocking_http_request(&req)
-            .map_err(|e| HostError::Http(e.to_string()))
+        dispatch_http_impl(self, "DELETE", url, None, headers)
     }
+}
+
+/// Build a `HostToMain::HttpRequest`, push it through the blocking
+/// IPC channel, and map the error to `HostError::Http`. Shared by
+/// every `http_*` method on `IpcHost`.
+fn dispatch_http_impl(
+    host: &IpcHost,
+    method: &str,
+    url: &str,
+    body: Option<&str>,
+    headers: &[(String, String)],
+) -> Result<HostHttpResponse, HostError> {
+    let req = HostToMain::HttpRequest {
+        id: ulid::Ulid::new().to_string(),
+        plugin_id: "ipc_host".to_string(),
+        method: method.to_string(),
+        url: url.to_string(),
+        body: body.map(str::to_string),
+        headers: headers.to_vec(),
+    };
+    host.blocking_http_request(&req)
+        .map_err(|e| HostError::Http(e.to_string()))
 }
 
 impl HostLog for IpcHost {
