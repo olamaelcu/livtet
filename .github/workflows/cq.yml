@@ -9,7 +9,7 @@ permissions:
 
 jobs:
   duplication:
-    name: Detect Duplication (15+ lines)
+    name: Detect Duplication (25+ shared lines per occurrence)
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
@@ -26,14 +26,17 @@ jobs:
           mise install
           eval "$(mise activate bash)" && echo "PATH=$PATH" >> "$GITHUB_ENV"
 
+      # `continue-on-error: true` lets subsequent SARIF/summary/upload
+      # steps run even when findings exist, so contributors get the
+      # diagnostic artifacts. The final step at the bottom is what
+      # actually fails the workflow on new duplication.
       - name: Run duplication detection
-        run: |
-          mise exec -- nose query . --mode syntax 'lines>15' \
-            --baseline .nose/baseline.json --fail-on new \
-            --exclude 'target/**' --exclude '.worktrees/**' \
-            --format json > check-dupes.json || true
+        id: nose
+        continue-on-error: true
+        run: mise run check-dupes
 
       - name: Generate SARIF
+        if: always()
         run: |
           python3 << 'PY'
           import json, os
@@ -61,6 +64,7 @@ jobs:
           PY
 
       - name: Write summary
+        if: always()
         run: |
           python3 << 'PY'
           import json, os, sys
@@ -76,19 +80,26 @@ jobs:
 
           with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as f:
               f.write(f"## Code Duplication Report\n")
-              f.write(f"Found **{count}** new copy-paste families (15+ lines)\n\n")
+              f.write(f"Found **{count}** new copy-paste families (25+ shared lines per occurrence)\n\n")
               if items:
                   f.write(f"### Top {len(items)} Findings\n")
                   for i, family in enumerate(items, 1):
                       files = sorted({loc.get('file') for loc in family.get('locations', [])})
                       m = family.get('metrics', {})
-                      f.write(f"{i}. `{files[0] if files else 'unknown'}` // {m.get('dup_lines', 'unknown')} duplicate lines ({len(files)} files)\n")
+                      f.write(f"{i}. `{files[0] if files else 'unknown'}` // {m.get('shared_lines', 'unknown')} shared lines ({len(files)} files)\n")
 
           print(f"Found {count} new duplication families")
           PY
 
       - name: Upload SARIF
+        if: always()
         uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: check-dupes.sarif
           category: nose-duplication
+
+      - name: Fail PR on new duplication
+        if: steps.nose.outcome == 'failure'
+        run: |
+          echo "::error::New copy-paste duplication detected by nose. See the PR summary above or the Security tab for details."
+          exit 1

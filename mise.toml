@@ -3,5 +3,5 @@ rust = "latest"
 "github:corca-ai/nose" = "v0.20.0"
 
 [tasks.check-dupes]
-description = "Detect new copy-paste duplication (15+ lines, Rust sources); gates on --fail-on new vs .nose/baseline.json"
-run = "nose query . --mode syntax 'lines>15' --baseline .nose/baseline.json --fail-on new --exclude 'target/**' --exclude '.worktrees/**' --format json > check-dupes.json || true"
+description = "Detect new copy-paste duplication (25+ shared lines per occurrence); gates on --fail-on new vs .nose/baseline.json. Smaller duplications are accepted as noise."
+run = "nose query . --mode syntax 'shared_lines>25' --baseline .nose/baseline.json --fail-on new --exclude 'target/**' --exclude '.worktrees/**' --format json > check-dupes.json"
