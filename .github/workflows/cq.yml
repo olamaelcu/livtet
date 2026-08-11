@@ -1,0 +1,94 @@
+name: Code Quality
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  duplication:
+    name: Detect Duplication (15+ lines)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install mise
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          curl https://mise.run | sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          echo "MISE_DATA_DIR=$HOME/.mise" >> "$GITHUB_ENV"
+          mise install
+          eval "$(mise activate bash)" && echo "PATH=$PATH" >> "$GITHUB_ENV"
+
+      - name: Run duplication detection
+        run: |
+          mise exec -- nose query . --mode syntax 'lines>15' \
+            --baseline .nose/baseline.json --fail-on new \
+            --exclude 'target/**' --exclude '.worktrees/**' \
+            --format json > check-dupes.json || true
+
+      - name: Generate SARIF
+        run: |
+          python3 << 'PY'
+          import json, os
+          try:
+              with open("check-dupes.json") as f:
+                  data = json.load(f)
+          except (FileNotFoundError, json.JSONDecodeError):
+              data = {"families": []}
+
+          families = data.get("families", [])[:5]
+          sarif = {
+              "version": "2.1.0",
+              "$schema": "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json",
+              "runs": [{
+                  "tool": {"driver": {"name": "nose", "version": "0.20.0", "informationUri": "https://github.com/corca-ai/nose"}},
+                  "results": [{
+                      "ruleId": "duplicate-code",
+                      "message": {"text": f"Exact duplicate across {len(family.get('locations', []))} files ({family.get('metrics', {}).get('dup_lines', 'unknown')} duplicate lines)"},
+                      "locations": [{"physicalLocation": {"artifactLocation": {"uri": loc.get('file', 'unknown')}}} for loc in family.get('locations', [])[:3]]
+                  } for family in families]
+              }]
+          }
+          with open("check-dupes.sarif", "w") as f:
+              json.dump(sarif, f)
+          PY
+
+      - name: Write summary
+        run: |
+          python3 << 'PY'
+          import json, os, sys
+          try:
+              with open("check-dupes.json") as f:
+                  report = json.load(f)
+          except (FileNotFoundError, json.JSONDecodeError):
+              report = {"families": []}
+
+          families = report.get("families", [])
+          count = len(families)
+          items = families[:5]
+
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as f:
+              f.write(f"## Code Duplication Report\n")
+              f.write(f"Found **{count}** new copy-paste families (15+ lines)\n\n")
+              if items:
+                  f.write(f"### Top {len(items)} Findings\n")
+                  for i, family in enumerate(items, 1):
+                      files = sorted({loc.get('file') for loc in family.get('locations', [])})
+                      m = family.get('metrics', {})
+                      f.write(f"{i}. `{files[0] if files else 'unknown'}` // {m.get('dup_lines', 'unknown')} duplicate lines ({len(files)} files)\n")
+
+          print(f"Found {count} new duplication families")
+          PY
+
+      - name: Upload SARIF
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: check-dupes.sarif
+          category: nose-duplication
