@@ -1,30 +1,14 @@
 use std::time::Duration;
 
-use camino::Utf8Path;
-use camino_tempfile::Utf8TempDir as TempDir;
-use common::{copy_test_provider, test_hmac_key};
-use livtet_plugins::{
-    host_manager::PluginHostManager,
-    link_resolver::{LinkCategory, ResolveLinksOptions},
-};
+use common::spawn_test_provider_manager;
+use livtet_plugins::link_resolver::{LinkCategory, ResolveLinksOptions};
 use tokio::time::timeout;
 
 mod common;
 
 #[tokio::test]
 async fn test_resolve_links_end_to_end() {
-    let temp = TempDir::new().expect("tempdir");
-    let temp_path = temp.path().to_path_buf();
-    copy_test_provider(&temp_path);
-
-    let binary = Utf8Path::new(env!("CARGO_BIN_EXE_livtet-plugins-host-lua"));
-    let mut manager = timeout(
-        Duration::from_secs(10),
-        PluginHostManager::spawn(binary, temp_path.clone(), test_hmac_key()),
-    )
-    .await
-    .expect("spawn timed out")
-    .expect("spawn failed");
+    let (_temp, mut manager) = spawn_test_provider_manager().await;
 
     timeout(
         Duration::from_secs(5),
@@ -61,18 +45,7 @@ async fn test_resolve_links_end_to_end() {
 
 #[tokio::test]
 async fn test_resolve_links_different_urn() {
-    let temp = TempDir::new().expect("tempdir");
-    let temp_path = temp.path().to_path_buf();
-    copy_test_provider(&temp_path);
-
-    let binary = Utf8Path::new(env!("CARGO_BIN_EXE_livtet-plugins-host-lua"));
-    let mut manager = timeout(
-        Duration::from_secs(10),
-        PluginHostManager::spawn(binary, temp_path.clone(), test_hmac_key()),
-    )
-    .await
-    .expect("spawn timed out")
-    .expect("spawn failed");
+    let (_temp, mut manager) = spawn_test_provider_manager().await;
 
     timeout(
         Duration::from_secs(5),
@@ -105,18 +78,7 @@ async fn test_resolve_links_different_urn() {
 
 #[tokio::test]
 async fn test_resolve_links_unknown_plugin() {
-    let temp = TempDir::new().expect("tempdir");
-    let temp_path = temp.path().to_path_buf();
-    copy_test_provider(&temp_path);
-
-    let binary = Utf8Path::new(env!("CARGO_BIN_EXE_livtet-plugins-host-lua"));
-    let mut manager = timeout(
-        Duration::from_secs(10),
-        PluginHostManager::spawn(binary, temp_path.clone(), test_hmac_key()),
-    )
-    .await
-    .expect("spawn timed out")
-    .expect("spawn failed");
+    let (_temp, mut manager) = spawn_test_provider_manager().await;
 
     let result = manager
         .resolve_links("does-not-exist", "urn:isbn:123", Default::default())
