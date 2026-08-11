@@ -101,8 +101,15 @@ impl SyncClient {
         self.base_url.as_deref().ok_or(ClientError::NotConnected)
     }
 
-    pub async fn status(&self) -> Result<SyncStatus, ClientError> {
-        let url = join_url(self.require_connected()?, "/sync/status")?;
+    /// Issue a GET request to `path` and decode the JSON response
+    /// body into `T`. Returns `ClientError::Status { code, body }`
+    /// on non-2xx and `ClientError::Json` on parse failure. Shared
+    /// by every JSON-only GET on this client.
+    async fn get_json<T: serde::de::DeserializeOwned>(
+        &self,
+        path: &str,
+    ) -> Result<T, ClientError> {
+        let url = join_url(self.require_connected()?, path)?;
         let resp = self.http.get(&url).send().await?;
         let status = resp.status();
         let body = resp.text().await.unwrap_or_default();
@@ -113,49 +120,43 @@ impl SyncClient {
             });
         }
         Ok(serde_json::from_str(&body)?)
+    }
+
+    /// POST `body` to `path` and decode the JSON response into `T`.
+    /// Same error semantics as `get_json`.
+    async fn post_json<B, T>(&self, path: &str, body: &B) -> Result<T, ClientError>
+    where
+        B: serde::Serialize,
+        T: serde::de::DeserializeOwned,
+    {
+        let url = join_url(self.require_connected()?, path)?;
+        let resp = self.http.post(&url).json(body).send().await?;
+        let status = resp.status();
+        let body_text = resp.text().await.unwrap_or_default();
+        if !status.is_success() {
+            return Err(ClientError::Status {
+                code: status.as_u16(),
+                body: body_text,
+            });
+        }
+        Ok(serde_json::from_str(&body_text)?)
+    }
+
+    pub async fn status(&self) -> Result<SyncStatus, ClientError> {
+        self.get_json("/sync/status").await
     }
 
     pub async fn pull_since(&self, since: i64, limit: i64) -> Result<PullResponse, ClientError> {
         let path = format!("/sync/changes?since_version={since}&limit={limit}");
-        let url = join_url(self.require_connected()?, &path)?;
-        let resp = self.http.get(&url).send().await?;
-        let status = resp.status();
-        let body = resp.text().await.unwrap_or_default();
-        if !status.is_success() {
-            return Err(ClientError::Status {
-                code: status.as_u16(),
-                body,
-            });
-        }
-        Ok(serde_json::from_str(&body)?)
+        self.get_json(&path).await
     }
 
     pub async fn pull_full(&self) -> Result<crate::types::FullDump, ClientError> {
-        let url = join_url(self.require_connected()?, "/sync/pull-full")?;
-        let resp = self.http.get(&url).send().await?;
-        let status = resp.status();
-        let body = resp.text().await.unwrap_or_default();
-        if !status.is_success() {
-            return Err(ClientError::Status {
-                code: status.as_u16(),
-                body,
-            });
-        }
-        Ok(serde_json::from_str(&body)?)
+        self.get_json("/sync/pull-full").await
     }
 
     pub async fn push(&self, changes: Vec<SyncChange>) -> Result<PushResponse, ClientError> {
-        let url = join_url(self.require_connected()?, "/sync/push")?;
-        let resp = self.http.post(&url).json(&changes).send().await?;
-        let status = resp.status();
-        let body = resp.text().await.unwrap_or_default();
-        if !status.is_success() {
-            return Err(ClientError::Status {
-                code: status.as_u16(),
-                body,
-            });
-        }
-        Ok(serde_json::from_str(&body)?)
+        self.post_json("/sync/push", &changes).await
     }
 
     /// Drive a local-engine operation. Wraps `SyncError` into
