@@ -5306,32 +5306,6 @@
       ]
     },
     {
-      "id": "bf2045cf0989eede",
-      "note": "duplicated across 2 directories — extract a method from the repeated block",
-      "members": [
-        {
-          "id": "1f2842662bb2b261",
-          "source_digest": "fnv1a64:4709fb4a8c1bbdd2",
-          "file": "livtet-core/src/cover/fetcher.rs",
-          "lang": "rust",
-          "start_line": 3,
-          "end_line": 42,
-          "kind": "Block",
-          "is_fragment": false
-        },
-        {
-          "id": "6a6f94fd362adb22",
-          "source_digest": "fnv1a64:553cbf7819edf149",
-          "file": "livtet-covers/src/fetcher.rs",
-          "lang": "rust",
-          "start_line": 3,
-          "end_line": 38,
-          "kind": "Block",
-          "is_fragment": false
-        }
-      ]
-    },
-    {
       "id": "c049e107a8e66001",
       "note": "local duplication — extract a method from the repeated block",
       "members": [
