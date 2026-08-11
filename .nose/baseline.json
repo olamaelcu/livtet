@@ -30,32 +30,6 @@
       ]
     },
     {
-      "id": "0100b65b7e9a944b",
-      "note": "local duplication — extract a method from the repeated block",
-      "members": [
-        {
-          "id": "bd6acd41f2ee8248",
-          "source_digest": "fnv1a64:a6c8e5c932e9bf47",
-          "file": "livtet-data/src/client_entities/entities/device_types.rs",
-          "lang": "rust",
-          "start_line": 1,
-          "end_line": 47,
-          "kind": "Block",
-          "is_fragment": false
-        },
-        {
-          "id": "65529324598736cc",
-          "source_digest": "fnv1a64:974ae3aa9394fb1e",
-          "file": "livtet-data/src/client_entities/entities/pairing_statuses.rs",
-          "lang": "rust",
-          "start_line": 1,
-          "end_line": 46,
-          "kind": "Block",
-          "is_fragment": false
-        }
-      ]
-    },
-    {
       "id": "03e48750a2d35a20",
       "note": "local duplication — extract a method from the repeated block — test scaffolding: consolidate only a genuinely shared fixture/helper, not per-scenario setup",
       "members": [
@@ -2898,32 +2872,6 @@
           "lang": "rust",
           "start_line": 974,
           "end_line": 981,
-          "kind": "Block",
-          "is_fragment": false
-        }
-      ]
-    },
-    {
-      "id": "605031b4ab39dfe7",
-      "note": "duplicated across 2 directories — extract a method from the repeated block",
-      "members": [
-        {
-          "id": "7018ff24e0f6e8d6",
-          "source_digest": "fnv1a64:c2cbeb031395c590",
-          "file": "livtet-search/src/lib.rs",
-          "lang": "rust",
-          "start_line": 2921,
-          "end_line": 2944,
-          "kind": "Block",
-          "is_fragment": false
-        },
-        {
-          "id": "638b47632ad7cd06",
-          "source_digest": "fnv1a64:77a97e0993d70f54",
-          "file": "livtet-types/src/search/stale.rs",
-          "lang": "rust",
-          "start_line": 25,
-          "end_line": 46,
           "kind": "Block",
           "is_fragment": false
         }

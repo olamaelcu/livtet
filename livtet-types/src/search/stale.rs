@@ -11,6 +11,8 @@ use std::collections::HashMap;
 
 use async_trait::async_trait;
 use sea_orm::DbErr;
+use serde::{Deserialize, Serialize};
+use specta::Type;
 
 use crate::DbId;
 
@@ -20,7 +22,13 @@ use crate::DbId;
 /// SeaORM entity (`authors`, `genres`, `subjects`, `series`,
 /// `publishers`, `tags`). Adding a new axis means adding a
 /// new variant here, and a new arm in the adapter.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+///
+/// Canonical definition lives here so both `livtet-types`
+/// (saved-search composition) and `livtet-search` (the SeaORM
+/// resource lookup adapter) agree on the same enum and wire
+/// form. `livtet-search` re-exports this type verbatim.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Type)]
+#[serde(rename_all = "snake_case")]
 #[cfg_attr(feature = "fake", derive(fake::Dummy))]
 pub enum ResourceKind {
     Author,
@@ -33,7 +41,9 @@ pub enum ResourceKind {
 
 impl ResourceKind {
     /// Stable wire form used by remote adapters and persisted JSON.
-    pub fn as_str(self) -> &'static str {
+    /// Matches the identifier column values stored next to each
+    /// `kind = "..."` discriminator.
+    pub fn as_str(&self) -> &'static str {
         match self {
             ResourceKind::Author => "author",
             ResourceKind::Genre => "genre",

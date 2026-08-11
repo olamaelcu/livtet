@@ -2914,34 +2914,7 @@ pub trait AuthorLookup: Send + Sync {
     ) -> Result<Vec<livtet_data::entities::authors::Model>, livtet_data::orm::DbErr>;
 }
 
-/// One categorical axis the saved-search engine can target. Each
-/// variant maps to exactly one SeaORM entity table.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Type)]
-#[serde(rename_all = "snake_case")]
-pub enum ResourceKind {
-    Author,
-    Genre,
-    Subject,
-    Series,
-    Publisher,
-    Tag,
-}
 
-impl ResourceKind {
-    /// The lowercase string the kind is rendered as on the wire.
-    /// Matches the identifier column values stored next to each
-    /// `kind = "..."` discriminator.
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            ResourceKind::Author => "author",
-            ResourceKind::Genre => "genre",
-            ResourceKind::Subject => "subject",
-            ResourceKind::Series => "series",
-            ResourceKind::Publisher => "publisher",
-            ResourceKind::Tag => "tag",
-        }
-    }
-}
 
 /// Per-axis existence and name lookup. The SeaORM implementation
 /// issues one typed `Entity::find().filter(Column::Id.is_in(...))`
@@ -2987,6 +2960,7 @@ pub mod user_input_translator;
 
 pub use doc::{AuthorDoc, EditionDoc};
 pub use label_resolver::LabelResolver;
+pub use livtet_types::search::stale::ResourceKind;
 pub use tantivy::query::{AllQuery, BooleanQuery, Query, TermQuery};
 pub use user_input_translator::user_input_ast_to_query;
 
