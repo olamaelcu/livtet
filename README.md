@@ -61,7 +61,8 @@ livtet-core     --> livtet-data, livtet-covers, livtet-search, livtet-types
 livtet-plugins  (leaf)
 livtet-plugins-lua (leaf)
 
-livtet-ffi      --> livtet-core, livtet-data, livtet-sync, livtet-types, livtet-plugins, livtet-plugins-lua
+livtet-ffi      --> livtet-core, livtet-data, livtet-sync, livtet-types,
+                    livtet-plugins, livtet-plugins-lua
 
 livtet-sync     --> livtet-core, livtet-data
 livtet-cli      --> livtet-core, livtet-plugins
