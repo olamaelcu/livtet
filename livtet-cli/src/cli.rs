@@ -25,18 +25,10 @@ pub struct Cli {
 
 #[derive(Subcommand, Debug)]
 pub enum Command {
-    Plugin(PluginArgs),
     /// Populate the local database with realistic demo data.
     /// Only available in builds with the `fake` feature enabled.
     #[cfg(feature = "fake")]
     Seed(crate::seed::SeedArgs),
-    /// Recover access to HMAC-protected state files when the OS keyring
-    /// is unavailable (e.g., reinstalled OS, fresh user account, headless
-    /// container). Derives a deterministic 32-byte key from a passphrase
-    /// using PBKDF2-HMAC-SHA256 and writes the result to a 0600
-    /// `passphrase.env` under the livtet config dir so subsequent
-    /// `livtet` invocations can read the state files.
-    KeyringRecover(KeyringRecoverArgs),
     /// Print canonical app-data directories for the current platform.
     /// Uses the same resolution as every other livtet binary (Tauri
     /// parent, plugin host). Useful in shell scripts and for
@@ -54,7 +46,6 @@ pub struct PathArgs {
 impl Command {
     pub fn run(self) -> Result<()> {
         match self {
-            Command::Plugin(args) => crate::plugin::run(args),
             #[cfg(feature = "fake")]
             Command::Seed(args) => {
                 let rt =
@@ -63,7 +54,6 @@ impl Command {
                     })?;
                 rt.block_on(args.run())
             }
-            Command::KeyringRecover(args) => crate::keyring_recover::run(args),
             Command::Path(args) => run_path(args),
         }
     }
@@ -83,9 +73,6 @@ fn run_path(args: PathArgs) -> Result<()> {
                 print("config", c.as_str());
             }
             print("logs", paths::logs_dir().as_str());
-            print("repos", paths::subdirs::REPOS);
-            print("providers", paths::subdirs::PROVIDERS);
-            print("permissions", paths::subdirs::PERMISSIONS);
         }
         "bundle" => println!("{}", livtet_core::paths::BUNDLE_ID),
         "data" => {
@@ -109,122 +96,6 @@ fn run_path(args: PathArgs) -> Result<()> {
         }
     }
     Ok(())
-}
-
-#[derive(Args, Debug)]
-pub struct KeyringRecoverArgs {
-    /// Read the passphrase from stdin (one line, no echo). Useful for
-    /// scripting: `echo "$LIVTET_RECOVERY_PASSPHRASE" | livtet
-    /// keyring-recover --passphrase-stdin`.
-    #[arg(long, conflicts_with = "passphrase")]
-    pub passphrase_stdin: bool,
-
-    /// Passphrase provided on the command line. Avoid in shell history;
-    /// prefer `--passphrase-stdin` for any non-interactive flow.
-    #[arg(long, conflicts_with = "passphrase_stdin")]
-    pub passphrase: Option<String>,
-
-    /// Where to write the derived key. Defaults to
-    /// `<config-dir>/passphrase.env` (mode 0600). The file is checked
-    /// in to nothing and is consumed by `load_recovery_key` on the
-    /// next `livtet` invocation.
-    #[arg(long)]
-    pub output: Option<camino::Utf8PathBuf>,
-
-    /// Interactive mode: prompt for passphrase if not provided via
-    /// --passphrase or --passphrase-stdin.
-    #[arg(long, conflicts_with = "passphrase_stdin")]
-    pub interactive: bool,
-}
-
-#[derive(Args, Debug)]
-pub struct PluginArgs {
-    #[command(subcommand)]
-    pub command: PluginCommand,
-}
-
-#[derive(Subcommand, Debug)]
-pub enum PluginCommand {
-    Keygen {
-        /// Human-readable label for the signing key (e.g. `olamaelcu`).
-        /// Optional when `--interactive` is set; the value is then
-        /// prompted for with `inquire::Text`.
-        #[arg(long)]
-        label: Option<String>,
-
-        /// How to handle passphrase prompting when generating the key.
-        /// `enabled` (default) prompts for a passphrase interactively;
-        /// `disabled` stores the key unencrypted. In `--interactive`
-        /// mode the user is asked `Use passphrase?`.
-        #[arg(long, value_enum, default_value_t = PassphraseMode::default())]
-        passphrase: PassphraseMode,
-
-        #[arg(long, default_value_t = crate::plugin::default_trust_dir_string())]
-        keys_dir: String,
-
-        /// Interactive mode: prompt for missing fields (label,
-        /// passphrase decision) with `inquire`. Non-interactive
-        /// callers see no behavioral change.
-        #[arg(long)]
-        interactive: bool,
-    },
-    Trust {
-        pubkey_path: Utf8PathBuf,
-    },
-    Search {
-        query: String,
-        #[arg(long)]
-        repo: Option<String>,
-    },
-    Install {
-        archive: String,
-        #[arg(long)]
-        providers: Option<String>,
-        #[arg(long)]
-        repo: Option<String>,
-        #[arg(long)]
-        version: Option<String>,
-    },
-    Uninstall {
-        id: String,
-        version: String,
-        #[arg(long)]
-        providers: Option<String>,
-        /// Interactive mode: confirm with `inquire::Confirm` before
-        /// removing the plugin directory. Non-interactive callers
-        /// see no behavioral change.
-        #[arg(long)]
-        interactive: bool,
-    },
-    List {
-        #[arg(long)]
-        providers: Option<String>,
-    },
-    Unpublish {
-        #[arg(long)]
-        plugin_id: String,
-        #[arg(long)]
-        version: String,
-        #[arg(long)]
-        repo_dir: Utf8PathBuf,
-        /// Interactive mode: confirm with `inquire::Confirm` before
-        /// removing the version from the repo. Non-interactive
-        /// callers see no behavioral change.
-        #[arg(long)]
-        interactive: bool,
-    },
-    Pack {
-        source: Utf8PathBuf,
-        #[arg(long, default_value = "olamaelcu")]
-        label: String,
-        #[arg(long)]
-        key: Option<String>,
-        #[arg(long, default_value_t = crate::plugin::default_trust_dir_string())]
-        key_dir: String,
-        #[arg(long)]
-        output: Option<Utf8PathBuf>,
-    },
-    Repo(RepoArgs),
 }
 
 #[derive(Args, Debug)]

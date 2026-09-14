@@ -2,21 +2,7 @@ use core::default::Default;
 use std::{
     fmt::{Display, Formatter},
     str::FromStr,
-    string::FromUtf8Error,
 };
-
-/// Error returned when parsing a hex string into a [`DbId`] fails.
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-pub enum HexError {
-    #[error(transparent)]
-    IntoHex(#[from] FromUtf8Error),
-    #[error("Failed to convert hexademical into ULID: {0}")]
-    FromHex(String),
-    #[error("No bytes were returned")]
-    NoBytes,
-    #[error("Expected a valid hexadecimal character, found byte {0:#04x}")]
-    InvalidCharacter(u8),
-}
 
 use serde::{Deserialize, Serialize};
 use specta::{Type, datatype::DataType};
@@ -34,7 +20,7 @@ impl Type for DbId {
 
 impl DbId {
     pub fn new() -> Self {
-        Self(Ulid::new())
+        Self(Ulid::generate())
     }
 
     pub fn from_bytes(bytes: [u8; 16]) -> Self {
@@ -46,20 +32,16 @@ impl DbId {
     }
     /// Lowercase hex encoding of the 16-byte ID (32 hex chars).
     pub fn to_hex(self) -> String {
-        let bytes = self.0.to_bytes();
-        const HEX: &[u8; 16] = b"0123456789abcdef";
-        let mut out = [0u8; 32];
-        for (i, b) in bytes.iter().enumerate() {
-            out[i * 2] = HEX[(b >> 4) as usize];
-            out[i * 2 + 1] = HEX[(b & 0x0f) as usize];
-        }
-        String::from_utf8(out.to_vec()).expect("valid utf-8")
+        hex::encode(self.0.to_bytes())
     }
 
     /// Parse a 32-char hex string (lowercase or uppercase) into a DbId.
-    pub fn from_hex(s: &str) -> Result<Self, HexError> {
-        let bytes = hex_to_bytes(s).ok_or_else(|| HexError::FromHex(s.to_string()))?;
-        Ok(DbId::from_bytes(bytes))
+    pub fn from_hex(s: &str) -> Result<Self, hex::FromHexError> {
+        let bytes = hex::decode(s.as_bytes())?;
+        let arr: [u8; 16] = bytes
+            .try_into()
+            .map_err(|_| hex::FromHexError::InvalidStringLength)?;
+        Ok(DbId::from_bytes(arr))
     }
 }
 
@@ -140,30 +122,6 @@ impl sea_orm::sea_query::ValueType for DbId {
     }
 }
 
-/// Decode a 32-char hex string into 16 bytes.
-fn hex_to_bytes(s: &str) -> Option<[u8; 16]> {
-    if s.len() != 32 {
-        return None;
-    }
-    let mut bytes = [0u8; 16];
-    let src = s.as_bytes();
-    for i in 0..16 {
-        let hi = from_hex_digit(src[i * 2])?;
-        let lo = from_hex_digit(src[i * 2 + 1])?;
-        bytes[i] = (hi << 4) | lo;
-    }
-    Some(bytes)
-}
-
-fn from_hex_digit(c: u8) -> Option<u8> {
-    match c {
-        b'0'..=b'9' => Some(c - b'0'),
-        b'a'..=b'f' => Some(c - b'a' + 10),
-        b'A'..=b'F' => Some(c - b'A' + 10),
-        _ => None,
-    }
-}
-
 impl sea_orm::TryGetable for DbId {
     fn try_get_by<I: sea_orm::ColIdx>(
         res: &sea_orm::QueryResult,
@@ -190,8 +148,8 @@ impl sea_orm::TryGetable for DbId {
                     return Ok(DbId(ulid));
                 }
                 // Try hex string (32 chars, "017f21f0...").
-                if let Some(bytes) = hex_to_bytes(&s) {
-                    return Ok(DbId::from_bytes(bytes));
+                if let Ok(id) = DbId::from_hex(&s) {
+                    return Ok(id);
                 }
                 // String value wasn't parseable as DbId.
                 Err(sea_orm::TryGetError::DbErr(sea_orm::DbErr::Custom(
@@ -244,5 +202,26 @@ mod tests {
         let s = id.to_string();
         let parsed: DbId = s.parse().unwrap();
         assert_eq!(id, parsed);
+    }
+
+    #[test]
+    fn test_dbid_hex_roundtrip() {
+        let id = DbId::new();
+        let hex = id.to_hex();
+        assert_eq!(hex.len(), 32);
+        let parsed = DbId::from_hex(&hex).unwrap();
+        assert_eq!(id, parsed);
+    }
+
+    #[test]
+    fn test_dbid_from_hex_rejects_wrong_length() {
+        assert!(DbId::from_hex("abcd").is_err());
+        assert!(DbId::from_hex("").is_err());
+    }
+
+    #[test]
+    fn test_dbid_from_hex_rejects_bad_chars() {
+        let bad = "zz".repeat(16);
+        assert!(DbId::from_hex(&bad).is_err());
     }
 }

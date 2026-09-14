@@ -56,18 +56,6 @@ pub fn config_dir() -> Option<Utf8PathBuf> {
 /// platform does not expose a data dir.
 pub fn logs_dir() -> Utf8PathBuf {
     bundle_data_dir()
-        .unwrap_or_else(|| Utf8PathBuf::from("logs"))
+        .unwrap_or_else(|| Utf8PathBuf::new())
         .join("logs")
-}
-
-/// Migration-aware data dir: returns the v2 (`<BUNDLE_ID>`) location
-/// when available, otherwise falls back to the v1 (`livtet`) location
-/// so existing installs keep working.
-pub fn data_dir_with_migration() -> Option<Utf8PathBuf> {
-    bundle_data_dir().or_else(|| dirs::data_dir().and_then(|p| to_utf8(p.join("livtet"))))
-}
-
-/// Migration-aware config dir (v2 first, then v1 `livtet`).
-pub fn config_dir_with_migration() -> Option<Utf8PathBuf> {
-    bundle_config_dir().or_else(|| dirs::config_dir().and_then(|p| to_utf8(p.join("livtet"))))
 }

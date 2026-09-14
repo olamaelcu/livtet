@@ -1,11 +1,8 @@
 pub mod cli;
 pub mod error;
-pub mod keyring_recover;
 pub mod network;
 pub mod output;
 
-pub mod plugin;
-pub mod repo;
 #[cfg(feature = "fake")]
 pub mod seed;
 

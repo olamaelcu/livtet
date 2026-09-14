@@ -12,18 +12,6 @@ pub enum CliError {
     #[diagnostic(code(livtet_cli::serde_json))]
     SerdeJson(#[from] serde_json::Error),
 
-    #[error("Plugin subsystem error: {0}")]
-    #[diagnostic(code(livtet_cli::plugin))]
-    Plugin(#[from] livtet_plugins::PluginError),
-
-    #[error("Repository error: {0}")]
-    #[diagnostic(code(livtet_cli::repository))]
-    Repository(#[from] livtet_plugins::repository::error::RepositoryError),
-
-    #[error("Archive error: {0}")]
-    #[diagnostic(code(livtet_cli::archive))]
-    Archive(#[from] livtet_plugins::archive::error::ArchiveError),
-
     #[error("Passphrase is empty; refusing to derive a 32-byte key from nothing")]
     #[diagnostic(code(livtet_cli::keyring_recover_empty_passphrase))]
     EmptyPassphrase,

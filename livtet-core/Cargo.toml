@@ -16,10 +16,9 @@ async-trait.workspace = true
 blake3 = "1.8"
 camino = { workspace = true }
 camino-tempfile = { workspace = true }
-dirs = "6"
+dirs = { workspace = true }
 fake = { workspace = true, optional = true }
 fs-err = { workspace = true }
-livtet-covers = { workspace = true }
 livtet-data = { workspace = true }
 livtet-search = { workspace = true }
 livtet-types = { workspace = true }
@@ -35,7 +34,7 @@ thiserror = { workspace = true }
 time = { version = "0.3", features = ["serde", "local-offset"] }
 tokio = { workspace = true }
 tracing = { workspace = true }
-ulid.workspace = true
+ulid = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["full"] }
