@@ -70,8 +70,8 @@ impl SharedState {
         SharedState { pool, db_path }
     }
 
-    pub async fn connect(database_url: &str) -> Result<SharedState, sqlx::Error> {
-        let pool = connect_with_migrations(database_url, [Kind::Business, Kind::Client]).await?;
+    pub async fn connect(database_url: &str, kinds: &[Kind]) -> Result<SharedState, sqlx::Error> {
+        let pool = connect_with_migrations(database_url, kinds).await?;
 
         let db_path = if database_url.starts_with("sqlite:") {
             database_url
@@ -92,29 +92,6 @@ impl SharedState {
         self.pool.close().await;
         Ok(())
     }
-}
-
-/// Apply SQLite database-level performance optimizations.
-///
-/// Applies these optimizations:
-/// - `journal_mode = WAL` - Write-Ahead Logging for better concurrency
-/// - `synchronous = NORMAL` - Balance between speed and safety
-/// - `temp_store = MEMORY` - Store temp indices/tables in memory
-/// - `auto_vacuum = INCREMENTAL` - Reduce fragmentation over time
-pub async fn apply_optimizations(pool: &DatabaseConnection) -> Result<(), sqlx::Error> {
-    sqlx::query(AssertSqlSafe("PRAGMA journal_mode = WAL"))
-        .execute(pool)
-        .await?;
-    sqlx::query(AssertSqlSafe("PRAGMA synchronous = NORMAL"))
-        .execute(pool)
-        .await?;
-    sqlx::query(AssertSqlSafe("PRAGMA temp_store = MEMORY"))
-        .execute(pool)
-        .await?;
-    sqlx::query(AssertSqlSafe("PRAGMA auto_vacuum = INCREMENTAL"))
-        .execute(pool)
-        .await?;
-    Ok(())
 }
 
 pub fn init_state(state: SharedState) -> Result<(), CoreError> {
@@ -142,7 +119,7 @@ mod tests {
 
     #[tokio::test]
     async fn shared_state_connect_works() {
-        let state = SharedState::connect("sqlite::memory:").await;
+        let state = SharedState::connect("sqlite::memory:", &[Kind::Business]).await;
         assert!(state.is_ok());
     }
 
@@ -157,7 +134,9 @@ mod tests {
             assert!(is_initialized());
             return;
         }
-        let state = SharedState::connect("sqlite::memory:").await.unwrap();
+        let state = SharedState::connect("sqlite::memory:", &[Kind::Business])
+            .await
+            .unwrap();
         let result = init_state(state);
         assert!(result.is_ok());
 
@@ -174,8 +153,12 @@ mod tests {
         // guaranteed to fail, so we always assert the error
         // (the "first init succeeds" half is exercised by the
         // order-dependent `shared_state_init_and_get` case).
-        let state1 = SharedState::connect("sqlite::memory:").await.unwrap();
-        let state2 = SharedState::connect("sqlite::memory:").await.unwrap();
+        let state1 = SharedState::connect("sqlite::memory:", &[Kind::Business])
+            .await
+            .unwrap();
+        let state2 = SharedState::connect("sqlite::memory:", &[Kind::Business])
+            .await
+            .unwrap();
 
         let _ = init_state(state1);
         let result = init_state(state2);
@@ -184,7 +167,9 @@ mod tests {
 
     #[tokio::test]
     async fn optimize_and_close_works() {
-        let state = SharedState::connect("sqlite::memory:").await.unwrap();
+        let state = SharedState::connect("sqlite::memory:", &[Kind::Business])
+            .await
+            .unwrap();
         let result = state.optimize_and_close().await;
         assert!(result.is_ok());
     }

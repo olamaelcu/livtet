@@ -13,14 +13,13 @@ pub struct TestDb {
 }
 
 impl TestDb {
-    pub async fn new(kinds: Option<Vec<Kind>>) -> Result<Self, sqlx::Error> {
-        let kinds = kinds.unwrap_or_else(|| vec![Kind::Business]);
+    pub async fn new(kinds: &[Kind]) -> Result<Self, sqlx::Error> {
         let temp_dir = TempDir::new()
             .into_diagnostic()
             .map_err(|e| sqlx::Error::AnyDriverError(e.into()))?;
         let db_file = temp_dir.path().join("test.db");
         let db_path = db_file.as_os_str().to_string_lossy().to_string();
-        std::fs::write(&db_file, []).unwrap();
+        std::fs::write(&db_file, []).expect("Touching the file should work");
         let pool = connect_with_migrations(&db_path, kinds).await?;
 
         Ok(Self { pool, temp_dir })
