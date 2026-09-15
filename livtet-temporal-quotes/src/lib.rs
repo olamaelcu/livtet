@@ -1,5 +1,5 @@
-//! Literary quotation pool used by the FFI surface to render time-of-day
-//! greetings on the dashboard and empty-state fillers in library views.
+//! Literary quotation pool for time-of-day greetings and empty-state
+//! fillers in library views.
 //!
 //! The corpus lives at `data/quotes/` inside this crate. `greetings/<period>.txt`
 //! holds 4-line quote blocks (text / author / work / `===` separator) for each
@@ -103,7 +103,7 @@ impl Period {
 
 /// A literary greeting drawn from African American and African diaspora
 /// authors, chosen for the current time of day. Returned by
-/// `livtet_ffi::get_greeting`.
+/// [`pick_greeting`].
 #[derive(Debug, Clone)]
 pub struct Greeting {
     /// Short conversational label like "Good morning" — used as the iOS
@@ -118,8 +118,8 @@ pub struct Greeting {
 }
 
 /// An empty-state filler: a literary quotation without a time-of-day period
-/// or greeting label. Returned by `livtet_ffi::get_empty_state_quotation`
-/// and rendered into any list or view that has no rows.
+/// or greeting label. Returned by [`pick_empty`] and rendered into any
+/// list or view that has no rows.
 #[derive(Debug, Clone)]
 pub struct EmptyMessage {
     pub text: String,
@@ -237,7 +237,7 @@ fn leak_str(s: &str) -> &'static str {
 }
 
 /// Hash `(period, hour)` with `blake3` and reduce to a `usize` for index
-/// selection. `blake3` is already a dependency of this crate.
+/// selection.
 fn hash(period: Period, hour: u8) -> usize {
     let mut hasher = blake3::Hasher::new();
     hasher.update(period.as_file_key().as_bytes());

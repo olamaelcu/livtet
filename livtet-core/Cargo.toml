@@ -13,7 +13,6 @@ fake = ["dep:fake", "livtet-data/fake", "livtet-types/fake"]
 
 [dependencies]
 async-trait.workspace = true
-blake3 = "1.8"
 camino = { workspace = true }
 camino-tempfile = { workspace = true }
 dirs = { workspace = true }
@@ -31,7 +30,6 @@ specta = { workspace = true }
 strsim = "0.11"
 strum = { workspace = true }
 thiserror = { workspace = true }
-time = { version = "0.3", features = ["serde", "local-offset"] }
 tokio = { workspace = true }
 tracing = { workspace = true }
 ulid = { workspace = true }

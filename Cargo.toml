@@ -3,6 +3,7 @@ resolver = "3"
 members = [
   "livtet-core",
   "livtet-cli",
+  "livtet-temporal-quotes",
   "livtet-data",
   "livtet-search",
   "livtet-types",

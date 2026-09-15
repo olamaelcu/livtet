@@ -11,7 +11,6 @@ pub use livtet_data::{
 
 pub mod core;
 pub mod paths;
-pub mod quotes;
 #[cfg(feature = "fake")]
 pub mod seed;
 pub mod user_agent;

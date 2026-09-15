@@ -2218,7 +2218,6 @@ name = "livtet-core"
 version = "0.1.0"
 dependencies = [
  "async-trait",
- "blake3",
  "camino",
  "camino-tempfile",
  "dirs",
@@ -2236,7 +2235,6 @@ dependencies = [
  "strsim",
  "strum",
  "thiserror",
- "time",
  "tokio",
  "tracing",
  "ulid 3.0.0",
@@ -2289,6 +2287,14 @@ dependencies = [
  "time",
  "tokio",
  "tracing",
+]
+
+[[package]]
+name = "livtet-temporal-quotes"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "time",
 ]
 
 [[package]]
