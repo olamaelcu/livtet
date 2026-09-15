@@ -23,7 +23,7 @@ use livtet_data::entities::{
 use livtet_data::orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter};
 use tracing::debug;
 
-use crate::{AuthorLookup, EditionLookup, ResourceKind, ResourceLookup, WorkLookup};
+use crate::lookups::{AuthorLookup, EditionLookup, ResourceKind, ResourceLookup, WorkLookup};
 
 // ---------------------------------------------------------------------------
 // Work / Edition / Author — direct find_by_id.
