@@ -5,3 +5,7 @@ rust = "latest"
 [tasks.check-dupes]
 description = "Detect new copy-paste duplication (25+ shared lines per occurrence); gates on --fail-on new vs .nose/baseline.json. Smaller duplications are accepted as noise."
 run = "nose query . --mode syntax 'shared_lines>25' --baseline .nose/baseline.json --fail-on new --exclude 'target/**' --exclude '.worktrees/**' --format json > check-dupes.json"
+
+[tasks]
+cli = "cargo run -p livtet-cli"
+
