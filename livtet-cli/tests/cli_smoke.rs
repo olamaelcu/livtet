@@ -85,3 +85,106 @@ fn editions_list_piped_output_has_no_osc8() {
         .success()
         .stdout(predicate::str::contains("\x1b]8").not());
 }
+
+#[test]
+fn reindex_help_shows_force() {
+    cmd()
+        .args(["reindex", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("--force"))
+        .stdout(predicate::str::contains("--database"))
+        .stdout(predicate::str::contains("--index-dir"));
+}
+
+#[test]
+fn reindex_fresh_db_builds_index() {
+    let dir = camino_tempfile::tempdir().expect("tempdir");
+    let db = dir.path().join("test.db");
+    let idx = dir.path().join("search-index");
+
+    cmd()
+        .args([
+            "reindex",
+            "--database",
+            db.as_str(),
+            "--index-dir",
+            idx.as_str(),
+            "--yes",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Indexed"));
+    assert!(
+        idx.join("search_schema_version.json").is_file(),
+        "reindex must write the schema version sidecar"
+    );
+}
+
+#[test]
+fn reindex_noop_when_current() {
+    let dir = camino_tempfile::tempdir().expect("tempdir");
+    let db = dir.path().join("test.db");
+    let idx = dir.path().join("search-index");
+
+    cmd()
+        .args([
+            "reindex",
+            "--database",
+            db.as_str(),
+            "--index-dir",
+            idx.as_str(),
+            "--yes",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Indexed"));
+
+    // Second run without --force is a no-op.
+    cmd()
+        .args([
+            "reindex",
+            "--database",
+            db.as_str(),
+            "--index-dir",
+            idx.as_str(),
+            "--yes",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("already current"));
+}
+
+#[test]
+fn reindex_force_rebuilds_even_when_current() {
+    let dir = camino_tempfile::tempdir().expect("tempdir");
+    let db = dir.path().join("test.db");
+    let idx = dir.path().join("search-index");
+
+    cmd()
+        .args([
+            "reindex",
+            "--database",
+            db.as_str(),
+            "--index-dir",
+            idx.as_str(),
+            "--yes",
+        ])
+        .assert()
+        .success();
+
+    // --force rebuilds unconditionally.
+    cmd()
+        .args([
+            "reindex",
+            "--database",
+            db.as_str(),
+            "--index-dir",
+            idx.as_str(),
+            "--yes",
+            "--force",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Indexed"));
+}

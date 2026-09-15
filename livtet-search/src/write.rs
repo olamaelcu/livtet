@@ -3,6 +3,28 @@
 
 use std::collections::HashMap;
 
+/// Progress hook fired by [`SearchIndex::reindex_with_progress`] and
+/// [`SearchIndex::migrate_to_with_progress`]. Consumers (typically the
+/// CLI's `reindex` command) use this to drive an `indicatif` bar or
+/// spinner so the user has feedback during what can be a long rebuild.
+#[derive(Debug, Clone, Copy)]
+pub enum ReindexEvent {
+    /// Index dir is loaded and the DB is being queried.
+    Loading,
+    /// A batch of documents has been indexed.
+    ///
+    /// `done` is the count of edition + author documents committed so
+    /// far; `total` is the final count the loop will reach.
+    Indexing { done: u64, total: u64 },
+}
+
+impl ReindexEvent {
+    /// No-op unless the event carries concrete counts.
+    pub fn is_terminal(self) -> bool {
+        !matches!(self, ReindexEvent::Loading)
+    }
+}
+
 use livtet_data::orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter};
 use rayon::prelude::*;
 use tantivy::{Term, doc, schema::*};
@@ -24,6 +46,19 @@ impl SearchIndex {
     /// via `delete_all_documents()`. Author docs are added on top.
     #[tracing::instrument(level = "info", name = "search.reindex", skip_all)]
     pub async fn reindex(&self, db: &DatabaseConnection) -> Result<(), SearchError> {
+        self.reindex_with_progress(db, &mut |_| {}).await
+    }
+
+    /// Like [`SearchIndex::reindex`] but fires [`ReindexEvent`]s so
+    /// callers can drive a progress bar.
+    pub async fn reindex_with_progress<F>(
+        &self,
+        db: &DatabaseConnection,
+        on_event: &mut F,
+    ) -> Result<(), SearchError>
+    where
+        F: FnMut(ReindexEvent) + Send + Sync,
+    {
         let start = std::time::Instant::now();
         use livtet_data::entities::{
             authors::Entity as Authors, digital_inventory::Entity as DigitalInventory,
@@ -702,8 +737,13 @@ impl SearchIndex {
         // each one out of the `Vec`. `edition_docs` is no longer
         // needed after this loop and is dropped at the end of the
         // scope.
+        let total = edition_docs.len() as u64 + all_authors.len() as u64;
+        on_event(ReindexEvent::Indexing { done: 0, total });
+        let mut done = 0u64;
         for d in edition_docs {
             writer.add_document(d)?;
+            done += 1;
+            on_event(ReindexEvent::Indexing { done, total });
         }
 
         // Authors get their own documents, indexed with `kind = "author"`.
@@ -716,6 +756,8 @@ impl SearchIndex {
             d.add_text(title_sort_field, author.name.to_lowercase());
             d.add_text(primary_author_sort_field, author.name.to_lowercase());
             writer.add_document(d)?;
+            done += 1;
+            on_event(ReindexEvent::Indexing { done, total });
         }
 
         writer.commit()?;

@@ -1,6 +1,7 @@
 pub mod cli;
 pub mod editions;
 pub mod error;
+pub mod reindex;
 
 #[cfg(feature = "fake")]
 pub mod seed;

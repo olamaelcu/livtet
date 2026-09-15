@@ -50,7 +50,7 @@ use entities::{
     series::{ActiveModel as SeriesActiveModel, Entity as SeriesEntity},
     series_entries::{ActiveModel as SeriesEntryActiveModel, Entity as SeriesEntriesEntity},
     subjects::{ActiveModel as SubjectActiveModel, Entity as SubjectsEntity},
-    tags::{ActiveModel as TagActiveModel, Entity as TagsEntity},
+    tags::{ActiveModel as TagActiveModel, Column as TagColumn, Entity as TagsEntity},
     work_authors::{ActiveModel as WorkAuthorActiveModel, Entity as WorkAuthorsEntity},
     work_genres::{ActiveModel as WorkGenreActiveModel, Entity as WorkGenresEntity},
     work_identifiers::{ActiveModel as WorkIdentifierActiveModel, Entity as WorkIdentifiersEntity},
@@ -65,7 +65,8 @@ use livtet_types::{
     WorkStatus,
 };
 use sea_orm::{
-    ActiveModelTrait, DatabaseConnection, DatabaseTransaction, EntityTrait, Set, TransactionTrait,
+    ActiveModelTrait, ColumnTrait, DatabaseConnection, DatabaseTransaction, EntityTrait, QueryFilter,
+    Set, TransactionTrait,
 };
 use serde::{Deserialize, Serialize};
 use time::{Duration, OffsetDateTime, PrimitiveDateTime};
@@ -315,6 +316,14 @@ async fn seed_tags(
     ];
     let mut ids = Vec::new();
     for name in tag_names.iter() {
+        let existing = TagsEntity::find()
+            .filter(TagColumn::Name.eq(*name))
+            .one(pool)
+            .await?;
+        if let Some(existing) = existing {
+            ids.push(existing.id);
+            continue;
+        }
         let tag_id = DbId::new();
         let model = TagActiveModel {
             id: Set(tag_id),
@@ -1131,19 +1140,23 @@ async fn add_reading_sessions(
     let source_ids: Vec<DbId> = sources.iter().map(|s| dbid_from_ulid(s.ulid())).collect();
 
     for source in sources.iter() {
-        let model = ReadingSourceActiveModel {
-            id: Set(dbid_from_ulid(source.ulid())),
-            urn: Set(source.urn()),
-            name: Set(source.name().to_string()),
-            emoji: Set(Some(source.emoji().to_string())),
-            color: Set(Some(source.color().to_string())),
-            attributes: Set(Some(serde_json::Value::Null)),
-            plugin_id: Set(None),
-            deleted_at: Set(None),
-            created_at: Set(timestamp),
-            updated_at: Set(None),
-        };
-        ReadingSourcesEntity::insert(model).exec(pool).await?;
+        let source_id = dbid_from_ulid(source.ulid());
+        let existing = ReadingSourcesEntity::find_by_id(source_id).one(pool).await?;
+        if existing.is_none() {
+            let model = ReadingSourceActiveModel {
+                id: Set(source_id),
+                urn: Set(source.urn()),
+                name: Set(source.name().to_string()),
+                emoji: Set(Some(source.emoji().to_string())),
+                color: Set(Some(source.color().to_string())),
+                attributes: Set(Some(serde_json::Value::Null)),
+                plugin_id: Set(None),
+                deleted_at: Set(None),
+                created_at: Set(timestamp),
+                updated_at: Set(None),
+            };
+            ReadingSourcesEntity::insert(model).exec(pool).await?;
+        }
     }
 
     for ws in work_with_status {

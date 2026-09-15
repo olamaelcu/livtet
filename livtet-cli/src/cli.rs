@@ -15,6 +15,11 @@ pub enum Command {
     /// Only available in builds with the `fake` feature enabled.
     #[cfg(feature = "fake")]
     Seed(crate::seed::SeedArgs),
+    /// Rebuild the Tantivy search index from the local SQLite database.
+    /// No-op when the on-disk schema is current unless `--force`.
+    /// Destructive by design — pair with `--yes` and custom `--database`
+    /// / `--index-dir` to target a non-production database safely.
+    Reindex(crate::reindex::ReindexArgs),
     /// Print canonical app-data directories for the current platform.
     /// Uses the same resolution as every other livtet binary (Tauri
     /// parent, plugin host). Useful in shell scripts and for
@@ -36,6 +41,13 @@ impl Command {
         match self {
             #[cfg(feature = "fake")]
             Command::Seed(args) => {
+                let rt =
+                    tokio::runtime::Runtime::new().map_err(|e| crate::CliError::Operation {
+                        message: format!("tokio runtime: {e}"),
+                    })?;
+                rt.block_on(args.run())
+            }
+            Command::Reindex(args) => {
                 let rt =
                     tokio::runtime::Runtime::new().map_err(|e| crate::CliError::Operation {
                         message: format!("tokio runtime: {e}"),

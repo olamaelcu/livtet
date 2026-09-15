@@ -51,3 +51,4 @@ pub use schema::{
 pub use search::{WorkFiltersQuery, WorkFiltersResolved};
 pub use tantivy::query::{AllQuery, BooleanQuery, Query, TermQuery};
 pub use user_input_translator::user_input_ast_to_query;
+pub use write::ReindexEvent;

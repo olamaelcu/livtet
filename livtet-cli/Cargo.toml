@@ -27,6 +27,7 @@ camino = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
 inquire = { version = "0.9", features = ["editor"] }
+indicatif = "0.18"
 tabled = { version = "0.20", features = ["derive"] }
 
 [dev-dependencies]

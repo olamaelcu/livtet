@@ -24,7 +24,7 @@ pub fn default_index_dir() -> crate::Result<Utf8PathBuf> {
     let dir = livtet_core::paths::data_dir().ok_or_else(|| CliError::Operation {
         message: "Could not resolve the livtet data directory".to_string(),
     })?;
-    Ok(dir.join("livtet-search-index"))
+    Ok(dir.join("search-index"))
 }
 
 #[derive(Args, Debug)]

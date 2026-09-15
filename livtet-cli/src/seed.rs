@@ -7,6 +7,7 @@
 
 use camino::Utf8PathBuf;
 use clap::Parser;
+use livtet_data::migration::{Migrator, MigratorTrait};
 
 use crate::Result;
 
@@ -56,6 +57,13 @@ impl SeedArgs {
             .await
             .map_err(|e| crate::CliError::Operation {
                 message: format!("Failed to connect to {db_url}: {e}"),
+            })?;
+
+        // Run migrations to ensure tables exist before seeding.
+        Migrator::up(&sea_conn, None)
+            .await
+            .map_err(|e| crate::CliError::Operation {
+                message: format!("Failed to migrate {db_path}: {e}"),
             })?;
 
         let config = livtet_core::seed::SeedConfig {

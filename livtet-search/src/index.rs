@@ -213,6 +213,102 @@ impl SearchIndex {
         Ok(prev_version)
     }
 
+    /// Progress-aware variant of [`SearchIndex::migrate_to`].
+    ///
+    /// Same semantics — no-op when on-disk version already equals
+    /// [`SCHEMA_VERSION`], rebuild from scratch when older, hard-error
+    /// when newer — but fires [`ReindexEvent`]s so the CLI can drive
+    /// an `indicatif` bar.
+    pub async fn migrate_to_with_progress<F>(
+        index_dir: &Utf8Path,
+        db: &DatabaseConnection,
+        on_event: &mut F,
+    ) -> Result<u32, SearchError>
+    where
+        F: FnMut(crate::write::ReindexEvent) + Send + Sync,
+    {
+        use crate::write::ReindexEvent;
+        use fs_err as fs;
+
+        fs::create_dir_all(index_dir).ok();
+        let meta_path = index_dir.join("search_schema_version.json");
+        let prev_version = if meta_path.is_file() {
+            let raw = fs::read_to_string(&meta_path).map_err(|e| {
+                SearchError::Tantivy(tantivy::TantivyError::InvalidArgument(format!(
+                    "cannot read search_schema_version.json at {meta_path}: {e}"
+                )))
+            })?;
+            let parsed: serde_json::Value = serde_json::from_str(&raw).map_err(|e| {
+                SearchError::Tantivy(tantivy::TantivyError::InvalidArgument(format!(
+                    "malformed search_schema_version.json at {meta_path}: {e}"
+                )))
+            })?;
+            parsed
+                .get("schema_version")
+                .and_then(|v| v.as_u64())
+                .map(|v| v as u32)
+                .unwrap_or(1)
+        } else {
+            1
+        };
+        if prev_version > SCHEMA_VERSION {
+            return Err(SearchError::SchemaVersionMismatch {
+                found: prev_version,
+                expected: SCHEMA_VERSION,
+            });
+        }
+
+        if prev_version == SCHEMA_VERSION {
+            on_event(ReindexEvent::Indexing { done: 0, total: 0 });
+            tracing::debug!(
+                prev_version,
+                "search index schema is current, nothing to migrate"
+            );
+            return Ok(prev_version);
+        }
+
+        tracing::info!(
+            prev_version,
+            target = SCHEMA_VERSION,
+            "migrating search index schema"
+        );
+
+        let schema = crate::schema::build_schema();
+        let dir = tantivy::directory::MmapDirectory::open(index_dir)
+            .map_err(|e| tantivy::TantivyError::InvalidArgument(e.to_string()))?;
+        let index = tantivy::Index::open_or_create(dir, schema.clone())?;
+        let writer = index.writer(50_000_000)?;
+        let reader = index
+            .reader_builder()
+            .reload_policy(tantivy::ReloadPolicy::OnCommitWithDelay)
+            .try_into()?;
+        let label_resolver = crate::label_resolver::LabelResolver::new();
+
+        let temp = Self {
+            index,
+            reader,
+            writer: std::sync::Arc::new(tokio::sync::RwLock::new(writer)),
+            schema,
+            label_resolver,
+        };
+        on_event(ReindexEvent::Loading);
+        temp.reindex_with_progress(db, on_event).await?;
+
+        let meta = serde_json::json!({ "schema_version": SCHEMA_VERSION });
+        fs::write(&meta_path, meta.to_string() + "\n").map_err(|e| {
+            SearchError::Tantivy(tantivy::TantivyError::InvalidArgument(format!(
+                "cannot write search_schema_version.json at {meta_path}: {e}"
+            )))
+        })?;
+
+        tracing::info!(
+            prev_version,
+            target = SCHEMA_VERSION,
+            "search index schema migration complete"
+        );
+        Ok(prev_version)
+    }
+
     /// A reference to the underlying Tantivy [`Index`]. Exposed for
     /// building parsers and queries outside of [`SearchIndex`].
     pub fn index(&self) -> &Index {
