@@ -35,7 +35,7 @@ fs-err = { version = "3", features = ["tokio"] }
 dirs = "7"
 
 # Extensions
-fake = { version = "5.1", features = ["ulid", "time", "url"] }
+fake = { version = "5.1", features = ["ulid", "time", "url", "derive"] }
 miette = "7"
 mutants = "0"
 paste = "1"

@@ -10,7 +10,7 @@ independent = true
 [features]
 default = []
 # Enables the database seeding module (moved from livtet-core's `fake`-gated seed):
-fake = ["dep:fake", "dep:rand"]
+fake = ["dep:fake", "dep:rand", "livtet-types/fake"]
 
 [dependencies]
 sea-orm = { version = "2.0", features = [

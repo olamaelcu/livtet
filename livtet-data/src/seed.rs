@@ -65,7 +65,7 @@ use livtet_types::{
     WorkStatus,
 };
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, DatabaseConnection, DatabaseTransaction, EntityTrait, QueryFilter,
+    ActiveModelTrait, ColumnTrait, DatabaseConnection, DatabaseTransaction, EntityTrait, PaginatorTrait, QueryFilter,
     Set, TransactionTrait,
 };
 use serde::{Deserialize, Serialize};
@@ -343,6 +343,11 @@ async fn generate_works_and_editions(
     timestamp: PrimitiveDateTime,
     result: &mut SeedResult,
 ) -> Result<(Vec<entities::works::Model>, Vec<entities::editions::Model>), sea_orm::DbErr> {
+    let existing_count = WorksEntity::find().count(pool).await? as u32;
+    if existing_count >= config.num_works {
+        return Ok((Vec::new(), Vec::new()));
+    }
+
     let mut works = Vec::new();
     let mut editions = Vec::new();
 
@@ -437,10 +442,15 @@ async fn seed_authors(
     num_works: u32,
     result: &mut SeedResult,
 ) -> Result<Vec<DbId>, sea_orm::DbErr> {
-    let mut ids = Vec::new();
+    let existing_count = AuthorsEntity::find().count(pool).await? as u32;
     let target_authors = (num_works as f64 * 1.5).ceil() as u32;
-
-    for _ in 0..target_authors {
+    let mut ids = Vec::new();
+    if existing_count >= target_authors {
+        let existing: Vec<entities::authors::Model> = AuthorsEntity::find().all(pool).await?;
+        return Ok(existing.into_iter().map(|m| m.id).collect());
+    }
+    let to_create = target_authors - existing_count;
+    for _ in 0..to_create {
         let author_id = DbId::new();
         let name: String = fake::faker::name::en::Name().fake();
         let model = AuthorActiveModel {
@@ -460,10 +470,15 @@ async fn seed_publishers(
     timestamp: PrimitiveDateTime,
     result: &mut SeedResult,
 ) -> Result<Vec<DbId>, sea_orm::DbErr> {
-    let mut ids = Vec::new();
+    let existing_count = PublishersEntity::find().count(pool).await? as u32;
     let target_publishers = (num_works as f64 * 0.4).ceil() as u32;
-
-    for _ in 0..target_publishers.max(1) {
+    let mut ids = Vec::new();
+    if existing_count >= target_publishers.max(1) {
+        let existing: Vec<entities::publishers::Model> = PublishersEntity::find().all(pool).await?;
+        return Ok(existing.into_iter().map(|m| m.id).collect());
+    }
+    let to_create = target_publishers.max(1) - existing_count;
+    for _ in 0..to_create {
         let publisher_id = DbId::new();
         let name: String = fake::faker::company::en::CompanyName().fake();
         let model = PublisherActiveModel {
