@@ -40,46 +40,61 @@ impl Command {
                     })?;
                 rt.block_on(args.run())
             }
-            Command::Path(args) => run_path(args),
+            Command::Path(args) => args.run(),
         }
     }
 }
 
-fn run_path(args: PathArgs) -> Result<()> {
-    use livtet_core::paths;
-    let kind = args.kind.to_ascii_lowercase();
-    let print = |label: &str, p: &str| println!("{label:<8} {p}");
-    match kind.as_str() {
-        "all" => {
-            print("bundle", livtet_core::paths::BUNDLE_ID);
-            if let Some(d) = paths::data_dir() {
-                print("data", d.as_str());
-            }
-            if let Some(c) = paths::config_dir() {
-                print("config", c.as_str());
-            }
-            print("logs", paths::logs_dir().as_str());
+#[derive(tabled::Tabled)]
+struct PathRow {
+    #[tabled(rename = "KIND")]
+    kind: &'static str,
+    #[tabled(rename = "PATH")]
+    path: String,
+}
+
+impl PathArgs {
+    pub fn run(self) -> Result<()> {
+        use tabled::settings::Style;
+        let rows = self.rows()?;
+        if !rows.is_empty() {
+            println!("{}", tabled::Table::new(rows).with(Style::modern()));
         }
-        "bundle" => println!("{}", livtet_core::paths::BUNDLE_ID),
-        "data" => {
-            if let Some(d) = paths::data_dir() {
-                println!("{}", d);
+        Ok(())
+    }
+
+    fn rows(self) -> Result<Vec<PathRow>> {
+        use livtet_core::paths;
+        let kind = self.kind.to_ascii_lowercase();
+        let row = |kind: &'static str, path: String| PathRow { kind, path };
+        match kind.as_str() {
+            "all" => {
+                let mut rows = vec![row("bundle", paths::BUNDLE_ID.to_string())];
+                if let Some(d) = paths::data_dir() {
+                    rows.push(row("data", d.to_string()));
+                }
+                if let Some(c) = paths::config_dir() {
+                    rows.push(row("config", c.to_string()));
+                }
+                rows.push(row("logs", paths::logs_dir().to_string()));
+                Ok(rows)
             }
-        }
-        "config" => {
-            if let Some(c) = paths::config_dir() {
-                println!("{}", c);
-            }
-        }
-        "logs" => println!("{}", paths::logs_dir()),
-        _ => {
-            return Err(crate::CliError::Operation {
+            "bundle" => Ok(vec![row("bundle", paths::BUNDLE_ID.to_string())]),
+            "data" => Ok(paths::data_dir()
+                .map(|d| row("data", d.to_string()))
+                .into_iter()
+                .collect()),
+            "config" => Ok(paths::config_dir()
+                .map(|c| row("config", c.to_string()))
+                .into_iter()
+                .collect()),
+            "logs" => Ok(vec![row("logs", paths::logs_dir().to_string())]),
+            _ => Err(crate::CliError::Operation {
                 message: format!(
                     "unknown path kind `{kind}`; expected one of: \
                      all, bundle, data, config, logs"
                 ),
-            });
+            }),
         }
     }
-    Ok(())
 }
