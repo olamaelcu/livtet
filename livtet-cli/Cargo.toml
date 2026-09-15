@@ -14,6 +14,8 @@ fake = []
 [dependencies]
 livtet-core = { workspace = true, features = ["fake"] }
 livtet-data = { workspace = true }
+livtet-search = { workspace = true }
+livtet-types = { workspace = true }
 clap = { version = "4", features = ["derive", "env"] }
 miette = { workspace = true }
 thiserror = { workspace = true }

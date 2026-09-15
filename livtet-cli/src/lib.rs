@@ -1,4 +1,5 @@
 pub mod cli;
+pub mod editions;
 pub mod error;
 
 #[cfg(feature = "fake")]

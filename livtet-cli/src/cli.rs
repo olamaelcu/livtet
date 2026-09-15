@@ -20,6 +20,8 @@ pub enum Command {
     /// parent, plugin host). Useful in shell scripts and for
     /// debugging path-related issues.
     Path(PathArgs),
+    /// Query editions (index-backed list/search, batched get).
+    Editions(crate::editions::EditionsArgs),
 }
 
 #[derive(Args, Debug)]
@@ -41,6 +43,13 @@ impl Command {
                 rt.block_on(args.run())
             }
             Command::Path(args) => args.run(),
+            Command::Editions(args) => {
+                let rt =
+                    tokio::runtime::Runtime::new().map_err(|e| crate::CliError::Operation {
+                        message: format!("tokio runtime: {e}"),
+                    })?;
+                rt.block_on(args.run())
+            }
         }
     }
 }
