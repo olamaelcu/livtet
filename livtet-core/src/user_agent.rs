@@ -26,3 +26,53 @@ pub fn format_user_agent(
     let mode = if is_debug { " +debug" } else { "" };
     format!("{app_name}/{version} ({platform}; {os}){mode} {KB_URL}")
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn release_format_matches_doc_example() {
+        assert_eq!(
+            format_user_agent("livtet", "0.1.0", "desktop", "macos", false),
+            "livtet/0.1.0 (desktop; macos) https://livtet.olamaelcu.net/kb/user-agent"
+        );
+    }
+
+    #[test]
+    fn debug_format_inserts_debug_flag_before_url() {
+        assert_eq!(
+            format_user_agent("livtet", "0.1.0", "mobile", "ios", true),
+            "livtet/0.1.0 (mobile; ios) +debug https://livtet.olamaelcu.net/kb/user-agent"
+        );
+    }
+
+    #[test]
+    fn release_has_no_debug_flag() {
+        let ua = format_user_agent("livtet", "0.1.0", "cli", "linux", false);
+        assert!(!ua.contains("+debug"), "{ua}");
+    }
+
+    #[test]
+    fn always_ends_with_kb_url() {
+        for ua in [
+            format_user_agent("livtet", "0.1.0", "desktop", "macos", false),
+            format_user_agent("livtet", "0.1.0", "mobile", "ios", true),
+            format_user_agent("other", "9.9.9", "cli", "windows", true),
+        ] {
+            assert!(ua.ends_with(KB_URL), "{ua}");
+        }
+    }
+
+    #[test]
+    fn passes_through_version_platform_and_os() {
+        let ua = format_user_agent("livtet", "2.3.4", "cli", "linux", false);
+        assert!(ua.starts_with("livtet/2.3.4 (cli; linux)"), "{ua}");
+    }
+
+    #[test]
+    fn empty_fields_do_not_panic() {
+        let ua = format_user_agent("", "", "", "", false);
+        assert_eq!(ua, format!("/ (; ) {KB_URL}"));
+    }
+}
