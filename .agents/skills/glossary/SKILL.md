@@ -28,7 +28,7 @@ Limit missing-term proposals to about ten useful candidates.
 ## Entries
 
 Use a bold term followed by a short definition. Expand abbreviations on first
-use. Put each term in one section: Data, Domain, Sync & Plugins, or Interfaces.
+use. Put each term in one section: Data, Domain, or Interfaces.
 Place foundational terms before terms that depend on them, not alphabetically.
 
 Link to the record that explains the concept. Replace stale definitions in
