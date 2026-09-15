@@ -40,11 +40,10 @@ pub enum Constraint {
     EditionIdentifiersEdition,
     EditionIdentifiersIdentifier,
     EditionGroupIdentifiersGroup,
-    EditionGroupIdentifiersIdentifier,
     SeriesEntriesSeries,
     SeriesEntriesEdition,
 
-    // ── m0003_inventory_loans ──────────────────────────────────────
+    // ── m0004_inventory_loans ──────────────────────────────────────
     OwnedEditionsEdition,
     OwnedEditionsCondition,
     LoanEntityIdentifiersEntity,
@@ -52,9 +51,11 @@ pub enum Constraint {
     EditionsLoansLoan,
     EditionsLoansOwned,
     DigitalInventoryEdition,
+
+    // ── m0009_edition_specific_covers ──────────────────────────────
     EditionSpecificCoversEdition,
 
-    // ── m0004_reading_annotations ──────────────────────────────────
+    // ── m0005_reading_annotations ──────────────────────────────────
     AnnotationsEdition,
     ReadingListBookList,
     ReadingListBookEdition,
@@ -62,12 +63,7 @@ pub enum Constraint {
     ReadingProgressFormat,
     WorkStatusWork,
 
-    // ── m0005_plugins_devices ──────────────────────────────────────
-    PairedDevicesType,
-    PendingPairingsDeviceType,
-    PendingPairingsStatus,
-
-    // ── m0009_edition_files ───────────────────────────────────────
+    // ── m0010_edition_files ───────────────────────────────────────
     EditionFilesEdition,
 }
 
@@ -106,11 +102,10 @@ impl Constraint {
             Self::EditionIdentifiersEdition => "Referenced edition does not exist",
             Self::EditionIdentifiersIdentifier => "Referenced identifier does not exist",
             Self::EditionGroupIdentifiersGroup => "Referenced edition group does not exist",
-            Self::EditionGroupIdentifiersIdentifier => "Referenced identifier does not exist",
             Self::SeriesEntriesSeries => "Referenced series does not exist",
             Self::SeriesEntriesEdition => "Referenced edition does not exist",
 
-            // ── m0003_inventory_loans ──────────────────────────────
+            // ── m0004_inventory_loans ──────────────────────────────
             Self::OwnedEditionsEdition => "Referenced edition does not exist",
             Self::OwnedEditionsCondition => "Referenced book condition does not exist",
             Self::LoanEntityIdentifiersEntity => "Referenced loan entity does not exist",
@@ -118,9 +113,11 @@ impl Constraint {
             Self::EditionsLoansLoan => "Referenced loan entity does not exist",
             Self::EditionsLoansOwned => "Referenced owned edition does not exist",
             Self::DigitalInventoryEdition => "Referenced edition does not exist",
+
+            // ── m0009_edition_specific_covers ──────────────────────
             Self::EditionSpecificCoversEdition => "Referenced edition does not exist",
 
-            // ── m0004_reading_annotations ──────────────────────────
+            // ── m0005_reading_annotations ──────────────────────────
             Self::AnnotationsEdition => "Referenced edition does not exist",
             Self::ReadingListBookList => "Referenced reading list does not exist",
             Self::ReadingListBookEdition => "Referenced edition does not exist",
@@ -128,12 +125,7 @@ impl Constraint {
             Self::ReadingProgressFormat => "Referenced format does not exist",
             Self::WorkStatusWork => "Referenced work does not exist",
 
-            // ── m0005_plugins_devices ──────────────────────────────
-            Self::PairedDevicesType => "Referenced device type does not exist",
-            Self::PendingPairingsDeviceType => "Referenced device type does not exist",
-            Self::PendingPairingsStatus => "Referenced pairing status does not exist",
-
-            // ── m0009_edition_files ────────────────────────────────
+            // ── m0010_edition_files ────────────────────────────────
             Self::EditionFilesEdition => "Referenced edition does not exist",
         }
     }

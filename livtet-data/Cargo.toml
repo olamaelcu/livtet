@@ -9,13 +9,6 @@ independent = true
 
 [features]
 default = []
-# Always compiled; these exist solely so existing consumer `features = [...]`
-# lists keep resolving:
-server = []
-client = []
-core = []
-backup = []
-plugin = []
 # Enables the database seeding module (moved from livtet-core's `fake`-gated seed):
 fake = ["dep:fake", "dep:rand"]
 

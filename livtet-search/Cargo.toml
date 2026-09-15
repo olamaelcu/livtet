@@ -10,7 +10,7 @@ independent = true
 
 [dependencies]
 tantivy = "0.26"
-livtet-data = { workspace = true, features = ["server"] }
+livtet-data = { workspace = true }
 livtet-types = { workspace = true, features = ["search"] }
 thiserror.workspace = true
 tracing.workspace = true
@@ -27,7 +27,7 @@ fs-err.workspace = true
 camino-tempfile = { workspace = true }
 
 [dev-dependencies]
-livtet-data = { workspace = true, features = ["server"] }
+livtet-data = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 serde_json.workspace = true
 mutants = { workspace = true }

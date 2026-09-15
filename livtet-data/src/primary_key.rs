@@ -31,7 +31,7 @@ pub enum PrimaryKey {
     EditionIdentifiers,
     SeriesEntries,
 
-    // ── m0008_edition_groups ───────────────────────────────────────────
+    // ── m0003_junctions (edition_group_identifiers) ────────────────────
     EditionGroupIdentifiers,
 
     // ── m0005_reading_annotations ──────────────────────────────────
@@ -59,7 +59,7 @@ impl PrimaryKey {
             Self::EditionIdentifiers => "Duplicate edition-identifier assignment",
             Self::SeriesEntries => "Duplicate series entry",
 
-            // ── m0008_edition_groups ──────────────────────────────
+            // ── m0003_junctions (edition_group_identifiers) ───────────
             Self::EditionGroupIdentifiers => "Duplicate edition-group-identifier assignment",
 
             // ── m0005_reading_annotations ──────────────────────────
@@ -106,7 +106,7 @@ impl PrimaryKey {
             Self::EditionIdentifiers => &["pk_edition_identifiers", "edition_identifiers."],
             Self::SeriesEntries => &["pk_series_entries", "series_entries."],
 
-            // ── m0008_edition_groups ──────────────────────────────
+            // ── m0003_junctions (edition_group_identifiers) ───────────
             Self::EditionGroupIdentifiers => {
                 &["pk_edition_group_identifiers", "edition_group_identifiers."]
             }
