@@ -1,23 +1,9 @@
-use camino::Utf8PathBuf;
 use clap::{Args, Parser, Subcommand};
 
 use crate::Result;
 
-/// How to handle passphrase prompting when generating a new key.
-///
-/// `Enabled` is the default — the CLI prompts for a passphrase
-/// interactively. `Disabled` skips passphrase protection entirely.
-/// This enum leaves room for future modes like `FromStdin` or
-/// `FromEnv` without breaking the CLI flag.
-#[derive(clap::ValueEnum, Clone, Debug, Default, PartialEq, Eq)]
-pub enum PassphraseMode {
-    #[default]
-    Enabled,
-    Disabled,
-}
-
 #[derive(Parser, Debug)]
-#[command(name = "livtet", about = "Livtet plugin manager CLI", version)]
+#[command(name = "livtet", about = "Livtet CLI", version)]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Command,
@@ -96,90 +82,4 @@ fn run_path(args: PathArgs) -> Result<()> {
         }
     }
     Ok(())
-}
-
-#[derive(Args, Debug)]
-pub struct RepoArgs {
-    #[command(subcommand)]
-    pub command: RepoCommand,
-}
-
-#[derive(Subcommand, Debug)]
-pub enum RepoCommand {
-    Init {
-        /// Directory the new repository will be created in.
-        #[arg(long)]
-        repo_dir: Utf8PathBuf,
-        /// Logical name for the repository (e.g. `olamaelcu`).
-        /// Optional when `--interactive` is set.
-        #[arg(long)]
-        name: Option<String>,
-        /// Base URL for the repository.
-        /// Optional when `--interactive` is set.
-        #[arg(long)]
-        url: Option<String>,
-        /// SHA-256 fingerprint of the repository's signing key.
-        /// Optional when `--interactive` is set.
-        #[arg(long)]
-        key_fingerprint: Option<String>,
-        /// Optional label of the local signing key pair.
-        #[arg(long)]
-        key_label: Option<String>,
-        /// Interactive mode: prompt for missing fields with
-        /// `inquire`. Non-interactive callers see no behavioral
-        /// change.
-        #[arg(long)]
-        interactive: bool,
-    },
-    Add {
-        #[arg(long)]
-        url: String,
-    },
-    ConfirmAdd {
-        #[arg(long)]
-        url: String,
-    },
-    Remove {
-        #[arg(long)]
-        name_or_url: String,
-    },
-    List {
-        #[arg(long)]
-        json: bool,
-    },
-    Update {
-        #[arg(long)]
-        name_or_url: String,
-    },
-    ConfirmUpdate {
-        #[arg(long)]
-        name_or_url: String,
-    },
-    Keygen {
-        #[arg(long)]
-        name: String,
-        /// How to handle passphrase prompting when generating the key.
-        /// `enabled` (default) prompts for a passphrase interactively;
-        /// `disabled` stores the key unencrypted.
-        #[arg(long, value_enum, default_value_t = PassphraseMode::default())]
-        passphrase: PassphraseMode,
-    },
-    Publish {
-        #[arg(long)]
-        repo_dir: Utf8PathBuf,
-        #[arg(long)]
-        plugin: Utf8PathBuf,
-    },
-    Sign {
-        #[arg(long)]
-        repo_dir: Utf8PathBuf,
-    },
-    Unpublish {
-        #[arg(long)]
-        repo_dir: Utf8PathBuf,
-        #[arg(long)]
-        plugin: String,
-        #[arg(long)]
-        version: Option<String>,
-    },
 }

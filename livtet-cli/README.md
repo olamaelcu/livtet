@@ -1,10 +1,11 @@
 # livtet-cli
 
-The `livtet-cli` developer tool. Headless command-line access to plugin signing, install/inspect, and other host operations that don't need the desktop GUI.
+Lean developer CLI: `seed` (with `fake` feature) and `path` only.
 
-## What It Is
+## Commands
 
-A `clap`-driven binary that wraps the same library functions the Tauri app uses: sign a plugin archive, verify a signature, install a plugin into a target install root, dump a manifest, generate keys. The CLI exists so plugin authors and CI pipelines can exercise the plugin toolchain without booting the desktop app. It links against the same `livtet-plugins` core the GUI uses, so the CLI is the canonical reference for what the install lifecycle does.
+- `livtet seed [--works N] [--database PATH] [--yes]` — populate local SQLite with demo data (`fake` builds only).
+- `livtet path [all|bundle|data|config|logs]` — print canonical app-data directories.
 
 ## Build & Test
 

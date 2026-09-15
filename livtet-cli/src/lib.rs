@@ -1,6 +1,5 @@
 pub mod cli;
 pub mod error;
-pub mod output;
 
 #[cfg(feature = "fake")]
 pub mod seed;

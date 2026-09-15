@@ -41,8 +41,8 @@ impl SeedArgs {
             ))
             .with_default(false)
             .prompt()
-            .map_err(|e| crate::CliError::InteractiveAborted {
-                message: e.to_string(),
+            .map_err(|e| crate::CliError::Operation {
+                message: format!("confirmation prompt failed: {e}"),
             })?;
             if !confirmed {
                 return Err(crate::CliError::Operation {
