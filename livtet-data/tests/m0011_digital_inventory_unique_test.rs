@@ -12,7 +12,7 @@
 
 use livtet_data::entities::{digital_inventory, editions, works};
 use livtet_data::orm::{ActiveModelTrait, DatabaseConnection, Set};
-use livtet_data::TestDb;
+use livtet_data::{Kind, TestDb};
 use livtet_types::DbId;
 use time::PrimitiveDateTime;
 
@@ -77,7 +77,7 @@ fn digital_inventory_row(
 /// A second row referencing the same edition must be rejected.
 #[tokio::test]
 async fn digital_inventory_edition_id_is_unique() {
-    let test_db = TestDb::new(None).await.unwrap();
+    let test_db = TestDb::new(&[Kind::Business]).await.unwrap();
     let db = test_db.state().db_conn();
     let work = seed_work(&db).await;
     let edition = seed_edition(&db, work.id).await;
@@ -101,7 +101,7 @@ async fn digital_inventory_edition_id_is_unique() {
 /// fires on duplicates.
 #[tokio::test]
 async fn digital_inventory_distinct_edition_ids_succeed() {
-    let test_db = TestDb::new(None).await.unwrap();
+    let test_db = TestDb::new(&[Kind::Business]).await.unwrap();
     let db = test_db.state().db_conn();
     let work = seed_work(&db).await;
     let edition_a = seed_edition(&db, work.id).await;

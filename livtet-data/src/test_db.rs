@@ -19,7 +19,6 @@ impl TestDb {
             .map_err(|e| sqlx::Error::AnyDriverError(e.into()))?;
         let db_file = temp_dir.path().join("test.db");
         let db_path = db_file.as_os_str().to_string_lossy().to_string();
-        std::fs::write(&db_file, []).expect("Touching the file should work");
         let pool = connect_with_migrations(&db_path, kinds).await?;
 
         Ok(Self { pool, temp_dir })

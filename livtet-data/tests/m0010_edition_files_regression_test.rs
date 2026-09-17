@@ -13,8 +13,8 @@
 //! pin the invariant so a future "cleanup" doesn't silently drop it
 //! again.
 
+use livtet_data::{Kind, TestDb};
 use livtet_data::orm::FromQueryResult;
-use livtet_data::TestDb;
 
 #[derive(FromQueryResult)]
 struct MigrationRow {
@@ -34,7 +34,7 @@ struct TableName {
 /// this guards against.
 #[tokio::test]
 async fn m0010_edition_files_is_recorded_as_applied() {
-    let test_db = TestDb::new(None).await.unwrap();
+    let test_db = TestDb::new(&[Kind::Business]).await.unwrap();
     let db = test_db.state().db_conn();
 
     let row = MigrationRow::find_by_statement(sea_orm::Statement::from_sql_and_values(
@@ -62,7 +62,7 @@ async fn m0010_edition_files_is_recorded_as_applied() {
 /// guarded by `has_table`).
 #[tokio::test]
 async fn edition_files_table_is_dropped_after_migration() {
-    let test_db = TestDb::new(None).await.unwrap();
+    let test_db = TestDb::new(&[Kind::Business]).await.unwrap();
     let db = test_db.state().db_conn();
 
     let rows = TableName::find_by_statement(sea_orm::Statement::from_sql_and_values(
