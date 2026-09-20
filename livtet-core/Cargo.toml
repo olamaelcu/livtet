@@ -8,8 +8,9 @@ rust-version.workspace = true
 independent = true
 
 [features]
-default = []
+default = ["covers"]
 fake = ["dep:fake", "livtet-data/fake", "livtet-types/fake"]
+covers = ["dep:livtet-covers"]
 
 [dependencies]
 async-trait.workspace = true
@@ -19,6 +20,7 @@ dirs = { workspace = true }
 fake = { workspace = true, optional = true }
 fs-err = { workspace = true }
 livtet-data = { workspace = true }
+livtet-covers = { workspace = true, optional = true }
 livtet-search = { workspace = true }
 livtet-types = { workspace = true }
 miette = { workspace = true }
