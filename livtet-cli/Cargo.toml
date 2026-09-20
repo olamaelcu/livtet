@@ -9,26 +9,12 @@ rust-version.workspace = true
 independent = true
 
 [features]
-fake = []
+fake = ["livtet-cli-common/fake"]
 
 [dependencies]
-livtet-core = { workspace = true, features = ["fake"] }
-livtet-data = { workspace = true }
-livtet-search = { workspace = true }
-livtet-types = { workspace = true }
+livtet-cli-common = { workspace = true }
 clap = { version = "4", features = ["derive", "env"] }
-miette = { workspace = true }
-thiserror = { workspace = true }
-tokio = { workspace = true, features = [
-  "macros",
-  "rt-multi-thread",
-] }
-camino = { workspace = true }
-tracing = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
-inquire = { version = "0.9", features = ["editor"] }
-indicatif = "0.18"
-tabled = { version = "0.20", features = ["derive"] }
 
 [dev-dependencies]
 assert_cmd = "2"

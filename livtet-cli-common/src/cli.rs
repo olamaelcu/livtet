@@ -27,6 +27,8 @@ pub enum Command {
     Path(PathArgs),
     /// Query editions (index-backed list/search, batched get).
     Editions(crate::editions::EditionsArgs),
+    /// Mutation commands for editions.
+    Edition(crate::edition::EditionArgs),
 }
 
 #[derive(Args, Debug)]
@@ -56,6 +58,13 @@ impl Command {
             }
             Command::Path(args) => args.run(),
             Command::Editions(args) => {
+                let rt =
+                    tokio::runtime::Runtime::new().map_err(|e| crate::CliError::Operation {
+                        message: format!("tokio runtime: {e}"),
+                    })?;
+                rt.block_on(args.run())
+            }
+            Command::Edition(args) => {
                 let rt =
                     tokio::runtime::Runtime::new().map_err(|e| crate::CliError::Operation {
                         message: format!("tokio runtime: {e}"),

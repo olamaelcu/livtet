@@ -199,7 +199,8 @@ mod tests {
 
     #[test]
     fn enhance_detects_digital_inventory_edition_sqlite() {
-        let raw = "error returned from database: UNIQUE constraint failed: digital_inventory.edition_id";
+        let raw =
+            "error returned from database: UNIQUE constraint failed: digital_inventory.edition_id";
         let (msg, violation) = ConstraintViolation::enhance_db_err(db_err(raw));
         assert!(
             matches!(
@@ -242,8 +243,7 @@ mod tests {
             PrimaryKey::SeriesEntries.human_readable(),
         );
         assert_eq!(
-            ConstraintViolation::UniqueIndex(UniqueIndex::DigitalInventoryEdition)
-                .human_readable(),
+            ConstraintViolation::UniqueIndex(UniqueIndex::DigitalInventoryEdition).human_readable(),
             UniqueIndex::DigitalInventoryEdition.human_readable(),
         );
     }

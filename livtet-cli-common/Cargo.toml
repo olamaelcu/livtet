@@ -1,0 +1,30 @@
+[package]
+name = "livtet-cli-common"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+
+[package.metadata.workspaces]
+independent = true
+
+[features]
+default = []
+fake = ["livtet-core/fake"]
+
+[dependencies]
+livtet-core = { workspace = true }
+livtet-data = { workspace = true }
+livtet-search = { workspace = true }
+livtet-types = { workspace = true }
+clap = { version = "4", features = ["derive", "env"] }
+miette = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+camino = { workspace = true }
+tracing = { workspace = true }
+inquire = { version = "0.9", features = ["editor"] }
+indicatif = "0.18"
+tabled = { version = "0.20", features = ["derive"] }
+
+[dev-dependencies]
+camino-tempfile = { workspace = true }

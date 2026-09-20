@@ -1,10 +1,10 @@
-//! Schema-invariant guards for `m0011_digital_inventory_unique_edition`.
+//! Schema-invariant guards for the `digital_inventory` uniqueness rule.
 //!
 //! `digital_inventory` is treated as 1:1 with `editions` by the seed
-//! and by the OPDS server's `HashMap<DbId, Model>` consumer, but the
-//! pre-m0011 schema allowed N:1. Migration `m0011` adds a UNIQUE index
-//! on `digital_inventory.edition_id` to enforce the 1:1 intent at the
-//! storage layer. These tests pin that invariant.
+//! and by the OPDS server's `HashMap<DbId, Model>` consumer.
+//! `m0004_inventory_loans` enforces the 1:1 intent at the storage
+//! layer with a UNIQUE index on `digital_inventory.edition_id`
+//! (`uq_digital_inventory_edition_id`). These tests pin that invariant.
 //!
 //! The schema-invariant guard pattern mirrors
 //! `tauri/src/commands/edition.rs::{duplicate_junction_pair_is_rejected,
@@ -53,10 +53,7 @@ async fn seed_edition(db: &DatabaseConnection, work_id: DbId) -> editions::Model
     .unwrap()
 }
 
-fn digital_inventory_row(
-    id: DbId,
-    edition_id: DbId,
-) -> digital_inventory::ActiveModel {
+fn digital_inventory_row(id: DbId, edition_id: DbId) -> digital_inventory::ActiveModel {
     digital_inventory::ActiveModel {
         id: Set(id),
         edition_id: Set(edition_id),

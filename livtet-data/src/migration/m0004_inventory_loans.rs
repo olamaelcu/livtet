@@ -1,7 +1,7 @@
 use sea_orm_migration::prelude::*;
 
 use super::schema::*;
-use crate::Constraint;
+use crate::{Constraint, NamedIndex};
 
 pub struct Migration;
 
@@ -125,6 +125,16 @@ impl MigrationTrait for Migration {
         .await?;
 
         // 5. digital_inventory
+        //
+        // Includes the columns that historically arrived via later
+        // migrations (m0007 cover metadata, m0012 file_format) and the
+        // m0011 UNIQUE index — squashed into the initial creation now
+        // that no production databases exist to preserve.
+        //
+        // `edition_id` is UNIQUE: digital_inventory is 1:1 with
+        // editions (see `uq_digital_inventory_edition_id`, which the
+        // `UniqueIndex::DigitalInventoryEdition` error-mapping patterns
+        // match on).
         create_strict_table(
             manager,
             &Table::create()
@@ -134,8 +144,11 @@ impl MigrationTrait for Migration {
                 .col(db_id(DigitalInventory::EditionId))
                 .col(text_null(DigitalInventory::FilePath))
                 .col(text_null(DigitalInventory::CoverPath))
+                .col(text_null(DigitalInventory::Blurhash))
+                .col(text_null(DigitalInventory::DominantColor))
                 .col(text_null(DigitalInventory::FileHash))
                 .col(big_integer_null(DigitalInventory::FileSizeBytes))
+                .col(text(DigitalInventory::FileFormat).default(Expr::val("EPUB")))
                 .col(text_null(DigitalInventory::Notes))
                 .col(timestamp(DigitalInventory::AddedAt).default(Expr::current_timestamp()))
                 .col(timestamp_null(DigitalInventory::UpdatedAt))
@@ -147,6 +160,62 @@ impl MigrationTrait for Migration {
                         .on_delete(ForeignKeyAction::Cascade),
                 )
                 .to_owned(),
+        )
+        .await?;
+
+        manager
+            .create_index(
+                Index::create()
+                    .if_not_exists()
+                    .name("uq_digital_inventory_edition_id")
+                    .table(DigitalInventory::Table)
+                    .col(DigitalInventory::EditionId)
+                    .unique()
+                    .to_owned(),
+            )
+            .await?;
+
+        // FK child-column indexes (joins + cascade deletes).
+        create_named_index(
+            manager,
+            NamedIndex::OwnedEditionsEditionId,
+            OwnedEditions::Table,
+            OwnedEditions::EditionId,
+        )
+        .await?;
+        create_named_index(
+            manager,
+            NamedIndex::OwnedEditionsConditionId,
+            OwnedEditions::Table,
+            OwnedEditions::ConditionId,
+        )
+        .await?;
+        create_named_index(
+            manager,
+            NamedIndex::LoanEntityIdentifiersLoanEntityId,
+            LoanEntityIdentifiers::Table,
+            LoanEntityIdentifiers::LoanEntityId,
+        )
+        .await?;
+        create_named_index(
+            manager,
+            NamedIndex::EditionsLoansEditionId,
+            EditionsLoans::Table,
+            EditionsLoans::EditionId,
+        )
+        .await?;
+        create_named_index(
+            manager,
+            NamedIndex::EditionsLoansLoanEntityId,
+            EditionsLoans::Table,
+            EditionsLoans::LoanEntityId,
+        )
+        .await?;
+        create_named_index(
+            manager,
+            NamedIndex::EditionsLoansOwnedEditionId,
+            EditionsLoans::Table,
+            EditionsLoans::OwnedEditionId,
         )
         .await?;
 

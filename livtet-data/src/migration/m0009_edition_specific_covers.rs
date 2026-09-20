@@ -1,7 +1,7 @@
 use sea_orm_migration::prelude::*;
 
 use super::schema::*;
-use crate::Constraint;
+use crate::{Constraint, NamedIndex};
 
 pub struct Migration;
 
@@ -38,6 +38,21 @@ impl MigrationTrait for Migration {
             ),
         )
         .await?;
+
+        // Covering index for the `edition_covers` view's join and for
+        // cascade deletes: (edition_id, cover_path) lets the view
+        // resolve covers with an index-only scan.
+        manager
+            .create_index(
+                Index::create()
+                    .if_not_exists()
+                    .name(NamedIndex::EditionSpecificCoversEditionId.to_string())
+                    .table(EditionSpecificCovers::Table)
+                    .col(EditionSpecificCovers::EditionId)
+                    .col(EditionSpecificCovers::CoverPath)
+                    .to_owned(),
+            )
+            .await?;
 
         // 2. edition_covers view — UNION of digital_inventory and
         //    edition_specific_covers cover_path columns, with a

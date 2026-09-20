@@ -1,7 +1,7 @@
 use sea_orm_migration::prelude::*;
 
 use super::schema::*;
-use crate::{Constraint, PrimaryKey};
+use crate::{Constraint, NamedIndex, PrimaryKey};
 
 pub struct Migration;
 
@@ -54,7 +54,7 @@ impl MigrationTrait for Migration {
         .await?;
 
         // Reading list book junction (composite PK, no timestamps)
-        create_strict_table(
+        create_strict_table_without_rowid(
             manager,
             &Table::create()
                 .table(ReadingListBook::Table)
@@ -233,6 +233,67 @@ impl MigrationTrait for Migration {
                     )
                     .to_owned(),
             ),
+        )
+        .await?;
+
+        // FK child-column and reverse-lookup indexes.
+        create_named_index(
+            manager,
+            NamedIndex::AnnotationsEditionId,
+            Annotations::Table,
+            Annotations::EditionId,
+        )
+        .await?;
+        create_named_index(
+            manager,
+            NamedIndex::AnnotationsUserId,
+            Annotations::Table,
+            Annotations::UserId,
+        )
+        .await?;
+        create_named_index(
+            manager,
+            NamedIndex::ReadingListBookEditionId,
+            ReadingListBook::Table,
+            ReadingListBook::EditionId,
+        )
+        .await?;
+        create_named_index(
+            manager,
+            NamedIndex::ReadingSessionsEditionId,
+            ReadingSessions::Table,
+            ReadingSessions::EditionId,
+        )
+        .await?;
+        create_named_index(
+            manager,
+            NamedIndex::ReadingSessionsFormatId,
+            ReadingSessions::Table,
+            ReadingSessions::FormatId,
+        )
+        .await?;
+        create_named_index(
+            manager,
+            NamedIndex::ReadingSessionsSourceId,
+            ReadingSessions::Table,
+            ReadingSessions::SourceId,
+        )
+        .await?;
+        // Session history is browsed newest-first.
+        create_named_index(
+            manager,
+            NamedIndex::ReadingSessionsStartedAt,
+            ReadingSessions::Table,
+            ReadingSessions::StartedAt,
+        )
+        .await?;
+        // The unique (edition_id, format_id) index above leads with
+        // edition_id; format cascades need the reverse.
+        create_named_index(
+            manager,
+            NamedIndex::ReadingProgressFormatId,
+            ReadingProgress::Table,
+            ReadingProgress::FormatId,
         )
         .await?;
 

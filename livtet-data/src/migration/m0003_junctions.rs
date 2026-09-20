@@ -1,7 +1,7 @@
 use sea_orm_migration::prelude::*;
 
 use super::schema::*;
-use crate::{Constraint, PrimaryKey};
+use crate::{Constraint, NamedIndex, PrimaryKey};
 
 pub struct Migration;
 
@@ -30,7 +30,7 @@ impl MigrationTrait for Migration {
         .await?;
 
         // ── Edition Group Identifiers ────────────────────────────────────────
-        create_strict_table(
+        create_strict_table_without_rowid(
             manager,
             &timestamps(
                 Table::create()
@@ -145,7 +145,7 @@ impl MigrationTrait for Migration {
 
         // ── Work junction tables (no timestamps) ────────────────────────
 
-        create_strict_table(
+        create_strict_table_without_rowid(
             manager,
             &Table::create()
                 .table(WorkAuthors::Table)
@@ -178,7 +178,7 @@ impl MigrationTrait for Migration {
         )
         .await?;
 
-        create_strict_table(
+        create_strict_table_without_rowid(
             manager,
             &Table::create()
                 .table(WorkTags::Table)
@@ -209,7 +209,7 @@ impl MigrationTrait for Migration {
         )
         .await?;
 
-        create_strict_table(
+        create_strict_table_without_rowid(
             manager,
             &Table::create()
                 .table(WorkGenres::Table)
@@ -240,7 +240,7 @@ impl MigrationTrait for Migration {
         )
         .await?;
 
-        create_strict_table(
+        create_strict_table_without_rowid(
             manager,
             &Table::create()
                 .table(WorkSubjects::Table)
@@ -271,7 +271,7 @@ impl MigrationTrait for Migration {
         )
         .await?;
 
-        create_strict_table(
+        create_strict_table_without_rowid(
             manager,
             &Table::create()
                 .table(WorkPublishers::Table)
@@ -302,7 +302,7 @@ impl MigrationTrait for Migration {
         )
         .await?;
 
-        create_strict_table(
+        create_strict_table_without_rowid(
             manager,
             &Table::create()
                 .table(WorkIdentifiers::Table)
@@ -335,7 +335,7 @@ impl MigrationTrait for Migration {
 
         // ── Edition junction tables (no timestamps) ─────────────────────
 
-        create_strict_table(
+        create_strict_table_without_rowid(
             manager,
             &Table::create()
                 .table(EditionAuthors::Table)
@@ -368,7 +368,7 @@ impl MigrationTrait for Migration {
         )
         .await?;
 
-        create_strict_table(
+        create_strict_table_without_rowid(
             manager,
             &Table::create()
                 .table(EditionTags::Table)
@@ -399,7 +399,7 @@ impl MigrationTrait for Migration {
         )
         .await?;
 
-        create_strict_table(
+        create_strict_table_without_rowid(
             manager,
             &Table::create()
                 .table(EditionGenres::Table)
@@ -430,7 +430,7 @@ impl MigrationTrait for Migration {
         )
         .await?;
 
-        create_strict_table(
+        create_strict_table_without_rowid(
             manager,
             &Table::create()
                 .table(EditionSubjects::Table)
@@ -461,7 +461,7 @@ impl MigrationTrait for Migration {
         )
         .await?;
 
-        create_strict_table(
+        create_strict_table_without_rowid(
             manager,
             &Table::create()
                 .table(EditionPublishers::Table)
@@ -492,7 +492,7 @@ impl MigrationTrait for Migration {
         )
         .await?;
 
-        create_strict_table(
+        create_strict_table_without_rowid(
             manager,
             &Table::create()
                 .table(EditionIdentifiers::Table)
@@ -524,7 +524,7 @@ impl MigrationTrait for Migration {
         .await?;
 
         // ── Series entries (with timestamps) ────────────────────────────
-        create_strict_table(
+        create_strict_table_without_rowid(
             manager,
             &timestamps(
                 Table::create()
@@ -557,6 +557,160 @@ impl MigrationTrait for Migration {
             ),
         )
         .await?;
+
+        // ── Indexes ───────────────────────────────────────────────────
+        // SQLite does not auto-index FK child columns; every FK here
+        // gets one so joins and cascade deletes never scan.
+        create_named_index(
+            manager,
+            NamedIndex::WorksLanguageId,
+            Works::Table,
+            Works::LanguageId,
+        )
+        .await?;
+        create_named_index(
+            manager,
+            NamedIndex::WorksPreferredEditionId,
+            Works::Table,
+            Works::PreferredEditionId,
+        )
+        .await?;
+        create_named_index(
+            manager,
+            NamedIndex::EditionsWorkId,
+            Editions::Table,
+            Editions::WorkId,
+        )
+        .await?;
+        create_named_index(
+            manager,
+            NamedIndex::EditionsGroupId,
+            Editions::Table,
+            Editions::GroupId,
+        )
+        .await?;
+        create_named_index(
+            manager,
+            NamedIndex::EditionsFormatId,
+            Editions::Table,
+            Editions::FormatId,
+        )
+        .await?;
+        create_named_index(
+            manager,
+            NamedIndex::EditionsLanguageId,
+            Editions::Table,
+            Editions::LanguageId,
+        )
+        .await?;
+
+        // Reverse junction indexes: the composite PKs lead with
+        // work_id/edition_id, so the second column needs its own index
+        // for "all works/editions with tag/genre/… X" lookups.
+        create_named_index(
+            manager,
+            NamedIndex::WorkAuthorsAuthorId,
+            WorkAuthors::Table,
+            WorkAuthors::AuthorId,
+        )
+        .await?;
+        create_named_index(
+            manager,
+            NamedIndex::WorkTagsTagId,
+            WorkTags::Table,
+            WorkTags::TagId,
+        )
+        .await?;
+        create_named_index(
+            manager,
+            NamedIndex::WorkGenresGenreId,
+            WorkGenres::Table,
+            WorkGenres::GenreId,
+        )
+        .await?;
+        create_named_index(
+            manager,
+            NamedIndex::WorkSubjectsSubjectId,
+            WorkSubjects::Table,
+            WorkSubjects::SubjectId,
+        )
+        .await?;
+        create_named_index(
+            manager,
+            NamedIndex::WorkPublishersPublisherId,
+            WorkPublishers::Table,
+            WorkPublishers::PublisherId,
+        )
+        .await?;
+        create_named_index(
+            manager,
+            NamedIndex::WorkIdentifiersIdentifierId,
+            WorkIdentifiers::Table,
+            WorkIdentifiers::IdentifierId,
+        )
+        .await?;
+        create_named_index(
+            manager,
+            NamedIndex::EditionAuthorsAuthorId,
+            EditionAuthors::Table,
+            EditionAuthors::AuthorId,
+        )
+        .await?;
+        create_named_index(
+            manager,
+            NamedIndex::EditionTagsTagId,
+            EditionTags::Table,
+            EditionTags::TagId,
+        )
+        .await?;
+        create_named_index(
+            manager,
+            NamedIndex::EditionGenresGenreId,
+            EditionGenres::Table,
+            EditionGenres::GenreId,
+        )
+        .await?;
+        create_named_index(
+            manager,
+            NamedIndex::EditionSubjectsSubjectId,
+            EditionSubjects::Table,
+            EditionSubjects::SubjectId,
+        )
+        .await?;
+        create_named_index(
+            manager,
+            NamedIndex::EditionPublishersPublisherId,
+            EditionPublishers::Table,
+            EditionPublishers::PublisherId,
+        )
+        .await?;
+        create_named_index(
+            manager,
+            NamedIndex::EditionIdentifiersIdentifierId,
+            EditionIdentifiers::Table,
+            EditionIdentifiers::IdentifierId,
+        )
+        .await?;
+        create_named_index(
+            manager,
+            NamedIndex::SeriesEntriesEditionId,
+            SeriesEntries::Table,
+            SeriesEntries::EditionId,
+        )
+        .await?;
+
+        // Identifier-value lookups go (kind, value) → group.
+        manager
+            .create_index(
+                Index::create()
+                    .if_not_exists()
+                    .name(NamedIndex::EditionGroupIdentifiersValue.to_string())
+                    .table(EditionGroupIdentifiers::Table)
+                    .col(EditionGroupIdentifiers::IdentifierKind)
+                    .col(EditionGroupIdentifiers::IdentifierValue)
+                    .to_owned(),
+            )
+            .await?;
 
         Ok(())
     }

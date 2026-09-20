@@ -62,9 +62,6 @@ pub enum Constraint {
     ReadingProgressEdition,
     ReadingProgressFormat,
     WorkStatusWork,
-
-    // ── m0010_edition_files ───────────────────────────────────────
-    EditionFilesEdition,
 }
 
 impl Constraint {
@@ -124,9 +121,6 @@ impl Constraint {
             Self::ReadingProgressEdition => "Referenced edition does not exist",
             Self::ReadingProgressFormat => "Referenced format does not exist",
             Self::WorkStatusWork => "Referenced work does not exist",
-
-            // ── m0010_edition_files ────────────────────────────────
-            Self::EditionFilesEdition => "Referenced edition does not exist",
         }
     }
 

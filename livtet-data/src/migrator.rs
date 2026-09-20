@@ -2,7 +2,7 @@
 
 use std::str::FromStr;
 
-use sqlx::{sqlite::SqliteConnectOptions, AssertSqlSafe, SqlitePool};
+use sqlx::{AssertSqlSafe, SqlitePool, sqlite::SqliteConnectOptions};
 
 use crate::state::sqlite_pool_options;
 

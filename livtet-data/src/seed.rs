@@ -65,8 +65,8 @@ use livtet_types::{
     WorkStatus,
 };
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, DatabaseConnection, DatabaseTransaction, EntityTrait, PaginatorTrait, QueryFilter,
-    Set, TransactionTrait,
+    ActiveModelTrait, ColumnTrait, DatabaseConnection, DatabaseTransaction, EntityTrait,
+    PaginatorTrait, QueryFilter, Set, TransactionTrait,
 };
 use serde::{Deserialize, Serialize};
 use time::{Duration, OffsetDateTime, PrimitiveDateTime};
@@ -1156,7 +1156,9 @@ async fn add_reading_sessions(
 
     for source in sources.iter() {
         let source_id = dbid_from_ulid(source.ulid());
-        let existing = ReadingSourcesEntity::find_by_id(source_id).one(pool).await?;
+        let existing = ReadingSourcesEntity::find_by_id(source_id)
+            .one(pool)
+            .await?;
         if existing.is_none() {
             let model = ReadingSourceActiveModel {
                 id: Set(source_id),

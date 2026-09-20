@@ -2,30 +2,14 @@
 
 use std::io::IsTerminal as _;
 
-use camino::Utf8PathBuf;
 use clap::{Args, Subcommand};
 
 use crate::CliError;
+use crate::path::{default_db_path, default_index_dir};
 
-use livtet_data::entities::{editions, formats, digital_inventory, authors, edition_authors};
+use livtet_data::entities::{authors, digital_inventory, edition_authors, editions, formats};
 use livtet_data::orm::{ColumnTrait, Database, EntityTrait, QueryFilter};
 use livtet_search::{SearchIndex, SearchOptions, model::HitKind};
-
-/// Resolve the path of the default livtet SQLite database file.
-pub fn default_db_path() -> crate::Result<Utf8PathBuf> {
-    let dir = livtet_core::paths::data_dir().ok_or_else(|| CliError::Operation {
-        message: "Could not resolve the livtet data directory".to_string(),
-    })?;
-    Ok(dir.join("livtet.db"))
-}
-
-/// Resolve the on-disk search index directory (sibling of the DB).
-pub fn default_index_dir() -> crate::Result<Utf8PathBuf> {
-    let dir = livtet_core::paths::data_dir().ok_or_else(|| CliError::Operation {
-        message: "Could not resolve the livtet data directory".to_string(),
-    })?;
-    Ok(dir.join("search-index"))
-}
 
 #[derive(Args, Debug)]
 pub struct EditionsArgs {
@@ -272,7 +256,7 @@ async fn get(id: &str) -> crate::Result<()> {
     let title = edition
         .title
         .filter(|t| !t.is_empty())
-        .unwrap_or_else(|| format!("<edition {}>", id));
+        .unwrap_or_else(|| format!("<edition {id}>"));
 
     println!("  Title:   {title}");
     if author_names.is_empty() {

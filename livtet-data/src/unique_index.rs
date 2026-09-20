@@ -14,7 +14,7 @@ use strum::{EnumIter, EnumString, IntoEnumIterator};
 /// built-in PK machinery and need no named index here.
 #[derive(Copy, Clone, Debug, Eq, PartialEq, EnumString, EnumIter)]
 pub enum UniqueIndex {
-    // ── m0011_digital_inventory_unique_edition ────────────────────
+    // ── m0004_inventory_loans ────────────────────────────────────
     DigitalInventoryEdition,
 }
 

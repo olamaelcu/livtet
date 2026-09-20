@@ -1,6 +1,7 @@
 use sea_orm_migration::prelude::*;
 
 use super::schema::*;
+use crate::NamedIndex;
 
 pub struct Migration;
 
@@ -151,6 +152,40 @@ impl MigrationTrait for Migration {
             ),
         )
         .await?;
+
+        // ── Vocabulary lookup indexes ─────────────────────────────────
+        // Import/dedup paths query these tables by name (or ISO code),
+        // not by ULID; without indexes every dedup check is a full scan.
+        create_named_index(
+            manager,
+            NamedIndex::AuthorsName,
+            Authors::Table,
+            Authors::Name,
+        )
+        .await?;
+        create_named_index(manager, NamedIndex::GenresName, Genres::Table, Genres::Name).await?;
+        create_named_index(
+            manager,
+            NamedIndex::SubjectsName,
+            Subjects::Table,
+            Subjects::Name,
+        )
+        .await?;
+        create_named_index(
+            manager,
+            NamedIndex::PublishersName,
+            Publishers::Table,
+            Publishers::Name,
+        )
+        .await?;
+        create_named_index(
+            manager,
+            NamedIndex::LanguagesCode,
+            Languages::Table,
+            Languages::Code,
+        )
+        .await?;
+        create_named_index(manager, NamedIndex::SeriesName, Series::Table, Series::Name).await?;
 
         Ok(())
     }

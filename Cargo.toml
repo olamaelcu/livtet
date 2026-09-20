@@ -3,6 +3,7 @@ resolver = "3"
 members = [
   "livtet-core",
   "livtet-cli",
+  "livtet-cli-common",
   "livtet-temporal-quotes",
   "livtet-data",
   "livtet-search",
@@ -23,6 +24,7 @@ rust-version = "1.97.0"
 [workspace.dependencies]
 # Self exports
 livtet-core = { path = "livtet-core" }
+livtet-cli-common = { path = "livtet-cli-common" }
 livtet-data = { path = "livtet-data" }
 livtet-search = { path = "livtet-search" }
 livtet-test-utils = { path = "livtet-test-utils" }

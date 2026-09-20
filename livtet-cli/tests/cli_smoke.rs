@@ -188,3 +188,78 @@ fn reindex_force_rebuilds_even_when_current() {
         .success()
         .stdout(predicate::str::contains("Indexed"));
 }
+
+#[test]
+fn edition_help_lists_files_subcommand() {
+    cmd()
+        .args(["edition", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("files"));
+}
+
+#[test]
+fn edition_files_help_shows_add_remove_list() {
+    cmd()
+        .args(["edition", "files", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("add"))
+        .stdout(predicate::str::contains("remove"))
+        .stdout(predicate::str::contains("list"));
+}
+
+#[test]
+fn edition_files_add_shows_usage() {
+    cmd()
+        .args(["edition", "files", "add", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("ID"))
+        .stdout(predicate::str::contains("PATH"));
+}
+
+#[test]
+fn edition_files_remove_shows_usage() {
+    cmd()
+        .args(["edition", "files", "remove", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("ID"));
+}
+
+#[test]
+fn edition_files_list_shows_limit() {
+    cmd()
+        .args(["edition", "files", "list", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("--limit"));
+}
+
+#[test]
+fn edition_files_no_id_fails() {
+    cmd()
+        .args(["edition", "files", "add"])
+        .assert()
+        .failure()
+        .code(predicate::ne(0));
+}
+
+#[test]
+fn edition_files_add_invalid_id_fails() {
+    cmd()
+        .args(["edition", "files", "add", "not-a-real-id", "/some/path"])
+        .assert()
+        .failure()
+        .code(predicate::ne(0));
+}
+
+#[test]
+fn edition_files_remove_invalid_id_fails() {
+    cmd()
+        .args(["edition", "files", "remove", "not-a-real-id"])
+        .assert()
+        .failure()
+        .code(predicate::ne(0));
+}

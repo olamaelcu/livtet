@@ -3,13 +3,19 @@
 //! Only available when `livtet-core` was built with the `fake` feature
 //! (which is on for debug builds via this CLI's `fake` feature).
 
-#![cfg(feature = "fake")]
-
 use camino::Utf8PathBuf;
 use clap::Parser;
 use livtet_data::migration::{Migrator, MigratorTrait};
 
-use crate::Result;
+use crate::{CliError, Result, path::default_db_path};
+
+#[derive(tabled::Tabled)]
+struct SeedRow {
+    #[tabled(rename = "ENTITY")]
+    entity: &'static str,
+    #[tabled(rename = "COUNT")]
+    count: u32,
+}
 
 #[derive(Parser, Debug)]
 pub struct SeedArgs {
@@ -42,11 +48,11 @@ impl SeedArgs {
             ))
             .with_default(false)
             .prompt()
-            .map_err(|e| crate::CliError::Operation {
+            .map_err(|e| CliError::Operation {
                 message: format!("confirmation prompt failed: {e}"),
             })?;
             if !confirmed {
-                return Err(crate::CliError::Operation {
+                return Err(CliError::Operation {
                     message: "Aborted by user".to_string(),
                 });
             }
@@ -55,14 +61,14 @@ impl SeedArgs {
         let db_url = format!("sqlite:{}?mode=rwc", db_path);
         let sea_conn = livtet_data::orm::Database::connect(&db_url)
             .await
-            .map_err(|e| crate::CliError::Operation {
+            .map_err(|e| CliError::Operation {
                 message: format!("Failed to connect to {db_url}: {e}"),
             })?;
 
         // Run migrations to ensure tables exist before seeding.
         Migrator::up(&sea_conn, None)
             .await
-            .map_err(|e| crate::CliError::Operation {
+            .map_err(|e| CliError::Operation {
                 message: format!("Failed to migrate {db_path}: {e}"),
             })?;
 
@@ -73,31 +79,29 @@ impl SeedArgs {
 
         let result = livtet_core::seed::seed_database(&sea_conn, &config)
             .await
-            .map_err(|e| crate::CliError::Operation {
+            .map_err(|e| CliError::Operation {
                 message: format!("Seed failed: {e}"),
             })?;
 
+        use tabled::settings::Style;
+
+        let row = |entity: &'static str, count: u32| SeedRow { entity, count };
+        let rows = vec![
+            row("works", result.works_created),
+            row("editions", result.editions_created),
+            row("authors", result.authors_created),
+            row("publishers", result.publishers_created),
+            row("reading status entries", result.reading_status_count),
+            row("annotations", result.annotations_created),
+            row("digital inventory", result.digital_inventory_created),
+            row("loans", result.loans_created),
+            row("reading sessions", result.reading_sessions_created),
+            row("saved searches", result.saved_searches_created),
+            row("reading lists", result.reading_lists_created),
+        ];
         println!("Seeded database at {db_path}:");
-        println!("  Works: {}", result.works_created);
-        println!("  Editions: {}", result.editions_created);
-        println!("  Authors: {}", result.authors_created);
-        println!("  Publishers: {}", result.publishers_created);
-        println!("  Reading status entries: {}", result.reading_status_count);
-        println!("  Annotations: {}", result.annotations_created);
-        println!("  Digital inventory: {}", result.digital_inventory_created);
-        println!("  Loans: {}", result.loans_created);
-        println!("  Reading sessions: {}", result.reading_sessions_created);
-        println!("  Saved searches: {}", result.saved_searches_created);
-        println!("  Reading lists: {}", result.reading_lists_created);
+        println!("{}", tabled::Table::new(rows).with(Style::modern()));
 
         Ok(())
     }
-}
-
-fn default_db_path() -> Result<Utf8PathBuf> {
-    use livtet_core::paths;
-    let dir = paths::data_dir().ok_or_else(|| crate::CliError::Operation {
-        message: "Could not resolve the livtet data directory".to_string(),
-    })?;
-    Ok(dir.join("livtet.db"))
 }

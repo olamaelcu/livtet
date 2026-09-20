@@ -2229,6 +2229,17 @@ name = "livtet-cli"
 version = "0.2.0"
 dependencies = [
  "assert_cmd",
+ "camino-tempfile",
+ "clap",
+ "livtet-cli-common",
+ "predicates",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "livtet-cli-common"
+version = "0.1.0"
+dependencies = [
  "camino",
  "camino-tempfile",
  "clap",
@@ -2239,12 +2250,10 @@ dependencies = [
  "livtet-search",
  "livtet-types",
  "miette",
- "predicates",
  "tabled",
  "thiserror",
  "tokio",
  "tracing",
- "tracing-subscriber",
 ]
 
 [[package]]

@@ -1,17 +1,12 @@
-pub mod cli;
-pub mod editions;
-pub mod error;
-pub mod reindex;
+//! `livtet-cli` — thin front-end over [`livtet_cli_common`].
+//!
+//! All command definitions and implementations live in
+//! `livtet-cli-common` so they can be shared with other livtet
+//! binaries (e.g. `livtet-tui`).
 
-#[cfg(feature = "fake")]
-pub mod seed;
-
-use clap::Parser;
-pub use error::{CliError, Result};
-
-use crate::cli::Cli;
+pub use livtet_cli_common::{CliError, Result};
 
 pub fn run() -> Result<()> {
-    let cli = Cli::parse();
-    cli.command.run()
+    use clap::Parser;
+    livtet_cli_common::Cli::parse().command.run()
 }

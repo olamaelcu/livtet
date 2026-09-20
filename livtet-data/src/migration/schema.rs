@@ -49,10 +49,39 @@ pub async fn create_strict_table(
     manager: &SchemaManager<'_>,
     table: &TableCreateStatement,
 ) -> Result<(), DbErr> {
+    create_table_with_options(manager, table, " STRICT").await
+}
+
+/// Like [`create_strict_table`], but also creates the table as
+/// `WITHOUT ROWID`.
+///
+/// Use for composite-primary-key lookup tables (junction tables):
+/// the primary key becomes the clustered index and the redundant
+/// rowid b-tree disappears, saving both storage and a layer of
+/// indirection on reads.
+///
+/// `WITHOUT ROWID` requires an explicitly declared PRIMARY KEY and is
+/// compatible with STRICT tables (both accepted by the SQLite version
+/// this project pins).
+pub async fn create_strict_table_without_rowid(
+    manager: &SchemaManager<'_>,
+    table: &TableCreateStatement,
+) -> Result<(), DbErr> {
+    create_table_with_options(manager, table, " STRICT, WITHOUT ROWID").await
+}
+
+/// Shared implementation: render `table` via the SQLite builder,
+/// normalize types for STRICT, and execute with the given trailing
+/// table options.
+async fn create_table_with_options(
+    manager: &SchemaManager<'_>,
+    table: &TableCreateStatement,
+    options: &str,
+) -> Result<(), DbErr> {
     let sql = table.to_string(SqliteQueryBuilder);
     let sql = normalize_for_strict(&sql);
     let sql = sql.trim_end_matches(';');
-    let strict_sql = format!("{sql} STRICT");
+    let strict_sql = format!("{sql}{options}");
     manager
         .get_connection()
         .execute_unprepared(&strict_sql)
@@ -203,8 +232,36 @@ fn strip_length_specifiers(sql: &mut String) {
     *sql = out;
 }
 
-/// Shadow the upstream `timestamps()` to make `updated_at` nullable.
+// ── Index helpers ─────────────────────────────────────────────────
+
+/// Create a named, non-unique, single-column index.
 ///
+/// All schema indexes are named through [`crate::NamedIndex`] so their
+/// names live in one auditable enum. Multi-column or unique indexes
+/// still use `manager.create_index(...)` directly.
+pub async fn create_named_index<T, C>(
+    manager: &SchemaManager<'_>,
+    name: crate::NamedIndex,
+    table: T,
+    col: C,
+) -> Result<(), DbErr>
+where
+    T: IntoIden,
+    C: IntoIden,
+{
+    manager
+        .create_index(
+            Index::create()
+                .if_not_exists()
+                .name(name.to_string())
+                .table(table)
+                .col(col)
+                .to_owned(),
+        )
+        .await
+}
+
+/// Shadow the upstream `timestamps()` to make `updated_at` nullable.
 /// The upstream helper creates both `created_at` and `updated_at` as
 /// `NOT NULL` with a `current_timestamp()` default.  A row that has
 /// never been updated has no `updated_at`, so the column should be
@@ -320,8 +377,6 @@ pub enum Identifiers {
     Id,
     Value,
     Kind,
-    Source,
-    FetchedAt,
 }
 
 // Fixture tables
@@ -515,26 +570,8 @@ pub enum EditionsLoans {
     ReturnedDate,
 }
 
-#[derive(DeriveIden)]
-pub enum EditionFiles {
-    Table,
-    Id,
-    EditionId,
-    FilePath,
-    CoverPath,
-    Blurhash,
-    DominantColor,
-    FileHash,
-    FileSizeBytes,
-    FileFormat,
-    FileLastModified,
-    FileMode,
-    SourcePlugin,
-    SourceId,
-    Notes,
-    AddedAt,
-    UpdatedAt,
-}
+// Digital inventory (squashed m0007/m0010/m0011/m0012 changes live
+// directly in m0004; no separate edition_files table exists).
 
 #[derive(DeriveIden)]
 pub enum DigitalInventory {

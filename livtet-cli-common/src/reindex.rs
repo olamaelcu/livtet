@@ -8,7 +8,10 @@ use camino::Utf8PathBuf;
 use clap::Parser;
 use livtet_data::migration::{Migrator, MigratorTrait};
 
-use crate::Result;
+use crate::{
+    CliError, Result,
+    path::{default_db_path, default_index_dir},
+};
 
 #[derive(Parser, Debug)]
 pub struct ReindexArgs {
@@ -49,11 +52,11 @@ impl ReindexArgs {
             ))
             .with_default(false)
             .prompt()
-            .map_err(|e| crate::CliError::Operation {
+            .map_err(|e| CliError::Operation {
                 message: format!("confirmation prompt failed: {e}"),
             })?;
             if !confirmed {
-                return Err(crate::CliError::Operation {
+                return Err(CliError::Operation {
                     message: "Aborted by user".to_string(),
                 });
             }
@@ -62,7 +65,7 @@ impl ReindexArgs {
         let db_url = format!("sqlite:{db_path}?mode=rwc");
         let conn = livtet_data::orm::Database::connect(&db_url)
             .await
-            .map_err(|e| crate::CliError::Operation {
+            .map_err(|e| CliError::Operation {
                 message: format!("Failed to connect to {db_url}: {e}"),
             })?;
         // A fresh database file has no tables yet; migrate so the
@@ -70,7 +73,7 @@ impl ReindexArgs {
         // instead of failing with "no such table".
         Migrator::up(&conn, None)
             .await
-            .map_err(|e| crate::CliError::Operation {
+            .map_err(|e| CliError::Operation {
                 message: format!("Failed to migrate {db_path}: {e}"),
             })?;
 
@@ -83,42 +86,40 @@ impl ReindexArgs {
         // below can report document counts.
         let mut indexed = 0u64;
         let mut bar: Option<indicatif::ProgressBar> = None;
-        let mut on_event =
-            |event: livtet_core::search::ReindexEvent| match event {
-                livtet_core::search::ReindexEvent::Loading => {}
-                livtet_core::search::ReindexEvent::Indexing { done, total } => {
-                    indexed = done;
-                    let bar = bar.get_or_insert_with(|| {
-                        spinner.finish_and_clear();
-                        let bar = indicatif::ProgressBar::new(total);
-                        bar.set_style(
-                            indicatif::ProgressStyle::with_template(
-                                "[{bar:40.cyan/blue}] {pos}/{len}",
-                            )
-                            .expect("valid progress template")
-                            .progress_chars("#>-"),
-                        );
-                        bar.set_message("Indexing");
-                        bar
-                    });
-                    if bar.length() != Some(total) {
-                        bar.set_length(total);
-                    }
-                    bar.set_position(done);
+        let mut on_event = |event: livtet_core::search::ReindexEvent| match event {
+            livtet_core::search::ReindexEvent::Loading => {}
+            livtet_core::search::ReindexEvent::Indexing { done, total } => {
+                indexed = done;
+                let bar = bar.get_or_insert_with(|| {
+                    spinner.finish_and_clear();
+                    let bar = indicatif::ProgressBar::new(total);
+                    bar.set_style(
+                        indicatif::ProgressStyle::with_template(
+                            "[{bar:40.cyan/blue}] {pos}/{len}",
+                        )
+                        .expect("valid progress template")
+                        .progress_chars("#>-"),
+                    );
+                    bar.set_message("Indexing");
+                    bar
+                });
+                if bar.length() != Some(total) {
+                    bar.set_length(total);
                 }
-            };
+                bar.set_position(done);
+            }
+        };
 
         // First try schema-aware migration (no-op when current).
-        let prev =
-            livtet_core::search::SearchIndex::migrate_to_with_progress(
-                index_dir.as_path(),
-                &conn,
-                &mut on_event,
-            )
-            .await
-            .map_err(|e| crate::CliError::Operation {
-                message: format!("Reindex failed: {e}"),
-            })?;
+        let prev = livtet_core::search::SearchIndex::migrate_to_with_progress(
+            index_dir.as_path(),
+            &conn,
+            &mut on_event,
+        )
+        .await
+        .map_err(|e| CliError::Operation {
+            message: format!("Reindex failed: {e}"),
+        })?;
 
         let rebuilt = prev != livtet_core::search::SCHEMA_VERSION || self.force;
 
@@ -129,22 +130,21 @@ impl ReindexArgs {
             if self.force && prev == livtet_core::search::SCHEMA_VERSION {
                 if index_dir.exists() {
                     std::fs::remove_dir_all(&index_dir).map_err(|e| {
-                        crate::CliError::Operation {
+                        CliError::Operation {
                             message: format!("Failed to clear {index_dir}: {e}"),
                         }
                     })?;
                 }
                 spinner.set_message("Rebuilding index");
-                let index = livtet_core::search::SearchIndex::open(
-                    index_dir.as_path(),
-                )
-                .map_err(|e| crate::CliError::Operation {
-                    message: format!("Failed to open {index_dir}: {e}"),
-                })?;
+                let index =
+                    livtet_core::search::SearchIndex::open(index_dir.as_path())
+                        .map_err(|e| CliError::Operation {
+                            message: format!("Failed to open {index_dir}: {e}"),
+                        })?;
                 index
                     .reindex_with_progress(&conn, &mut on_event)
                     .await
-                    .map_err(|e| crate::CliError::Operation {
+                    .map_err(|e| CliError::Operation {
                         message: format!("Reindex failed: {e}"),
                     })?;
             }
@@ -171,20 +171,4 @@ fn finish_bar(bar: &Option<indicatif::ProgressBar>) {
     if let Some(bar) = bar {
         bar.finish_and_clear();
     }
-}
-
-fn default_db_path() -> Result<Utf8PathBuf> {
-    use livtet_core::paths;
-    let dir = paths::data_dir().ok_or_else(|| crate::CliError::Operation {
-        message: "Could not resolve the livtet data directory".to_string(),
-    })?;
-    Ok(dir.join("livtet.db"))
-}
-
-fn default_index_dir() -> Result<Utf8PathBuf> {
-    use livtet_core::paths;
-    let dir = paths::data_dir().ok_or_else(|| crate::CliError::Operation {
-        message: "Could not resolve the livtet data directory".to_string(),
-    })?;
-    Ok(dir.join("search-index"))
 }

@@ -2,8 +2,8 @@
 
 The shared Rust workspace for the Livtet personal book-collection
 manager. This is the engine: the database layer, business logic,
-cover subsystem, search index, plugin runtime, sync engine, CLI, and
-the FFI surface used by the desktop and mobile apps.
+cover subsystem, search index, plugin runtime, sync engine, and CLI used by the
+desktop and mobile apps.
 
 Everything in this repo is published under the
 [Mozilla Public License 2.0](LICENSE).
@@ -16,14 +16,14 @@ sibling repositories and links against the crates built here.
 Every Livtet client embeds this workspace, directly or indirectly:
 
 - The [Tauri desktop][1] app links the individual crates it needs.
-- The [Android and iOS][2] apps reach the same surface through
-  `livtet-ffi`, a uniffi-generated binding that re-exports a curated
-  subset across the language boundary.
+- The [Android and iOS][2] apps reach the same surface through a future crate
+  `livtet-ffi`, a `uniffi`-generated binding that re-exports a curated subset
+  across the language boundary.
 
 `livtet-core` is _the unison crate_. It composes `livtet-data`,
 `livtet-covers`, and `livtet-search` into the public surface every
 client depends on, and re-exports the curated names so consumers can
-import a single crate &mdash.
+import a single crate.
 
 ## Layout
 
