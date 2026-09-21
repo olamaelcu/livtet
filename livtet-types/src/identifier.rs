@@ -58,6 +58,12 @@ impl Identifier {
     }
 }
 
+#[cfg(feature = "uniffi")]
+uniffi::custom_type!(Identifier, String, {
+    lower: |i| i.as_urn_string(),
+    try_lift: |s| Ok(Identifier::parse(&s)?),
+});
+
 impl FromStr for Identifier {
     type Err = IdentifierParseError;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
@@ -172,5 +178,33 @@ mod tests {
     fn identifier_from_str() {
         let id: Identifier = "urn:oclc:12345".parse().unwrap();
         assert_eq!(id.value(), "12345");
+    }
+}
+
+#[cfg(all(test, feature = "uniffi"))]
+mod uniffi_tests {
+    use super::*;
+    use crate::UniFfiTag;
+    use uniffi::FfiConverter;
+
+    #[test]
+    fn string_round_trip() {
+        let id = Identifier::parse("urn:isbn:9780306406157").unwrap();
+        let buf = <Identifier as FfiConverter<UniFfiTag>>::lower(id.clone());
+        let lifted = <Identifier as FfiConverter<UniFfiTag>>::try_lift(buf).unwrap();
+        assert_eq!(lifted, id);
+    }
+
+    #[test]
+    fn lift_preserves_unknown_schemes_as_custom() {
+        let buf = <String as FfiConverter<UniFfiTag>>::lower("urn:wikidata:Q193359".to_string());
+        let lifted = <Identifier as FfiConverter<UniFfiTag>>::try_lift(buf).unwrap();
+        assert_eq!(lifted.kind, IdentifierKind::Custom("wikidata".to_string()));
+    }
+
+    #[test]
+    fn lift_rejects_malformed() {
+        let buf = <String as FfiConverter<UniFfiTag>>::lower("isbn:9780306406157".to_string());
+        assert!(<Identifier as FfiConverter<UniFfiTag>>::try_lift(buf).is_err());
     }
 }

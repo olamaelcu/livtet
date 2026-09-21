@@ -3,6 +3,7 @@ use specta::Type;
 
 #[cfg_attr(feature = "fake", derive(fake::Dummy))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Type, Serialize, Deserialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 #[repr(u16)]
 pub enum PairingStatus {
     Pending = 500,

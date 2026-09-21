@@ -65,6 +65,12 @@ impl Isbn {
     }
 }
 
+#[cfg(feature = "uniffi")]
+uniffi::custom_type!(Isbn, String, {
+    lower: |i| i.to_string(),
+    try_lift: |s| Ok(Isbn::parse(&s)?),
+});
+
 impl Display for Isbn {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.write_str(&self.0)
@@ -370,5 +376,33 @@ mod tests {
     #[test]
     fn is_valid_isbn13_rejects_bad_check() {
         assert!(!is_valid_isbn13("9780061120080"));
+    }
+}
+
+#[cfg(all(test, feature = "uniffi"))]
+mod uniffi_tests {
+    use super::*;
+    use crate::UniFfiTag;
+    use uniffi::FfiConverter;
+
+    #[test]
+    fn string_round_trip() {
+        let isbn = Isbn::parse("978-0-306-40615-7").unwrap();
+        let buf = <Isbn as FfiConverter<UniFfiTag>>::lower(isbn.clone());
+        let lifted = <Isbn as FfiConverter<UniFfiTag>>::try_lift(buf).unwrap();
+        assert_eq!(lifted, isbn);
+    }
+
+    #[test]
+    fn lift_canonicalizes_isbn10() {
+        let buf = <String as FfiConverter<UniFfiTag>>::lower("0-306-40615-2".to_string());
+        let lifted = <Isbn as FfiConverter<UniFfiTag>>::try_lift(buf).unwrap();
+        assert_eq!(lifted.to_string(), "9780306406157");
+    }
+
+    #[test]
+    fn lift_rejects_bad_checksum() {
+        let buf = <String as FfiConverter<UniFfiTag>>::lower("9780306406158".to_string());
+        assert!(<Isbn as FfiConverter<UniFfiTag>>::try_lift(buf).is_err());
     }
 }

@@ -6,6 +6,7 @@ use crate::ProgressUnit;
 
 /// Rich language metadata returned by [`CommonLanguages::normalize_language_code`].
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct LanguageInfo {
     /// Normalized ISO 639-1 two-letter code (e.g. `"en"`).
     pub code: String,
@@ -21,6 +22,7 @@ pub struct LanguageInfo {
 /// These are deterministic ULIDs that are seeded into the database.
 #[cfg_attr(feature = "fake", derive(fake::Dummy))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Type, Serialize, Deserialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 #[repr(u16)]
 pub enum KnownFormats {
     Hardcover = 1,

@@ -5,6 +5,7 @@ use strum::{Display, EnumIter, EnumString, IntoStaticStr, VariantNames};
 use crate::DbId;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, Type)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct WorkFilters {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tag_ids: Vec<DbId>,
@@ -68,6 +69,7 @@ impl WorkFilters {
 )]
 #[strum(serialize_all = "snake_case")]
 #[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum WorkSortBy {
     #[default]
     CreatedAt,
@@ -105,6 +107,7 @@ pub enum WorkSortBy {
 )]
 #[strum(serialize_all = "snake_case")]
 #[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum SortDirection {
     #[default]
     Desc,
@@ -131,6 +134,7 @@ pub enum SortDirection {
 )]
 #[strum(serialize_all = "snake_case")]
 #[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum SortField {
     /// Sort by title (alphabetical via `title_sort` fast field).
     Title,
@@ -147,6 +151,7 @@ pub enum SortField {
 /// [`WorkFiltersQuery::build_sort`].
 /// Shared across the Tauri command, FFI, and saved-searches paths.
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct SortSpec {
     pub field: SortField,
     pub direction: SortDirection,

@@ -22,6 +22,7 @@ use time::{Date, Month};
 /// "no specific date", which mirrors the existing behaviour for
 /// works where only the publication year is known.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Type)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 #[serde(try_from = "String", into = "String")]
 pub enum PublishedDate {
     /// `1989` — only the year is known.

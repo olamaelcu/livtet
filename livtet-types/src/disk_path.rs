@@ -28,6 +28,12 @@ impl DiskPath {
     }
 }
 
+#[cfg(feature = "uniffi")]
+uniffi::custom_type!(DiskPath, String, {
+    lower: |p| p.to_string(),
+    try_lift: |s: String| Ok(DiskPath::from_path(camino::Utf8Path::new(&s))),
+});
+
 impl std::ops::Deref for DiskPath {
     type Target = camino::Utf8Path;
     fn deref(&self) -> &Self::Target {
@@ -147,5 +153,28 @@ mod tests {
         let s = path.to_string();
         let parsed: DiskPath = s.parse().unwrap();
         assert_eq!(path, parsed);
+    }
+}
+
+#[cfg(all(test, feature = "uniffi"))]
+mod uniffi_tests {
+    use super::*;
+    use crate::UniFfiTag;
+    use uniffi::FfiConverter;
+
+    #[test]
+    fn string_round_trip() {
+        let path = DiskPath::from_path(camino::Utf8Path::new("/data/books/some.epub"));
+        let buf = <DiskPath as FfiConverter<UniFfiTag>>::lower(path.clone());
+        let lifted = <DiskPath as FfiConverter<UniFfiTag>>::try_lift(buf).unwrap();
+        assert_eq!(lifted, path);
+    }
+
+    #[test]
+    fn wire_format_is_the_path_string() {
+        let path = DiskPath::from_path(camino::Utf8Path::new("/data/books/some.epub"));
+        let buf = <DiskPath as FfiConverter<UniFfiTag>>::lower(path);
+        let s = <String as FfiConverter<UniFfiTag>>::try_lift(buf).unwrap();
+        assert_eq!(s, "/data/books/some.epub");
     }
 }

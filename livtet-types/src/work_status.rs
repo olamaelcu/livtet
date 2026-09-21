@@ -9,6 +9,7 @@ use specta::Type;
 /// deterministic ULID form to round-trip through [`DbId`].
 #[cfg_attr(feature = "fake", derive(fake::Dummy))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Type, Serialize, Deserialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 #[repr(u16)]
 pub enum WorkStatus {
     ToRead = 300,

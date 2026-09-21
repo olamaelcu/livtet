@@ -22,6 +22,7 @@ use specta::Type;
 
 #[cfg_attr(feature = "fake", derive(fake::Dummy))]
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, Type)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 #[serde(rename_all = "snake_case")]
 pub enum IdentifierKind {
     Isbn,

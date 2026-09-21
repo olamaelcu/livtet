@@ -75,6 +75,12 @@ impl fmt::Display for Urn {
     }
 }
 
+#[cfg(feature = "uniffi")]
+uniffi::custom_type!(Urn, String, {
+    lower: |u| u.to_urn_string(),
+    try_lift: |s| Ok(Urn::parse(&s)?),
+});
+
 impl FromStr for Urn {
     type Err = UrnParseError;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
@@ -189,5 +195,34 @@ mod tests {
         let urn = Urn::parse("urn:openlibrary:/works/OL2003619W").unwrap();
         assert_eq!(urn.type_, "openlibrary");
         assert_eq!(urn.value, "/works/OL2003619W");
+    }
+}
+
+#[cfg(all(test, feature = "uniffi"))]
+mod uniffi_tests {
+    use super::*;
+    use crate::UniFfiTag;
+    use uniffi::FfiConverter;
+
+    #[test]
+    fn string_round_trip() {
+        let urn = Urn::parse("urn:isbn:978-0-06-112008-4").unwrap();
+        let buf = <Urn as FfiConverter<UniFfiTag>>::lower(urn.clone());
+        let lifted = <Urn as FfiConverter<UniFfiTag>>::try_lift(buf).unwrap();
+        assert_eq!(lifted, urn);
+    }
+
+    #[test]
+    fn wire_format_is_the_urn_string() {
+        let urn = Urn::parse("urn:isbn:978-0-06-112008-4").unwrap();
+        let buf = <Urn as FfiConverter<UniFfiTag>>::lower(urn);
+        let s = <String as FfiConverter<UniFfiTag>>::try_lift(buf).unwrap();
+        assert_eq!(s, "urn:isbn:978-0-06-112008-4");
+    }
+
+    #[test]
+    fn lift_rejects_missing_prefix() {
+        let buf = <String as FfiConverter<UniFfiTag>>::lower("isbn:9780306406157".to_string());
+        assert!(<Urn as FfiConverter<UniFfiTag>>::try_lift(buf).is_err());
     }
 }

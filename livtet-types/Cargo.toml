@@ -18,7 +18,7 @@ sea-orm = { version = "2.0", features = ["time", "macros"] }
 time = { workspace = true }
 serde_json.workspace = true
 thiserror = { workspace = true }
-uniffi.workspace = true
+uniffi = { workspace = true, optional = true }
 fake = { workspace = true, optional = true, features = [
   "derive",
   "time",
@@ -39,7 +39,7 @@ specta-typescript = { version = "0.0.12", features = ["serde"] }
 [features]
 fake = ["dep:fake", "dep:mutants"]
 search = ["dep:tantivy-query-grammar", "dep:mutants"]
-uniffi = []
+uniffi = ["dep:uniffi"]
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt", "macros"] }

@@ -4,7 +4,6 @@ members = [
   "livtet-core",
   "livtet-cli",
   "livtet-cli-common",
-  "livtet-ffi",
   "livtet-temporal-quotes",
   "livtet-data",
   "livtet-search",
@@ -29,12 +28,11 @@ rust-version = "1.97.0"
 livtet-core = { path = "livtet-core" }
 livtet-cli-common = { path = "livtet-cli-common" }
 livtet-data = { path = "livtet-data" }
-livtet-ffi = { path = "livtet-ffi" }
 livtet-search = { path = "livtet-search" }
 livtet-test-utils = { path = "livtet-test-utils" }
 livtet-types = { path = "livtet-types" }
 magnus = "0.8"
-uniffi = "0.27"
+uniffi = "0.32"
 
 # Filesystem + I/O
 camino = { version = "1", features = ["serde1"] }
