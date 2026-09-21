@@ -14,11 +14,28 @@ use crate::schema::{DEFAULT_SNIPPET_CHARS, WORK_GROUP_OVERFETCH};
 /// Serialised as `"edition"`, `"work"`, or `"person"` (snake_case)
 /// so the specta-generated TS type stays narrow.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Type, PartialEq, Eq)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 #[serde(rename_all = "snake_case")]
 pub enum HitKind {
     Edition,
     Work,
     Person,
+}
+
+/// A `[start, end)` byte range into `snippet_text` that should be
+/// rendered highlighted. Replaces the previous `[u32; 2]` pair so the
+/// type crosses the UniFFI boundary with named fields.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Type, PartialEq, Eq)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct HighlightRange {
+    pub start: u32,
+    pub end: u32,
+}
+
+impl From<[u32; 2]> for HighlightRange {
+    fn from([start, end]: [u32; 2]) -> Self {
+        Self { start, end }
+    }
 }
 
 /// A single search result.
@@ -30,6 +47,7 @@ pub enum HitKind {
 /// populated), or a person hit (`HitKind::Person`, `author_id`
 /// populated, `kind = "author"` documents).
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct SearchHit {
     pub kind: HitKind,
     /// Set for `HitKind::Edition`.
@@ -69,8 +87,7 @@ pub struct SearchHit {
     pub snippet_text: Option<String>,
     /// Byte ranges into `snippet_text` that should be highlighted.
     /// Empty when the snippet was generated without highlights.
-    /// Each entry is `[start, end]` — byte offsets into `snippet_text`.
-    pub snippet_highlighted: Vec<[u32; 2]>,
+    pub snippet_highlighted: Vec<HighlightRange>,
 
     /// When `HitKind::Work`, the edition IDs collapsed into this
     /// work hit. Empty for edition/person hits.
@@ -92,6 +109,7 @@ pub struct SearchHit {
 
 /// Options that control one search call.
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct SearchOptions {
     /// When true, every hit carries the Tantivy explanation tree
     /// serialised to JSON.
@@ -102,13 +120,13 @@ pub struct SearchOptions {
     pub with_snippet: bool,
     /// Snippet budget in characters. Ignored when `with_snippet`
     /// is false.
-    pub snippet_chars: usize,
+    pub snippet_chars: i64,
     /// When true, edition hits are collapsed onto works. Equivalent
     /// to calling [`SearchIndex::search_works`].
     pub collapse_to_works: bool,
     /// Over-fetch multiplier for the work-collapse path. The default
     /// is 8 (`WORK_GROUP_OVERFETCH`).
-    pub work_overfetch: usize,
+    pub work_overfetch: i64,
     /// Optional explicit sort. When `Some`,
     /// [`SearchIndex::search_with_options`] sorts the top-N result
     /// by the corresponding fast field (`Title` / `CreatedAt` /
@@ -134,7 +152,7 @@ pub struct SearchOptions {
     /// offset — the offset is applied post-hoc on the
     /// score-ordered (or post-sorted) result slice.
     /// ...
-    pub offset: usize,
+    pub offset: i64,
     /// When `Some`, only hits whose stored `source` field matches
     /// this string are returned. For `range = "catalog"` the
     /// filter is `"catalog"`; for `range = "provider"` it is
@@ -149,9 +167,9 @@ impl Default for SearchOptions {
         Self {
             explain: false,
             with_snippet: true,
-            snippet_chars: DEFAULT_SNIPPET_CHARS,
+            snippet_chars: DEFAULT_SNIPPET_CHARS as i64,
             collapse_to_works: false,
-            work_overfetch: WORK_GROUP_OVERFETCH,
+            work_overfetch: WORK_GROUP_OVERFETCH as i64,
             sort: None,
             offset: 0,
             source_filter: None,
@@ -162,20 +180,22 @@ impl Default for SearchOptions {
 /// Search result bundle that includes facet counts. Returned by
 /// [`SearchIndex::search_with_facets`].
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct FacetedSearchResult {
     pub hits: Vec<SearchHit>,
     pub language_facets: Vec<FacetCount>,
     pub publisher_facets: Vec<FacetCount>,
     pub subject_facets: Vec<FacetCount>,
     pub genre_facets: Vec<FacetCount>,
-    pub recently_added: usize,
+    pub recently_added: i64,
 }
 
 /// One row of a facet count.
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct FacetCount {
     pub label: String,
-    pub count: usize,
+    pub count: i64,
 }
 
 #[cfg(test)]

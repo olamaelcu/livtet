@@ -114,10 +114,6 @@ fn limit_u(limit: u32) -> usize {
     limit.min(100) as usize
 }
 
-#[inline]
-fn offset_u(offset: u32) -> usize {
-    offset as usize
-}
 
 async fn open_index() -> crate::Result<SearchIndex> {
     let dir = default_index_dir()?;
@@ -131,7 +127,7 @@ async fn open_index() -> crate::Result<SearchIndex> {
 async fn list(limit: u32, offset: u32) -> crate::Result<()> {
     let index = open_index().await?;
     let opts = SearchOptions {
-        offset: offset_u(offset),
+        offset: offset as i64,
         ..Default::default()
     };
     let hits: Vec<LivtetHit> = index
@@ -154,7 +150,7 @@ async fn list(limit: u32, offset: u32) -> crate::Result<()> {
 async fn search(query: &str, limit: u32, offset: u32) -> crate::Result<()> {
     let index = open_index().await?;
     let opts = SearchOptions {
-        offset: offset_u(offset),
+        offset: offset as i64,
         ..Default::default()
     };
     let hits: Vec<LivtetHit> = index

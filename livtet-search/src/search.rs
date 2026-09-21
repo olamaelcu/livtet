@@ -13,7 +13,7 @@ use tantivy::{
 
 use crate::{
     index::SearchIndex,
-    model::{FacetCount, FacetedSearchResult, HitKind, SearchHit, SearchOptions},
+    model::{FacetCount, FacetedSearchResult, HighlightRange, HitKind, SearchHit, SearchOptions},
     schema::{OPDS_WORK_ID_LIMIT, fields, kinds},
 };
 
@@ -428,12 +428,12 @@ impl SearchIndex {
         }
         // When offset is requested, we need to fetch extra hits so
         // we can drop the first `offset` results in-memory.
-        let effective_limit = limit.saturating_add(opts.offset);
+        let effective_limit = limit.saturating_add(opts.offset as usize);
         let base_limit = if opts.collapse_to_works {
             // Over-fetch so the per-work collapse has enough raw
             // hits to cover the limit even when many editions of
             // the same work are present.
-            effective_limit.saturating_mul(opts.work_overfetch.max(1))
+            effective_limit.saturating_mul(opts.work_overfetch.max(1) as usize)
         } else {
             effective_limit
         };
@@ -474,9 +474,10 @@ impl SearchIndex {
         // Apply in-memory offset: drop the first `offset` hits.
         // This happens after sorting so the offset is relative to
         // the requested sort order, not the raw score order.
-        if opts.offset > 0 && opts.offset < top_docs.len() {
-            top_docs.drain(..opts.offset);
-        } else if opts.offset >= top_docs.len() {
+        let offset = opts.offset.max(0) as usize;
+        if offset > 0 && offset < top_docs.len() {
+            top_docs.drain(..offset);
+        } else if offset >= top_docs.len() {
             top_docs.clear();
         }
 
@@ -512,9 +513,9 @@ impl SearchIndex {
 
         // When offset is requested, fetch extra hits so we can drop
         // the first `offset` results in-memory.
-        let effective_limit = limit.saturating_add(opts.offset);
+        let effective_limit = limit.saturating_add(opts.offset as usize);
         let fetch_limit = if opts.collapse_to_works {
-            effective_limit.saturating_mul(opts.work_overfetch.max(1))
+            effective_limit.saturating_mul(opts.work_overfetch.max(1) as usize)
         } else {
             effective_limit
         };
@@ -546,9 +547,10 @@ impl SearchIndex {
         );
 
         // Apply in-memory offset: drop the first `offset` hits.
-        if opts.offset > 0 && opts.offset < top_docs.len() {
-            top_docs.drain(..opts.offset);
-        } else if opts.offset >= top_docs.len() {
+        let offset = opts.offset.max(0) as usize;
+        if offset > 0 && offset < top_docs.len() {
+            top_docs.drain(..offset);
+        } else if offset >= top_docs.len() {
             top_docs.clear();
         }
 
@@ -588,9 +590,9 @@ impl SearchIndex {
 
         // When offset is requested, fetch extra hits so we can drop
         // the first `offset` results in-memory.
-        let effective_limit = limit.saturating_add(opts.offset);
+        let effective_limit = limit.saturating_add(opts.offset as usize);
         let fetch_limit = if opts.collapse_to_works {
-            effective_limit.saturating_mul(opts.work_overfetch.max(1))
+            effective_limit.saturating_mul(opts.work_overfetch.max(1) as usize)
         } else {
             effective_limit
         };
@@ -607,9 +609,10 @@ impl SearchIndex {
         );
 
         // Apply in-memory offset: drop the first `offset` hits.
-        if opts.offset > 0 && opts.offset < top_docs.len() {
-            top_docs.drain(..opts.offset);
-        } else if opts.offset >= top_docs.len() {
+        let offset = opts.offset.max(0) as usize;
+        if offset > 0 && offset < top_docs.len() {
+            top_docs.drain(..offset);
+        } else if offset >= top_docs.len() {
             top_docs.clear();
         }
 
@@ -697,7 +700,7 @@ impl SearchIndex {
             publisher_facets: facet_counts(&pub_fc),
             subject_facets: facet_counts(&subj_fc),
             genre_facets: facet_counts(&genre_fc),
-            recently_added: recent.len(),
+            recently_added: recent.len() as i64,
         })
     }
 
@@ -737,7 +740,7 @@ impl SearchIndex {
         let snippet_generator = if opts.with_snippet {
             match SnippetGenerator::create(searcher, query, snippet_field) {
                 Ok(mut g) => {
-                    g.set_max_num_chars(opts.snippet_chars);
+                    g.set_max_num_chars(opts.snippet_chars.max(0) as usize);
                     Some(g)
                 }
                 Err(_) => None,
@@ -822,9 +825,9 @@ impl SearchIndex {
                     let text = snippet.fragment().to_string();
                     // tantivy's `Snippet::highlighted()` returns
                     // `&[Range<usize>]` indexed into the fragment
-                    // bytes. Map to `[u32; 2]` for IPC compatibility.
-                    let ranges: Vec<[u32; 2]> = snippet.highlighted().iter()
-                        .map(|r| [r.start as u32, r.end as u32])
+                    // bytes. Map to `HighlightRange` for IPC compatibility.
+                    let ranges: Vec<HighlightRange> = snippet.highlighted().iter()
+                        .map(|r| HighlightRange { start: r.start as u32, end: r.end as u32 })
                         .collect();
                     (Some(text), ranges)
                 }
@@ -1215,7 +1218,7 @@ fn facet_counts(counts: &tantivy::collector::FacetCounts) -> Vec<FacetCount> {
         .into_iter()
         .map(|(facet, count)| FacetCount {
             label: facet.to_string(),
-            count: count as usize,
+            count: count as i64,
         })
         .collect()
 }

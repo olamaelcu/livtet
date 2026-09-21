@@ -28,6 +28,12 @@
 //! [`ResourceLookup`]. The concrete SeaORM-backed implementation
 //! is in [`crate::sea_orm_resource_lookup`].
 
+#[cfg(feature = "uniffi")]
+/// See `livtet-types`' `UniFfiTag` — UniFFI derives reference
+/// `crate::UniFfiTag` at definition site.
+#[doc(hidden)]
+pub struct UniFfiTag;
+
 pub mod doc;
 pub mod index;
 pub mod label_resolver;
@@ -43,7 +49,9 @@ pub use doc::{AuthorDoc, EditionDoc};
 pub use index::{SearchError, SearchIndex};
 pub use label_resolver::LabelResolver;
 pub use lookups::{AuthorLookup, EditionLookup, ResourceKind, ResourceLookup, WorkLookup};
-pub use model::{FacetCount, FacetedSearchResult, HitKind, SearchHit, SearchOptions};
+pub use model::{
+    FacetCount, FacetedSearchResult, HighlightRange, HitKind, SearchHit, SearchOptions,
+};
 pub use schema::{
     DEFAULT_SNIPPET_CHARS, OPDS_WORK_ID_LIMIT, SCHEMA_VERSION, WORK_GROUP_OVERFETCH, build_schema,
     fields, kinds,

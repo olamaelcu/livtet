@@ -25,6 +25,10 @@ rayon = "1.12"
 parking_lot = "0.12"
 fs-err.workspace = true
 camino-tempfile = { workspace = true }
+uniffi = { version = "0.32", optional = true }
+
+[features]
+uniffi = ["dep:uniffi", "livtet-types/uniffi"]
 
 [dev-dependencies]
 livtet-data = { workspace = true }
