@@ -1,0 +1,8 @@
+[bindings.kotlin]
+package_name = "net.olamaelcu.livtet.ffi"
+generate_immutable_records = true
+android = true
+
+[bindings.swift]
+generate_codable_conformance = true
+generate_case_iterable_conformance = true

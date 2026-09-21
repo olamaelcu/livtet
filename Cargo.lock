@@ -419,6 +419,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "async-compat"
+version = "0.2.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4c97d7ff3c25d6c10d64170c12acaf5d4245e76dece3779c1d92b153a64f11df"
+dependencies = [
+ "futures-core",
+ "futures-io",
+ "once_cell",
+ "pin-project-lite",
+ "tokio",
+]
+
+[[package]]
 name = "async-stream"
 version = "0.3.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2768,6 +2781,23 @@ dependencies = [
  "tokio",
  "tracing",
  "ulid 3.0.0",
+]
+
+[[package]]
+name = "livtet-ffi"
+version = "0.1.0"
+dependencies = [
+ "camino",
+ "camino-tempfile",
+ "livtet-core",
+ "livtet-data",
+ "livtet-search",
+ "livtet-test-utils",
+ "livtet-types",
+ "thiserror",
+ "time",
+ "tokio",
+ "uniffi",
 ]
 
 [[package]]
@@ -5743,7 +5773,9 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "edf78ecfb9bb8d7c4f8da11e8eb2ab6304e8ec0adb3ab32d8fc77c21a5bb0b86"
 dependencies = [
  "anyhow",
+ "camino",
  "cargo_metadata",
+ "clap",
  "uniffi_bindgen",
  "uniffi_core",
  "uniffi_macros",
@@ -5783,6 +5815,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8b1c62ee415b805f063c82e8ef6bbcaa1b87f8eed360cf217537b7724e05601"
 dependencies = [
  "anyhow",
+ "async-compat",
  "bytes",
  "once_cell",
  "static_assertions",
