@@ -271,7 +271,7 @@ mod tests {
         .await
         .expect("seed");
 
-        let work = &store.list_works(1, 0).await.unwrap()[0];
+        let work = &store.list_works(1, 0, None, None).await.unwrap()[0];
         let edition = store.list_editions(work.id).await.unwrap()[0].id;
         (tmp, store, edition)
     }

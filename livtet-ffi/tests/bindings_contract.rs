@@ -104,6 +104,9 @@ const EXPECTED_TYPES: &[&str] = &[
     "EditionPatch",
     "SeedStats",
     "ReindexProgressEvent",
+    // livtet-temporal-quotes re-exports
+    "Greeting",
+    "EmptyMessage",
     // livtet-search types crossing directly
     "SearchHit",
     "HitKind",
@@ -160,6 +163,8 @@ const EXPECTED_METHODS: &[&str] = &[
     "reindex",
     "seedSampleData",
     "resetAndSeed",
+    "getGreeting",
+    "getEmptyStateQuotation",
 ];
 
 #[test]

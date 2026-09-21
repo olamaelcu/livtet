@@ -15,6 +15,7 @@ uniffi = { version = "0.32", features = ["tokio"] }
 livtet-core.workspace = true
 livtet-data = { workspace = true, features = ["fake"] }
 livtet-search = { workspace = true, features = ["uniffi"] }
+livtet-temporal-quotes.workspace = true
 livtet-types = { workspace = true, features = ["uniffi"] }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 camino.workspace = true

@@ -31,6 +31,7 @@ livtet-cli-common = { path = "livtet-cli-common" }
 livtet-data = { path = "livtet-data" }
 livtet-ffi = { path = "livtet-ffi" }
 livtet-search = { path = "livtet-search" }
+livtet-temporal-quotes = { path = "livtet-temporal-quotes" }
 livtet-test-utils = { path = "livtet-test-utils" }
 livtet-types = { path = "livtet-types" }
 magnus = "0.8"

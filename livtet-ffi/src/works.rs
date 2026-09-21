@@ -9,7 +9,7 @@ use livtet_data::entities::{
 use livtet_data::orm::{
     ColumnTrait, EntityTrait, Order, PaginatorTrait, QueryFilter, QueryOrder, QuerySelect,
 };
-use livtet_types::DbId;
+use livtet_types::{DbId, SortDirection, WorkSortBy};
 
 use crate::dto::{EditionDetail, EditionFile, EditionSummary, WorkSummary, ts, ts_opt};
 use crate::error::LivtetError;
@@ -17,16 +17,39 @@ use crate::store::LivtetStore;
 
 #[uniffi::export(async_runtime = "tokio")]
 impl LivtetStore {
-    /// List works in title order.
+    /// List works, with optional sort: `sort_by`/`sort_direction`
+    /// select the field and direction (defaults: title ascending).
+    /// `WorkSortBy::NewestCap` always means `created_at DESC`
+    /// (the "newly added" view).
     pub async fn list_works(
         &self,
         limit: u32,
         offset: u32,
+        sort_by: Option<WorkSortBy>,
+        sort_direction: Option<SortDirection>,
     ) -> Result<Vec<WorkSummary>, LivtetError> {
         let db = self.state.db_conn();
 
-        let models = works::Entity::find()
-            .order_by(works::Column::Title, Order::Asc)
+        let query = works::Entity::find();
+        let ordered = match sort_by {
+            // NewestCap's semantic is fixed: newest first, direction
+            // ignored (see WorkFilters::effective_limit docs).
+            Some(WorkSortBy::NewestCap) => query.order_by(works::Column::CreatedAt, Order::Desc),
+            other => {
+                let column = match other.unwrap_or(WorkSortBy::Title) {
+                    WorkSortBy::CreatedAt | WorkSortBy::NewestCap => works::Column::CreatedAt,
+                    WorkSortBy::Title => works::Column::Title,
+                    WorkSortBy::UpdatedAt => works::Column::UpdatedAt,
+                };
+                let direction = match sort_direction.unwrap_or_default() {
+                    SortDirection::Asc => Order::Asc,
+                    SortDirection::Desc => Order::Desc,
+                };
+                query.order_by(column, direction)
+            }
+        };
+
+        let models = ordered
             .order_by(works::Column::Id, Order::Asc)
             .limit(Some(limit.max(1) as u64))
             .offset(Some(offset as u64))
@@ -316,7 +339,7 @@ mod tests {
     #[tokio::test]
     async fn list_works_returns_seeded_works() {
         let (_tmp, store) = seeded_store(3).await;
-        let works = store.list_works(100, 0).await.expect("list");
+        let works = store.list_works(100, 0, None, None).await.expect("list");
         assert_eq!(works.len(), 3);
         assert!(works.iter().all(|w| !w.title.is_empty()));
         assert_eq!(store.count_works().await.unwrap(), 3);
@@ -325,11 +348,11 @@ mod tests {
     #[tokio::test]
     async fn list_works_paginates() {
         let (_tmp, store) = seeded_store(5).await;
-        let all = store.list_works(100, 0).await.unwrap();
-        let page = store.list_works(2, 0).await.unwrap();
+        let all = store.list_works(100, 0, None, None).await.unwrap();
+        let page = store.list_works(2, 0, None, None).await.unwrap();
         assert_eq!(page.len(), 2);
         assert_eq!(page[0].id, all[0].id);
-        let rest = store.list_works(2, 2).await.unwrap();
+        let rest = store.list_works(2, 2, None, None).await.unwrap();
         assert_eq!(rest[0].id, all[2].id);
         assert_eq!(rest[1].id, all[3].id);
     }
@@ -337,7 +360,7 @@ mod tests {
     #[tokio::test]
     async fn list_editions_and_detail_roundtrip() {
         let (_tmp, store) = seeded_store(2).await;
-        let works = store.list_works(100, 0).await.unwrap();
+        let works = store.list_works(100, 0, None, None).await.unwrap();
         let work = &works[0];
 
         let editions = store.list_editions(work.id).await.unwrap();
@@ -356,5 +379,44 @@ mod tests {
     async fn get_edition_unknown_id_is_none() {
         let (_tmp, store) = seeded_store(1).await;
         assert!(store.get_edition(DbId::new()).await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn list_works_newest_cap_orders_by_created_desc() {
+        let (_tmp, store) = seeded_store(5).await;
+
+        // Give each work a distinct created_at, then verify ordering
+        // through the FFI method rather than raw rows.
+        let by_title = store.list_works(100, 0, None, None).await.unwrap();
+        let db = store.state.db_conn();
+        for (i, work) in by_title.iter().enumerate() {
+            use livtet_data::orm::{ActiveModelTrait, EntityTrait, Set};
+            let mut active: livtet_data::entities::works::ActiveModel =
+                livtet_data::entities::works::Entity::find_by_id(work.id)
+                    .one(&db)
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .into();
+            active.created_at = Set(time::PrimitiveDateTime::new(
+                time::Date::from_calendar_date(2020, time::Month::January, (i + 1) as u8)
+                    .unwrap(),
+                time::Time::MIDNIGHT,
+            ));
+            active.update(&db).await.unwrap();
+        }
+
+        let newest = store
+            .list_works(
+                100,
+                0,
+                Some(livtet_types::WorkSortBy::NewestCap),
+                None,
+            )
+            .await
+            .unwrap();
+        // ordering: index 4 (latest day) first, descending.
+        assert_eq!(newest[0].id, by_title[4].id);
+        assert_eq!(newest[4].id, by_title[0].id);
     }
 }
