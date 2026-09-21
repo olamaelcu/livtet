@@ -10,7 +10,10 @@ use livtet_data::entities::{
 use livtet_data::orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, QueryOrder, Set};
 use livtet_types::{DbId, ProgressUnit, WorkStatus, now_primitive};
 
-use crate::dto::{Annotation, ReadingList, ReadingProgress, ReadingSession, ts, ts_opt, ts_parse};
+use crate::dto::{
+    Annotation, ReadingList, ReadingProgress, ReadingSession, ReadingSessionInput, ts, ts_opt,
+    ts_parse,
+};
 use crate::error::LivtetError;
 use crate::store::LivtetStore;
 
@@ -149,37 +152,30 @@ impl LivtetStore {
     /// Record one finished reading session.
     pub async fn record_reading_session(
         &self,
-        edition_id: DbId,
-        format_id: DbId,
-        duration_seconds: i64,
-        progress_delta: f64,
-        last_location: Option<String>,
-        notes: Option<String>,
-        started_at: Option<String>,
+        input: ReadingSessionInput,
     ) -> Result<ReadingSession, LivtetError> {
         let db = self.state.db_conn();
 
-        let started = match started_at {
+        let started = match input.started_at {
             Some(s) => ts_parse(&s)?,
             None => now_primitive()
-                .checked_sub(time::Duration::seconds(duration_seconds))
+                .checked_sub(time::Duration::seconds(input.duration_seconds))
                 .unwrap_or_else(now_primitive),
         };
-        let ended = started
-            .checked_add(time::Duration::seconds(duration_seconds));
+        let ended = started.checked_add(time::Duration::seconds(input.duration_seconds));
 
         let active = reading_sessions::ActiveModel {
             id: Set(DbId::new()),
-            edition_id: Set(edition_id),
-            format_id: Set(format_id),
+            edition_id: Set(input.edition_id),
+            format_id: Set(input.format_id),
             source_id: Set(None),
             started_at: Set(started),
             ended_at: Set(ended),
-            duration_seconds: Set(Some(duration_seconds.max(0))),
+            duration_seconds: Set(Some(input.duration_seconds.max(0))),
             raw_progression: Set(None),
-            progress_delta: Set(progress_delta),
-            last_location: Set(last_location),
-            notes: Set(notes),
+            progress_delta: Set(input.progress_delta),
+            last_location: Set(input.last_location),
+            notes: Set(input.notes),
             created_at: Set(now_primitive()),
             updated_at: Set(None),
         };
@@ -502,7 +498,15 @@ mod tests {
         let (_tmp, store, _w, edition) = seeded_store_with_edition().await;
         let fmt = DbId::from(KnownFormats::Epub);
         let session = store
-            .record_reading_session(edition, fmt, 600, 0.03, None, None, None)
+            .record_reading_session(ReadingSessionInput {
+                edition_id: edition,
+                format_id: fmt,
+                duration_seconds: 600,
+                progress_delta: 0.03,
+                last_location: None,
+                notes: None,
+                started_at: None,
+            })
             .await
             .unwrap();
         assert_eq!(session.edition_id, edition);

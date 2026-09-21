@@ -205,7 +205,7 @@ mod tests {
                 ReindexProgressEvent::Indexing { done, total } => Some((done, total)),
                 _ => None,
             })
-            .last();
+            .next_back();
         assert!(terminal.is_some(), "indexing events were emitted");
         if let Some((done, total)) = terminal {
             assert_eq!(done, total, "last event reaches the total");

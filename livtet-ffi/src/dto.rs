@@ -128,6 +128,20 @@ pub struct ReadingList {
 
 /// One recorded reading session.
 #[derive(Debug, Clone, uniffi::Record)]
+pub struct ReadingSessionInput {
+    pub edition_id: DbId,
+    pub format_id: DbId,
+    pub duration_seconds: i64,
+    pub progress_delta: f64,
+    pub last_location: Option<String>,
+    pub notes: Option<String>,
+    /// RFC 3339 timestamp of session start; `None` means
+    /// "`duration_seconds` before now".
+    pub started_at: Option<String>,
+}
+
+/// One recorded reading session.
+#[derive(Debug, Clone, uniffi::Record)]
 pub struct ReadingSession {
     pub id: DbId,
     pub edition_id: DbId,
