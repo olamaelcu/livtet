@@ -25,6 +25,9 @@ pub mod subdirs {
     pub const PERMISSIONS: &str = "permissions";
 }
 
+/// Seam between `dirs` (which speaks `std::path::PathBuf`) and the
+/// project's `camino` path vocabulary.
+#[allow(clippy::disallowed_types)]
 fn to_utf8(p: std::path::PathBuf) -> Option<Utf8PathBuf> {
     Utf8PathBuf::from_path_buf(p).ok()
 }
@@ -56,6 +59,6 @@ pub fn config_dir() -> Option<Utf8PathBuf> {
 /// platform does not expose a data dir.
 pub fn logs_dir() -> Utf8PathBuf {
     bundle_data_dir()
-        .unwrap_or_else(|| Utf8PathBuf::new())
+        .unwrap_or_default()
         .join("logs")
 }
