@@ -3,6 +3,10 @@ package_name = "net.olamaelcu.livtet.ffi"
 generate_immutable_records = true
 android = true
 
+[bindings.kotlin.external_packages]
+livtet_types = "net.olamaelcu.livtet.types"
+livtet_search = "net.olamaelcu.livtet.search"
+
 [bindings.swift]
 generate_codable_conformance = true
 generate_case_iterable_conformance = true

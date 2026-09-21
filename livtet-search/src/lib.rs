@@ -29,10 +29,7 @@
 //! is in [`crate::sea_orm_resource_lookup`].
 
 #[cfg(feature = "uniffi")]
-/// See `livtet-types`' `UniFfiTag` — UniFFI derives reference
-/// `crate::UniFfiTag` at definition site.
-#[doc(hidden)]
-pub struct UniFfiTag;
+uniffi::setup_scaffolding!("livtet_search");
 
 pub mod doc;
 pub mod index;
