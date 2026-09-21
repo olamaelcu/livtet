@@ -9,10 +9,12 @@ uniffi::setup_scaffolding!();
 
 mod dto;
 mod error;
+mod mutations;
 mod search;
 mod store;
 mod works;
 
 pub use dto::*;
 pub use error::LivtetError;
+pub use mutations::EditionPatch;
 pub use store::LivtetStore;
