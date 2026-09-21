@@ -6,7 +6,7 @@
 //! timestamps as RFC 3339 strings, and enum-like values as the
 //! `livtet-types` UniFFI enums.
 
-use livtet_types::{DbId, DiskPath, PublishedDate};
+use livtet_types::{DbId, DiskPath, ProgressUnit, PublishedDate};
 
 /// RFC 3339 rendering shared by all DTO timestamps (UTC).
 pub(crate) fn ts(dt: &time::PrimitiveDateTime) -> String {
@@ -17,6 +17,16 @@ pub(crate) fn ts(dt: &time::PrimitiveDateTime) -> String {
 
 pub(crate) fn ts_opt(dt: Option<time::PrimitiveDateTime>) -> Option<String> {
     dt.as_ref().map(ts)
+}
+
+/// Parse an RFC 3339 timestamp from the foreign side
+/// (fail-closed: invalid input is an error, not a silent `now()`).
+pub(crate) fn ts_parse(s: &str) -> Result<time::PrimitiveDateTime, crate::error::LivtetError> {
+    let odt = time::OffsetDateTime::parse(s, &time::format_description::well_known::Rfc3339)
+        .map_err(|e| {
+            crate::error::LivtetError::InvalidInput(format!("invalid RFC 3339 timestamp: {e}"))
+        })?;
+    Ok(time::PrimitiveDateTime::new(odt.date(), odt.time()))
 }
 
 /// A work (platonic book) with its display-facing fields resolved.
@@ -78,4 +88,52 @@ pub struct EditionDetail {
     pub file: Option<EditionFile>,
     pub created_at: String,
     pub updated_at: Option<String>,
+}
+
+/// Reading progress for one edition.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct ReadingProgress {
+    pub id: DbId,
+    pub edition_id: DbId,
+    /// Progress value in the given unit.
+    pub progress: f64,
+    pub progress_unit: Option<ProgressUnit>,
+    pub last_location: Option<String>,
+    pub total_reading_time_secs: i64,
+    pub created_at: String,
+}
+
+/// A user annotation pinned to an edition.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct Annotation {
+    pub id: DbId,
+    pub edition_id: DbId,
+    pub content: String,
+    pub location: Option<String>,
+    pub created_at: String,
+    pub updated_at: Option<String>,
+}
+
+/// A named reading list with its members (edition ids, in position
+/// order).
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct ReadingList {
+    pub id: DbId,
+    pub name: String,
+    pub description: Option<String>,
+    pub edition_ids: Vec<DbId>,
+    pub created_at: String,
+    pub updated_at: Option<String>,
+}
+
+/// One recorded reading session.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct ReadingSession {
+    pub id: DbId,
+    pub edition_id: DbId,
+    pub started_at: String,
+    pub duration_seconds: i64,
+    pub progress_delta: f64,
+    pub last_location: Option<String>,
+    pub notes: Option<String>,
 }

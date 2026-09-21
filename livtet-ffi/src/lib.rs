@@ -10,6 +10,7 @@ uniffi::setup_scaffolding!();
 mod dto;
 mod error;
 mod mutations;
+mod reading;
 mod search;
 mod store;
 mod works;
