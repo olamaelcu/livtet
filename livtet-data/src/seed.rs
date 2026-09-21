@@ -1030,9 +1030,11 @@ async fn add_edition_groups(
 
         for edition_id in chunk {
             use entities::editions::ActiveModel as EditionUpdateActiveModel;
-            let mut edition_update = <EditionUpdateActiveModel as std::default::Default>::default();
-            edition_update.id = Set(*edition_id);
-            edition_update.group_id = Set(Some(group_id));
+            let edition_update = EditionUpdateActiveModel {
+                id: Set(*edition_id),
+                group_id: Set(Some(group_id)),
+                ..Default::default()
+            };
             let _ = edition_update.update(pool).await;
         }
     }
