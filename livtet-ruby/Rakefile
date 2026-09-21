@@ -1,0 +1,24 @@
+# frozen_string_literal: true
+
+require "rake/testtask"
+
+# The native extension is built with plain cargo (no rb_sys/mkmf):
+# magnus links Ruby dynamically, so the cdylib loads as-is.
+SO_SRC = File.expand_path("../target/debug/liblivtet_ruby.so", __dir__)
+SO_DST_DIR = File.expand_path("lib/livtet", __dir__)
+SO_DST = File.join(SO_DST_DIR, "livtet.so")
+
+desc "Build the native extension into lib/livtet/livtet.so"
+task :compile do
+  sh "cargo build -p livtet-ruby"
+  mkdir_p SO_DST_DIR
+  cp SO_SRC, SO_DST
+  puts "built #{SO_DST}"
+end
+
+Rake::TestTask.new(:test) do |t|
+  t.libs << "lib"
+  t.pattern = "test/test_*.rb"
+end
+
+task default: %i[compile test]
