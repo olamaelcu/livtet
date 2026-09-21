@@ -40,7 +40,13 @@ impl LivtetStore {
 
     /// Flush SQLite (`PRAGMA optimize`) and close the connection pool.
     /// Subsequent use of this handle will fail at the database layer.
-    pub async fn close(&self) -> Result<(), LivtetError> {
+    /// Flush SQLite (`PRAGMA optimize`) and close the connection pool.
+    /// Subsequent use of this handle will fail at the database layer.
+    ///
+    /// Named `shutdown` on purpose: UniFFI objects already implement
+    /// `java.lang.AutoCloseable.close()` on the Kotlin side, and a
+    /// user-defined `close` collides with it.
+    pub async fn shutdown(&self) -> Result<(), LivtetError> {
         self.state.optimize_and_close().await?;
         Ok(())
     }
@@ -72,7 +78,7 @@ mod tests {
         assert!(db.exists(), "database file should be created");
         assert!(index_dir.exists(), "index dir should be created");
 
-        store.close().await.expect("close");
+        store.shutdown().await.expect("close");
     }
 
     #[tokio::test]
@@ -96,8 +102,8 @@ mod tests {
         assert_eq!(store_a.state.db_path, tmp_a.path().join("a.db"));
         assert_eq!(store_b.state.db_path, tmp_b.path().join("b.db"));
 
-        store_a.close().await.unwrap();
-        store_b.close().await.unwrap();
+        store_a.shutdown().await.unwrap();
+        store_b.shutdown().await.unwrap();
     }
 
     #[tokio::test]
@@ -113,6 +119,6 @@ mod tests {
         };
         assert!(matches!(err, LivtetError::Search(_)), "{err:?}");
 
-        first.close().await.unwrap();
+        first.shutdown().await.unwrap();
     }
 }
