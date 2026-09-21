@@ -1,0 +1,5 @@
+[bindings.kotlin]
+package_name = "net.olamaelcu.livtet.search"
+
+[bindings.swift]
+module_name = "LivtetSearch"
