@@ -9,6 +9,7 @@ uniffi::setup_scaffolding!();
 
 mod dto;
 mod error;
+mod maintenance;
 mod mutations;
 mod reading;
 mod search;
@@ -17,5 +18,6 @@ mod works;
 
 pub use dto::*;
 pub use error::LivtetError;
+pub use maintenance::{ReindexProgress, ReindexProgressEvent, SeedStats};
 pub use mutations::EditionPatch;
 pub use store::LivtetStore;

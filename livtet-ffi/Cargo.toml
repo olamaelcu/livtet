@@ -13,7 +13,7 @@ crate-type = ["cdylib", "staticlib", "rlib"]
 [dependencies]
 uniffi = { version = "0.32", features = ["tokio"] }
 livtet-core.workspace = true
-livtet-data.workspace = true
+livtet-data = { workspace = true, features = ["fake"] }
 livtet-search = { workspace = true, features = ["uniffi"] }
 livtet-types = { workspace = true, features = ["uniffi"] }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
