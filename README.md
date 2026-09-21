@@ -16,9 +16,9 @@ sibling repositories and links against the crates built here.
 Every Livtet client embeds this workspace, directly or indirectly:
 
 - The [Tauri desktop][1] app links the individual crates it needs.
-- The [Android and iOS][2] apps reach the same surface through a future crate
-  `livtet-ffi`, a `uniffi`-generated binding that re-exports a curated subset
-  across the language boundary.
+- The [Android and iOS][2] apps reach the same surface through
+  `livtet-ffi`, a `uniffi`-proc-macro crate exposing the library over the
+  language boundary (Kotlin / Swift).
 
 `livtet-core` is _the unison crate_. It composes `livtet-data`,
 `livtet-covers`, and `livtet-search` into the public surface every
