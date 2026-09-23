@@ -18,5 +18,7 @@ pub mod seed;
 pub mod user_agent;
 
 pub use livtet_search as search;
+pub use livtet_temporal_quotes as temporal_quotes;
+pub use livtet_types as types;
 
 pub use crate::core::{SharedState, get_state, init_state, is_initialized, sqlite_pool_options};

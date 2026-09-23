@@ -11,19 +11,22 @@ independent = true
 crate-type = ["cdylib", "staticlib", "rlib"]
 
 [dependencies]
-uniffi = { version = "0.32", features = ["tokio"] }
-livtet-core.workspace = true
-livtet-data = { workspace = true, features = ["fake"] }
-livtet-search = { workspace = true, features = ["uniffi"] }
-livtet-temporal-quotes.workspace = true
-livtet-types = { workspace = true, features = ["uniffi"] }
+uniffi = { workspace = true, features = ["tokio"] }
+# The FFI surface reaches the whole workspace through `livtet-core`
+# alone; `uniffi` forwards the derives on the `types`/`search` surfaces.
+livtet-core = { workspace = true, features = ["uniffi"] }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 camino.workspace = true
 thiserror.workspace = true
 time.workspace = true
 
 [features]
+default = ["seed"]
 cli = ["uniffi/cli"]
+# `seed` exposes the fake/seed helpers used by the mobile smoke tests.
+# Release builds can pass `--no-default-features` to drop the `fake`
+# code path from the shipped library.
+seed = ["livtet-core/fake"]
 
 [[bin]]
 name = "uniffi-bindgen"
@@ -31,7 +34,6 @@ path = "src/bin/uniffi-bindgen.rs"
 required-features = ["cli"]
 
 [dev-dependencies]
-livtet-data = { workspace = true, features = ["fake"] }
-livtet-test-utils = { workspace = true }
+livtet-core = { workspace = true, features = ["uniffi", "fake"] }
 camino-tempfile.workspace = true
 fs-err = { workspace = true }

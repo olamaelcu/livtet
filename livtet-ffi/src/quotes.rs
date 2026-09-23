@@ -4,7 +4,7 @@
 //! shapes match what the mobile UI renders: [`Greeting`] carries the
 //! time-of-day label, [`EmptyMessage`] intentionally does not.
 
-use livtet_temporal_quotes as q;
+use livtet_core::temporal_quotes as q;
 
 /// A literary greeting chosen for the current time of day.
 #[derive(Debug, Clone, uniffi::Record)]

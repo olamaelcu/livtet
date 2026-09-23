@@ -7,8 +7,10 @@
 
 uniffi::setup_scaffolding!();
 
+mod dashboard;
 mod dto;
 mod error;
+mod filters;
 mod maintenance;
 mod mutations;
 mod quotes;
@@ -19,7 +21,9 @@ mod works;
 
 pub use dto::*;
 pub use error::LivtetError;
-pub use maintenance::{ReindexProgress, ReindexProgressEvent, SeedStats};
+#[cfg(feature = "seed")]
+pub use maintenance::SeedStats;
+pub use maintenance::{ReindexProgress, ReindexProgressEvent};
 pub use mutations::EditionPatch;
 pub use quotes::{EmptyMessage, Greeting};
 pub use store::LivtetStore;

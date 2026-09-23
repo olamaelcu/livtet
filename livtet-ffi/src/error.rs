@@ -4,15 +4,15 @@
 //! tantivy errors) are squashed into these variants — no internal type
 //! leaks into the foreign binding surface.
 
-use livtet_data::CoreError;
-use livtet_search::index::SearchError;
+use livtet_core::data::CoreError;
+use livtet_core::search::index::SearchError;
 use thiserror::Error;
 
 /// Errors surfaced to Kotlin/Swift consumers.
 #[derive(Debug, Error, uniffi::Error)]
 pub enum LivtetError {
     /// A SeaORM / sqlx database failure. See
-    /// [`ConstraintViolation`](livtet_data::ConstraintViolation) for how
+    /// [`ConstraintViolation`](livtet_core::data::ConstraintViolation) for how
     /// these messages are produced.
     #[error("database error: {0}")]
     Database(String),
@@ -53,14 +53,14 @@ impl From<SearchError> for LivtetError {
     }
 }
 
-impl From<livtet_data::sql::Error> for LivtetError {
-    fn from(err: livtet_data::sql::Error) -> Self {
+impl From<livtet_core::data::sql::Error> for LivtetError {
+    fn from(err: livtet_core::data::sql::Error) -> Self {
         Self::Database(err.to_string())
     }
 }
 
-impl From<livtet_data::orm::DbErr> for LivtetError {
-    fn from(err: livtet_data::orm::DbErr) -> Self {
+impl From<livtet_core::data::orm::DbErr> for LivtetError {
+    fn from(err: livtet_core::data::orm::DbErr) -> Self {
         CoreError::from(err).into()
     }
 }
@@ -95,7 +95,7 @@ mod tests {
 
     #[test]
     fn db_err_maps_through_core_error() {
-        let err = livtet_data::orm::DbErr::Custom("constraint x".into());
+        let err = livtet_core::data::orm::DbErr::Custom("constraint x".into());
         match LivtetError::from(err) {
             LivtetError::Database(msg) => assert!(msg.contains("constraint x")),
             other => panic!("expected Database, got {other:?}"),

@@ -6,7 +6,7 @@
 //! timestamps as RFC 3339 strings, and enum-like values as the
 //! `livtet-types` UniFFI enums.
 
-use livtet_types::{DbId, DiskPath, ProgressUnit, PublishedDate};
+use livtet_core::types::{DbId, DiskPath, ProgressUnit, PublishedDate};
 
 /// RFC 3339 rendering shared by all DTO timestamps (UTC).
 pub(crate) fn ts(dt: &time::PrimitiveDateTime) -> String {
@@ -150,4 +150,59 @@ pub struct ReadingSession {
     pub progress_delta: f64,
     pub last_location: Option<String>,
     pub notes: Option<String>,
+}
+// ── Dashboard ────────────────────────────────────────────────────────
+
+/// Aggregate library and reading-activity statistics for the dashboard.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct DashboardStats {
+    pub total_books: i64,
+    pub books_in_progress: i64,
+    pub finished_books: i64,
+    pub total_reading_time_secs: i64,
+    /// RFC 3339 timestamp of the earliest recorded reading activity,
+    /// or `None` when nothing has been read yet.
+    pub first_reading_at: Option<String>,
+}
+
+/// A work the user is reading or has recently finished, with its
+/// latest progress snapshot.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct RecentlyReadBook {
+    pub work_id: DbId,
+    pub edition_id: DbId,
+    pub title: String,
+    pub author_name: Option<String>,
+    pub progress: f64,
+    pub total_reading_time_secs: i64,
+    pub last_read_at: String,
+}
+
+/// One entry of the search-history autocomplete.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct RecentSearch {
+    pub query: String,
+    pub searched_at: String,
+}
+
+// ── Library filters ──────────────────────────────────────────────────
+
+/// A book format actually present in the library.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct FormatInfo {
+    pub id: DbId,
+    pub name: String,
+    /// JSON Schema document describing how reading progress is tracked
+    /// for editions of this format.
+    pub metadata_schema: String,
+}
+
+/// A language actually present in the library's editions. Named
+/// `LibraryLanguage` (not `LanguageInfo`) because `livtet-types`
+/// already exports a `LanguageInfo` record into the same bindings.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct LibraryLanguage {
+    pub id: DbId,
+    pub name: String,
+    pub flag_emoji: Option<String>,
 }

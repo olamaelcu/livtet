@@ -2,14 +2,15 @@
 
 use std::collections::HashMap;
 
-use livtet_data::entities::{
+use livtet_core::data::entities::{
     authors, digital_inventory, edition_authors, edition_identifiers, edition_publishers, editions,
     formats, identifiers, languages, publishers, work_authors, works,
 };
-use livtet_data::orm::{
-    ColumnTrait, EntityTrait, Order, PaginatorTrait, QueryFilter, QueryOrder, QuerySelect,
+use livtet_core::data::orm::{
+    ColumnTrait, DatabaseConnection, EntityTrait, Order, PaginatorTrait, QueryFilter, QueryOrder,
+    QuerySelect, Select,
 };
-use livtet_types::{DbId, SortDirection, WorkSortBy};
+use livtet_core::types::{DbId, SortDirection, WorkSortBy};
 
 use crate::dto::{EditionDetail, EditionFile, EditionSummary, WorkSummary, ts, ts_opt};
 use crate::error::LivtetError;
@@ -30,24 +31,7 @@ impl LivtetStore {
     ) -> Result<Vec<WorkSummary>, LivtetError> {
         let db = self.state.db_conn();
 
-        let query = works::Entity::find();
-        let ordered = match sort_by {
-            // NewestCap's semantic is fixed: newest first, direction
-            // ignored (see WorkFilters::effective_limit docs).
-            Some(WorkSortBy::NewestCap) => query.order_by(works::Column::CreatedAt, Order::Desc),
-            other => {
-                let column = match other.unwrap_or(WorkSortBy::Title) {
-                    WorkSortBy::CreatedAt | WorkSortBy::NewestCap => works::Column::CreatedAt,
-                    WorkSortBy::Title => works::Column::Title,
-                    WorkSortBy::UpdatedAt => works::Column::UpdatedAt,
-                };
-                let direction = match sort_direction.unwrap_or_default() {
-                    SortDirection::Asc => Order::Asc,
-                    SortDirection::Desc => Order::Desc,
-                };
-                query.order_by(column, direction)
-            }
-        };
+        let ordered = apply_work_ordering(works::Entity::find(), sort_by, sort_direction);
 
         let models = ordered
             .order_by(works::Column::Id, Order::Asc)
@@ -56,24 +40,7 @@ impl LivtetStore {
             .all(&db)
             .await?;
 
-        let ids: Vec<DbId> = models.iter().map(|w| w.id).collect();
-        let authors_by_work = author_names_for_works(&db, &ids).await?;
-
-        Ok(models
-            .into_iter()
-            .map(|w| {
-                let authors = authors_by_work.get(&w.id).cloned().unwrap_or_default();
-                WorkSummary {
-                    id: w.id,
-                    title: w.title,
-                    sort_title: w.sort_title,
-                    description: w.description,
-                    authors,
-                    created_at: ts(&w.created_at),
-                    updated_at: ts_opt(w.updated_at),
-                }
-            })
-            .collect())
+        summarize_works(&db, models).await
     }
 
     /// List the editions of one work, newest first.
@@ -110,9 +77,61 @@ impl LivtetStore {
     }
 }
 
+/// Apply the shared work-list ordering: title ascending by default,
+/// with `WorkSortBy::NewestCap` always meaning `created_at DESC`.
+pub(crate) fn apply_work_ordering(
+    query: Select<works::Entity>,
+    sort_by: Option<WorkSortBy>,
+    sort_direction: Option<SortDirection>,
+) -> Select<works::Entity> {
+    match sort_by {
+        // NewestCap's semantic is fixed: newest first, direction ignored
+        // (see WorkFilters::effective_limit docs).
+        Some(WorkSortBy::NewestCap) => query.order_by(works::Column::CreatedAt, Order::Desc),
+        other => {
+            let column = match other.unwrap_or(WorkSortBy::Title) {
+                WorkSortBy::CreatedAt | WorkSortBy::NewestCap => works::Column::CreatedAt,
+                WorkSortBy::Title => works::Column::Title,
+                WorkSortBy::UpdatedAt => works::Column::UpdatedAt,
+            };
+            let direction = match sort_direction.unwrap_or_default() {
+                SortDirection::Asc => Order::Asc,
+                SortDirection::Desc => Order::Desc,
+            };
+            query.order_by(column, direction)
+        }
+    }
+}
+
+/// Convert work models into [`WorkSummary`]s, batching author lookups
+/// over the whole page.
+pub(crate) async fn summarize_works(
+    db: &DatabaseConnection,
+    models: Vec<works::Model>,
+) -> Result<Vec<WorkSummary>, LivtetError> {
+    let ids: Vec<DbId> = models.iter().map(|w| w.id).collect();
+    let authors_by_work = author_names_for_works(db, &ids).await?;
+
+    Ok(models
+        .into_iter()
+        .map(|w| {
+            let authors = authors_by_work.get(&w.id).cloned().unwrap_or_default();
+            WorkSummary {
+                id: w.id,
+                title: w.title,
+                sort_title: w.sort_title,
+                description: w.description,
+                authors,
+                created_at: ts(&w.created_at),
+                updated_at: ts_opt(w.updated_at),
+            }
+        })
+        .collect())
+}
+
 /// Author names for a set of work ids, batched in two queries.
 async fn author_names_for_works(
-    db: &livtet_data::orm::DatabaseConnection,
+    db: &livtet_core::data::orm::DatabaseConnection,
     work_ids: &[DbId],
 ) -> Result<HashMap<DbId, Vec<String>>, LivtetError> {
     let mut out: HashMap<DbId, Vec<String>> = HashMap::new();
@@ -144,7 +163,7 @@ async fn author_names_for_works(
 
 /// Author names for one edition (via `edition_authors`).
 async fn author_names_for_edition(
-    db: &livtet_data::orm::DatabaseConnection,
+    db: &livtet_core::data::orm::DatabaseConnection,
     edition_id: DbId,
 ) -> Result<Vec<String>, LivtetError> {
     let links = edition_authors::Entity::find()
@@ -167,7 +186,7 @@ async fn author_names_for_edition(
 /// Convert edition models into summaries, batching format/language/file
 /// lookups over the whole page.
 async fn summarize_editions(
-    db: &livtet_data::orm::DatabaseConnection,
+    db: &livtet_core::data::orm::DatabaseConnection,
     models: Vec<editions::Model>,
 ) -> Result<Vec<EditionSummary>, LivtetError> {
     if models.is_empty() {
@@ -221,7 +240,7 @@ async fn summarize_editions(
 /// Assemble a full [`EditionDetail`] from the edition row plus its
 /// batched relations.
 async fn edition_detail(
-    db: &livtet_data::orm::DatabaseConnection,
+    db: &livtet_core::data::orm::DatabaseConnection,
     model: editions::Model,
 ) -> Result<EditionDetail, LivtetError> {
     let mut summaries = summarize_editions(db, vec![model.clone()]).await?;
@@ -272,7 +291,7 @@ async fn edition_detail(
         .map(|d| EditionFile {
             file_path: d
                 .file_path
-                .map(|p| livtet_types::DiskPath::from_path(camino::Utf8Path::new(&p))),
+                .map(|p| livtet_core::types::DiskPath::from_path(camino::Utf8Path::new(&p))),
             cover_path: d.cover_path,
             blurhash: d.blurhash,
             dominant_color: d.dominant_color,
@@ -285,13 +304,13 @@ async fn edition_detail(
         id: summary.id,
         work_id: summary.work_id,
         title: summary.title,
-        published_date: model
-            .published_date
-            .map(|d| livtet_types::PublishedDate::YearMonthDay {
+        published_date: model.published_date.map(|d| {
+            livtet_core::types::PublishedDate::YearMonthDay {
                 year: d.year(),
                 month: d.month() as u8,
                 day: d.day(),
-            }),
+            }
+        }),
         format: summary.format,
         language_code: summary.language_code,
         notes: model.notes,
@@ -321,9 +340,9 @@ mod tests {
         .expect("open store");
 
         let db = store.state.db_conn();
-        livtet_data::seed::seed_database(
+        livtet_core::data::seed::seed_database(
             &db,
-            &livtet_data::seed::SeedConfig {
+            &livtet_core::data::seed::SeedConfig {
                 num_works,
                 ..Default::default()
             },
@@ -387,9 +406,9 @@ mod tests {
         let by_title = store.list_works(100, 0, None, None).await.unwrap();
         let db = store.state.db_conn();
         for (i, work) in by_title.iter().enumerate() {
-            use livtet_data::orm::{ActiveModelTrait, EntityTrait, Set};
-            let mut active: livtet_data::entities::works::ActiveModel =
-                livtet_data::entities::works::Entity::find_by_id(work.id)
+            use livtet_core::data::orm::{ActiveModelTrait, EntityTrait, Set};
+            let mut active: livtet_core::data::entities::works::ActiveModel =
+                livtet_core::data::entities::works::Entity::find_by_id(work.id)
                     .one(&db)
                     .await
                     .unwrap()
@@ -403,7 +422,12 @@ mod tests {
         }
 
         let newest = store
-            .list_works(100, 0, Some(livtet_types::WorkSortBy::NewestCap), None)
+            .list_works(
+                100,
+                0,
+                Some(livtet_core::types::WorkSortBy::NewestCap),
+                None,
+            )
             .await
             .unwrap();
         // ordering: index 4 (latest day) first, descending.

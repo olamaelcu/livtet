@@ -4,14 +4,14 @@
 //! Tantivy [`SearchIndex`]. The object is the *only* way to reach the
 //! library from foreign code: there is no global state on this side of
 //! the boundary, so no call can happen before [`LivtetStore::open`]
-//! succeeds. `close` (and `Drop`, as a backstop) release the pool.
+//! succeeds. `shutdown` (and `Drop`, as a backstop) release the pool.
 
 use std::sync::Arc;
 
 use camino::Utf8Path;
-use livtet_data::SharedState;
-use livtet_data::migrator::Kind;
-use livtet_search::index::SearchIndex;
+use livtet_core::data::SharedState;
+use livtet_core::data::migrator::Kind;
+use livtet_core::search::index::SearchIndex;
 
 use crate::error::LivtetError;
 
@@ -33,13 +33,11 @@ impl LivtetStore {
     /// *same* paths cannot coexist — see the `same_paths_...` test.
     #[uniffi::constructor]
     pub async fn open(db_path: String, index_dir: String) -> Result<Arc<Self>, LivtetError> {
-        let state = SharedState::connect(&db_path, &[Kind::Business]).await?;
+        let state = SharedState::connect(&db_path, &[Kind::Business, Kind::Client]).await?;
         let index = SearchIndex::open(Utf8Path::new(&index_dir))?;
         Ok(Arc::new(Self { state, index }))
     }
 
-    /// Flush SQLite (`PRAGMA optimize`) and close the connection pool.
-    /// Subsequent use of this handle will fail at the database layer.
     /// Flush SQLite (`PRAGMA optimize`) and close the connection pool.
     /// Subsequent use of this handle will fail at the database layer.
     ///
@@ -55,9 +53,17 @@ impl LivtetStore {
 impl Drop for LivtetStore {
     fn drop(&mut self) {
         // Best-effort pool shutdown when the foreign side drops its
-        // last handle without calling `close` first.
+        // last handle without calling `shutdown` first. A tokio runtime
+        // is not guaranteed to be current on the dropping thread (the
+        // foreign GC may run anywhere), so only spawn when there is one;
+        // otherwise there is nothing safe to do but let the OS reclaim
+        // the sockets.
         let pool = self.state.pool.clone();
-        drop(tokio::task::spawn(async move { pool.close().await }));
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            drop(handle.spawn(async move {
+                let _ = pool.close().await;
+            }));
+        }
     }
 }
 

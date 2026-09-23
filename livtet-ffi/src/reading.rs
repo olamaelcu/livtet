@@ -4,11 +4,13 @@
 //! None of these tables participate in the search index, so no index
 //! sync is needed here.
 
-use livtet_data::entities::{
+use livtet_core::data::entities::{
     current_work_status, reading_list_book, reading_lists, reading_progress, reading_sessions,
 };
-use livtet_data::orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, QueryOrder, Set};
-use livtet_types::{DbId, ProgressUnit, WorkStatus, now_primitive};
+use livtet_core::data::orm::{
+    ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, QueryOrder, Set,
+};
+use livtet_core::types::{DbId, ProgressUnit, WorkStatus, now_primitive};
 
 use crate::dto::{
     Annotation, ReadingList, ReadingProgress, ReadingSession, ReadingSessionInput, ts, ts_opt,
@@ -200,7 +202,7 @@ impl LivtetStore {
         location: Option<String>,
     ) -> Result<Annotation, LivtetError> {
         let db = self.state.db_conn();
-        let active = livtet_data::entities::annotations::ActiveModel {
+        let active = livtet_core::data::entities::annotations::ActiveModel {
             id: Set(DbId::new()),
             edition_id: Set(edition_id),
             user_id: Set(DbId::from_bytes(LOCAL_USER)),
@@ -209,7 +211,7 @@ impl LivtetStore {
             created_at: Set(now_primitive()),
             updated_at: Set(None),
         };
-        let model = livtet_data::entities::annotations::Entity::insert(active)
+        let model = livtet_core::data::entities::annotations::Entity::insert(active)
             .exec_with_returning(&db)
             .await?;
         Ok(annotation_from(model))
@@ -218,9 +220,9 @@ impl LivtetStore {
     /// All annotations for an edition, oldest first.
     pub async fn list_annotations(&self, edition_id: DbId) -> Result<Vec<Annotation>, LivtetError> {
         let db = self.state.db_conn();
-        let rows = livtet_data::entities::annotations::Entity::find()
-            .filter(livtet_data::entities::annotations::Column::EditionId.eq(edition_id))
-            .order_by_asc(livtet_data::entities::annotations::Column::CreatedAt)
+        let rows = livtet_core::data::entities::annotations::Entity::find()
+            .filter(livtet_core::data::entities::annotations::Column::EditionId.eq(edition_id))
+            .order_by_asc(livtet_core::data::entities::annotations::Column::CreatedAt)
             .all(&db)
             .await?;
         Ok(rows.into_iter().map(annotation_from).collect())
@@ -229,11 +231,13 @@ impl LivtetStore {
     /// Delete one annotation. `false` when it did not exist.
     pub async fn delete_annotation(&self, id: DbId) -> Result<bool, LivtetError> {
         let db = self.state.db_conn();
-        Ok(livtet_data::entities::annotations::Entity::delete_by_id(id)
-            .exec(&db)
-            .await?
-            .rows_affected
-            > 0)
+        Ok(
+            livtet_core::data::entities::annotations::Entity::delete_by_id(id)
+                .exec(&db)
+                .await?
+                .rows_affected
+                > 0,
+        )
     }
 
     // ── Reading lists ────────────────────────────────────────────
@@ -363,14 +367,14 @@ impl LivtetStore {
 trait ListMemberships {
     async fn edition_ids(
         &self,
-        db: &livtet_data::orm::DatabaseConnection,
+        db: &livtet_core::data::orm::DatabaseConnection,
     ) -> Result<Vec<DbId>, LivtetError>;
 }
 
 impl ListMemberships for reading_lists::Model {
     async fn edition_ids(
         &self,
-        db: &livtet_data::orm::DatabaseConnection,
+        db: &livtet_core::data::orm::DatabaseConnection,
     ) -> Result<Vec<DbId>, LivtetError> {
         let members = reading_list_book::Entity::find()
             .filter(reading_list_book::Column::ReadingListId.eq(self.id))
@@ -395,7 +399,7 @@ fn unit_from_str(s: &str) -> Option<ProgressUnit> {
     }
 }
 
-fn annotation_from(m: livtet_data::entities::annotations::Model) -> Annotation {
+fn annotation_from(m: livtet_core::data::entities::annotations::Model) -> Annotation {
     Annotation {
         id: m.id,
         edition_id: m.edition_id,
@@ -411,7 +415,7 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
-    use livtet_types::KnownFormats;
+    use livtet_core::types::KnownFormats;
 
     async fn seeded_store_with_edition() -> (
         camino_tempfile::Utf8TempDir,
@@ -427,9 +431,9 @@ mod tests {
         .await
         .expect("open store");
 
-        livtet_data::seed::seed_database(
+        livtet_core::data::seed::seed_database(
             &store.state.db_conn(),
-            &livtet_data::seed::SeedConfig {
+            &livtet_core::data::seed::SeedConfig {
                 num_works: 2,
                 ..Default::default()
             },

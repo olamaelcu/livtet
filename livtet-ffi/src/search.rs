@@ -1,11 +1,11 @@
 //! Search API (methods on [`LivtetStore`]).
 //!
-//! Thin, fail-closed wrappers over [`livtet_search::SearchIndex`]. Hit,
+//! Thin, fail-closed wrappers over [`livtet_core::search::SearchIndex`]. Hit,
 //! facet, and options types come from `livtet-search` directly (built
 //! with its `uniffi` feature), so there is one shape across Rust, TS
 //! (specta), and the FFI bindings.
 
-use livtet_search::model::{FacetedSearchResult, SearchHit, SearchOptions};
+use livtet_core::search::model::{FacetedSearchResult, SearchHit, SearchOptions};
 
 use crate::error::LivtetError;
 use crate::store::LivtetStore;
@@ -81,9 +81,9 @@ mod tests {
         .await
         .expect("open store");
 
-        livtet_data::seed::seed_database(
+        livtet_core::data::seed::seed_database(
             &store.state.db_conn(),
-            &livtet_data::seed::SeedConfig {
+            &livtet_core::data::seed::SeedConfig {
                 num_works,
                 ..Default::default()
             },

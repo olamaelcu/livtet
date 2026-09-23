@@ -4,9 +4,9 @@
 //! refreshes the edition's search-index document so reads via
 //! `search_*` see the change immediately.
 
-use livtet_data::entities::{digital_inventory, edition_identifiers, editions, identifiers};
-use livtet_data::orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, Set};
-use livtet_types::{DbId, DiskPath, Identifier, PublishedDate, now_primitive};
+use livtet_core::data::entities::{digital_inventory, edition_identifiers, editions, identifiers};
+use livtet_core::data::orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, Set};
+use livtet_core::types::{DbId, DiskPath, Identifier, PublishedDate, now_primitive};
 
 use crate::dto::EditionDetail;
 use crate::error::LivtetError;
@@ -233,7 +233,7 @@ impl LivtetStore {
 }
 
 async fn require_edition(
-    db: &livtet_data::orm::DatabaseConnection,
+    db: &livtet_core::data::orm::DatabaseConnection,
     edition_id: DbId,
 ) -> Result<editions::Model, LivtetError> {
     editions::Entity::find_by_id(edition_id)
@@ -260,9 +260,9 @@ mod tests {
         .await
         .expect("open store");
 
-        livtet_data::seed::seed_database(
+        livtet_core::data::seed::seed_database(
             &store.state.db_conn(),
-            &livtet_data::seed::SeedConfig {
+            &livtet_core::data::seed::SeedConfig {
                 num_works: 2,
                 ..Default::default()
             },

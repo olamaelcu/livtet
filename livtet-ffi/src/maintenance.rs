@@ -3,14 +3,15 @@
 
 use std::sync::Arc;
 
-use livtet_data::orm::EntityTrait;
-use livtet_search::write::ReindexEvent;
+#[cfg(feature = "seed")]
+use livtet_core::data::orm::EntityTrait;
+use livtet_core::search::write::ReindexEvent;
 
 use crate::error::LivtetError;
 use crate::store::LivtetStore;
 
 /// Progress event during [`LivtetStore::reindex`], mirroring
-/// [`livtet_search::ReindexEvent`].
+/// [`livtet_core::search::ReindexEvent`].
 #[derive(Debug, Clone, Copy, uniffi::Enum)]
 pub enum ReindexProgressEvent {
     /// Index loaded; DB rows are being read.
@@ -38,6 +39,7 @@ pub trait ReindexProgress: Send + Sync {
 
 /// Counters returned by [`LivtetStore::seed_sample_data`] and
 /// [`LivtetStore::reset_and_seed`]. Non-negative.
+#[cfg(feature = "seed")]
 #[derive(Debug, Clone, uniffi::Record)]
 pub struct SeedStats {
     pub works_created: u32,
@@ -56,6 +58,7 @@ pub struct SeedStats {
 /// Content tables wiped by `reset_and_seed`, junction-first so foreign
 /// keys never see a dangling parent. Reference dictionaries (formats,
 /// languages, genres, subjects, tags) survive: seeds are idempotent.
+#[cfg(feature = "seed")]
 macro_rules! delete_all {
     ($db:expr, $($entity:path),+ $(,)?) => {
         $(
@@ -82,13 +85,19 @@ impl LivtetStore {
             .await
             .map_err(|e| LivtetError::Search(e.to_string()))
     }
+}
 
+/// Seed/reset helpers used by mobile smoke tests. Gated behind the
+/// `seed` feature so release builds can drop the `fake` code path.
+#[cfg(feature = "seed")]
+#[uniffi::export(async_runtime = "tokio")]
+impl LivtetStore {
     /// Seed sample data (idempotent: a second call with the same
     /// arguments reports `works_created: 0`).
     pub async fn seed_sample_data(&self, num_works: u32) -> Result<SeedStats, LivtetError> {
-        let result = livtet_data::seed::seed_database(
+        let result = livtet_core::data::seed::seed_database(
             &self.state.db_conn(),
-            &livtet_data::seed::SeedConfig {
+            &livtet_core::data::seed::SeedConfig {
                 num_works,
                 ..Default::default()
             },
@@ -102,7 +111,7 @@ impl LivtetStore {
     /// index. Intended for smoke tests and demo data, not production
     /// flows.
     pub async fn reset_and_seed(&self, num_works: u32) -> Result<SeedStats, LivtetError> {
-        use livtet_data::entities::*;
+        use livtet_core::data::entities::*;
         let db = self.state.db_conn();
 
         delete_all!(
@@ -149,7 +158,8 @@ impl LivtetStore {
     }
 }
 
-fn stats_from(r: &livtet_data::seed::SeedResult) -> SeedStats {
+#[cfg(feature = "seed")]
+fn stats_from(r: &livtet_core::data::seed::SeedResult) -> SeedStats {
     SeedStats {
         works_created: r.works_created,
         editions_created: r.editions_created,
@@ -165,7 +175,7 @@ fn stats_from(r: &livtet_data::seed::SeedResult) -> SeedStats {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "seed"))]
 mod tests {
     use std::sync::Mutex;
 

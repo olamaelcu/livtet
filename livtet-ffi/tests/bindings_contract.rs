@@ -1,7 +1,7 @@
 //! Contract snapshot for the generated bindings.
 //!
-//! Runs the same `uniffi-bindgen generate --library` pipeline the
-//! mobile repo's mise tasks use, for both Kotlin and Swift, and asserts
+//! Runs the same `uniffi-bindgen generate` pipeline the mobile repo's
+//! mise tasks use, for both Kotlin and Swift, and asserts
 //! the public surface is present. This is the guard against accidental
 //! renames/removals of FFI exported items: if a type or method
 //! disappears or changes signature, the binding output changes and this
@@ -47,7 +47,6 @@ fn run_bindgen(lib: &Utf8Path, language: &str, out_dir: &Utf8Path) {
         "cli",
         "--",
         "generate",
-        "--library",
         lib.as_str(),
         "--language",
         language,
@@ -108,6 +107,12 @@ const EXPECTED_TYPES: &[&str] = &[
     "EditionPatch",
     "SeedStats",
     "ReindexProgressEvent",
+    // Dashboard + filters
+    "DashboardStats",
+    "RecentlyReadBook",
+    "RecentSearch",
+    "FormatInfo",
+    "LibraryLanguage",
     // livtet-temporal-quotes re-exports
     "Greeting",
     "EmptyMessage",
@@ -169,6 +174,13 @@ const EXPECTED_METHODS: &[&str] = &[
     "resetAndSeed",
     "getGreeting",
     "getEmptyStateQuotation",
+    "getDashboardStats",
+    "getRecentlyReadBooks",
+    "getRecentSearches",
+    "listFormats",
+    "listLanguages",
+    "listWorksFiltered",
+    "countWorksFiltered",
 ];
 
 #[test]
@@ -202,6 +214,45 @@ fn kotlin_and_swift_bindings_expose_the_full_surface() {
     let swift = slurp(&swift_dir, "swift");
     assert!(!swift.is_empty(), "swift bindings are empty");
     let swift = swift.to_lowercase();
+
+    // The three components must split into three foreign-side packages
+    // (one Kotlin package each) and three Swift sources + C headers.
+    let kt_files = walkdir(&kt_dir);
+    let swift_files = walkdir(&swift_dir);
+    assert!(
+        kt_files
+            .iter()
+            .filter(|p| p.extension() == Some("kt"))
+            .count()
+            >= 3,
+        "expected the ffi/types/search Kotlin split, found {kt_files:?}"
+    );
+    for pkg in [
+        "net.olamaelcu.livtet.ffi",
+        "net.olamaelcu.livtet.types",
+        "net.olamaelcu.livtet.search",
+    ] {
+        assert!(
+            kotlin.contains(&format!("package {pkg}")),
+            "kotlin bindings missing package {pkg}"
+        );
+    }
+    assert!(
+        swift_files
+            .iter()
+            .filter(|p| p.extension() == Some("swift"))
+            .count()
+            >= 3,
+        "expected the ffi/types/search Swift split, found {swift_files:?}"
+    );
+    assert!(
+        swift_files
+            .iter()
+            .filter(|p| p.extension() == Some("h"))
+            .count()
+            >= 3,
+        "expected three FFI C headers, found {swift_files:?}"
+    );
 
     for ty in EXPECTED_TYPES {
         assert!(
