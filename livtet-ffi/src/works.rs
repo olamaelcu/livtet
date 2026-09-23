@@ -3,8 +3,8 @@
 use std::collections::HashMap;
 
 use livtet_data::entities::{
-    authors, digital_inventory, edition_authors, edition_identifiers, edition_publishers,
-    editions, formats, identifiers, languages, publishers, work_authors, works,
+    authors, digital_inventory, edition_authors, edition_identifiers, edition_publishers, editions,
+    formats, identifiers, languages, publishers, work_authors, works,
 };
 use livtet_data::orm::{
     ColumnTrait, EntityTrait, Order, PaginatorTrait, QueryFilter, QueryOrder, QuerySelect,
@@ -77,10 +77,7 @@ impl LivtetStore {
     }
 
     /// List the editions of one work, newest first.
-    pub async fn list_editions(
-        &self,
-        work_id: DbId,
-    ) -> Result<Vec<EditionSummary>, LivtetError> {
+    pub async fn list_editions(&self, work_id: DbId) -> Result<Vec<EditionSummary>, LivtetError> {
         let db = self.state.db_conn();
 
         let models = editions::Entity::find()
@@ -109,9 +106,7 @@ impl LivtetStore {
     /// Total number of works.
     pub async fn count_works(&self) -> Result<u64, LivtetError> {
         let db = self.state.db_conn();
-        Ok(works::Entity::find()
-            .count(&db)
-            .await?)
+        Ok(works::Entity::find().count(&db).await?)
     }
 }
 
@@ -290,11 +285,13 @@ async fn edition_detail(
         id: summary.id,
         work_id: summary.work_id,
         title: summary.title,
-        published_date: model.published_date.map(|d| livtet_types::PublishedDate::YearMonthDay {
-            year: d.year(),
-            month: d.month() as u8,
-            day: d.day(),
-        }),
+        published_date: model
+            .published_date
+            .map(|d| livtet_types::PublishedDate::YearMonthDay {
+                year: d.year(),
+                month: d.month() as u8,
+                day: d.day(),
+            }),
         format: summary.format,
         language_code: summary.language_code,
         notes: model.notes,
@@ -399,20 +396,14 @@ mod tests {
                     .unwrap()
                     .into();
             active.created_at = Set(time::PrimitiveDateTime::new(
-                time::Date::from_calendar_date(2020, time::Month::January, (i + 1) as u8)
-                    .unwrap(),
+                time::Date::from_calendar_date(2020, time::Month::January, (i + 1) as u8).unwrap(),
                 time::Time::MIDNIGHT,
             ));
             active.update(&db).await.unwrap();
         }
 
         let newest = store
-            .list_works(
-                100,
-                0,
-                Some(livtet_types::WorkSortBy::NewestCap),
-                None,
-            )
+            .list_works(100, 0, Some(livtet_types::WorkSortBy::NewestCap), None)
             .await
             .unwrap();
         // ordering: index 4 (latest day) first, descending.

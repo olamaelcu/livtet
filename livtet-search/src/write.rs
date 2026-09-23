@@ -63,8 +63,8 @@ impl SearchIndex {
         on_event(ReindexEvent::Loading);
         use livtet_data::entities::{
             authors::Entity as Authors, digital_inventory::Entity as DigitalInventory,
-            edition_authors::Entity as EditionAuthors,
-            edition_genres::Entity as EditionGenres, edition_identifiers::Entity as EditionIds,
+            edition_authors::Entity as EditionAuthors, edition_genres::Entity as EditionGenres,
+            edition_identifiers::Entity as EditionIds,
             edition_publishers::Entity as EditionPublishers,
             edition_subjects::Entity as EditionSubjects, edition_tags::Entity as EditionTags,
             editions::Entity as Editions, formats::Entity as Formats, genres::Entity as Genres,

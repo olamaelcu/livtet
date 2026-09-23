@@ -8,11 +8,13 @@
 //! test fails. Update the expected lists deliberately, as the changelog
 //! of the cross-language API.
 
-use std::path::{Path, PathBuf};
 use std::process::Command;
 
-fn workspace_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+use camino::{Utf8Path, Utf8PathBuf};
+use fs_err as fs;
+
+fn workspace_root() -> Utf8PathBuf {
+    Utf8PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .expect("crate has a workspace parent")
         .to_path_buf()
@@ -33,7 +35,7 @@ fn cargo(args: &[&str]) -> String {
     String::from_utf8_lossy(&out.stdout).to_string()
 }
 
-fn run_bindgen(lib: &Path, language: &str, out_dir: &Path) {
+fn run_bindgen(lib: &Utf8Path, language: &str, out_dir: &Utf8Path) {
     cargo(&[
         "run",
         "--quiet",
@@ -46,22 +48,22 @@ fn run_bindgen(lib: &Path, language: &str, out_dir: &Path) {
         "--",
         "generate",
         "--library",
-        &lib.to_string_lossy(),
+        lib.as_str(),
         "--language",
         language,
         "--out-dir",
-        &out_dir.to_string_lossy(),
+        out_dir.as_str(),
         "--no-format",
     ]);
 }
 
 /// Collect the concatenated text of every generated source file under
 /// `dir`.
-fn slurp(dir: &Path, ext: &str) -> String {
+fn slurp(dir: &Utf8Path, ext: &str) -> String {
     let mut acc = String::new();
     for entry in walkdir(dir) {
         if entry.extension().is_some_and(|e| e == ext)
-            && let Ok(text) = std::fs::read_to_string(&entry)
+            && let Ok(text) = fs::read_to_string(&entry)
         {
             acc.push_str(&text);
             acc.push('\n');
@@ -70,13 +72,15 @@ fn slurp(dir: &Path, ext: &str) -> String {
     acc
 }
 
-fn walkdir(dir: &Path) -> Vec<PathBuf> {
+fn walkdir(dir: &Utf8Path) -> Vec<Utf8PathBuf> {
     let mut out = Vec::new();
-    let Ok(read) = std::fs::read_dir(dir) else {
+    let Ok(read) = fs::read_dir(dir) else {
         return out;
     };
     for entry in read.flatten() {
-        let path = entry.path();
+        let Ok(path) = Utf8PathBuf::from_path_buf(entry.path()) else {
+            continue;
+        };
         if path.is_dir() {
             out.extend(walkdir(&path));
         } else {
@@ -180,13 +184,13 @@ fn kotlin_and_swift_bindings_expose_the_full_surface() {
         } else {
             "liblivtet_ffi.so"
         });
-    assert!(lib.exists(), "cdylib missing at {}", lib.display());
+    assert!(lib.exists(), "cdylib missing at {lib}");
 
     let tmp = camino_tempfile::tempdir().unwrap();
-    let kt_dir = tmp.path().join("kotlin").into_std_path_buf();
-    let swift_dir = tmp.path().join("swift").into_std_path_buf();
-    std::fs::create_dir_all(&kt_dir).unwrap();
-    std::fs::create_dir_all(&swift_dir).unwrap();
+    let kt_dir = tmp.path().join("kotlin");
+    let swift_dir = tmp.path().join("swift");
+    fs::create_dir_all(&kt_dir).unwrap();
+    fs::create_dir_all(&swift_dir).unwrap();
 
     run_bindgen(&lib, "kotlin", &kt_dir);
     run_bindgen(&lib, "swift", &swift_dir);

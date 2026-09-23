@@ -70,8 +70,6 @@ pub trait AuthorLookup: Send + Sync {
     ) -> Result<Vec<livtet_data::entities::authors::Model>, livtet_data::orm::DbErr>;
 }
 
-
-
 /// Per-axis existence and name lookup. The SeaORM implementation
 /// issues one typed `Entity::find().filter(Column::Id.is_in(...))`
 /// query per call — six known tables, no union scans.

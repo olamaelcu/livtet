@@ -48,7 +48,11 @@ impl EditionsArgs {
         match self.command {
             EditionsCommand::Get { id } => get(&id).await,
             EditionsCommand::List { limit, offset } => list(limit, offset).await,
-            EditionsCommand::Search { query, limit, offset } => search(&query, limit, offset).await,
+            EditionsCommand::Search {
+                query,
+                limit,
+                offset,
+            } => search(&query, limit, offset).await,
         }
     }
 }
@@ -72,7 +76,11 @@ impl From<LivtetHit> for Row {
         Self {
             id: h.edition_id.unwrap_or_default(),
             title: h.title,
-            author: if h.authors.is_empty() { "—".to_string() } else { h.authors.join(", ") },
+            author: if h.authors.is_empty() {
+                "—".to_string()
+            } else {
+                h.authors.join(", ")
+            },
             format: h.format.unwrap_or_else(|| "—".to_string()),
             on_disk: h.has_file,
         }
@@ -114,7 +122,6 @@ fn limit_u(limit: u32) -> usize {
     limit.min(100) as usize
 }
 
-
 async fn open_index() -> crate::Result<SearchReader> {
     let dir = default_index_dir()?;
     SearchReader::open(&dir).map_err(|e| CliError::Operation {
@@ -131,11 +138,7 @@ async fn list(limit: u32, offset: u32) -> crate::Result<()> {
         ..Default::default()
     };
     let hits: Vec<LivtetHit> = index
-        .search_with_options(
-            "",
-            limit_u(limit),
-            &opts,
-        )
+        .search_with_options("", limit_u(limit), &opts)
         .await
         .map_err(|e| CliError::Operation {
             message: format!("Index search failed: {e}"),
@@ -190,18 +193,22 @@ async fn get(id: &str) -> crate::Result<()> {
         })?;
 
     // Single edition fetch.
-    let parsed_id: livtet_types::DbId = id.parse().map_err(|e: <livtet_types::DbId as std::str::FromStr>::Err| CliError::Operation {
-        message: format!("Invalid edition ID: {e}"),
-    })?;
+    let parsed_id: livtet_types::DbId =
+        id.parse()
+            .map_err(
+                |e: <livtet_types::DbId as std::str::FromStr>::Err| CliError::Operation {
+                    message: format!("Invalid edition ID: {e}"),
+                },
+            )?;
     let edition = editions::Entity::find_by_id(parsed_id)
-    .one(&db)
-    .await
-    .map_err(|e| CliError::Operation {
-        message: format!("Query failed: {e}"),
-    })?
-    .ok_or_else(|| CliError::Operation {
-        message: format!("edition not found: {id}"),
-    })?;
+        .one(&db)
+        .await
+        .map_err(|e| CliError::Operation {
+            message: format!("Query failed: {e}"),
+        })?
+        .ok_or_else(|| CliError::Operation {
+            message: format!("edition not found: {id}"),
+        })?;
 
     // Single inventory fetch for the on-disk file.
     let inv = digital_inventory::Entity::find_by_id(edition.id)

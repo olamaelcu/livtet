@@ -242,8 +242,8 @@ mod uniffi_tests {
     fn string_round_trip() {
         let id = DbId::new();
         let buf = <DbId as FfiConverter<UniFfiTag>>::lower(id);
-        let lifted = <DbId as FfiConverter<UniFfiTag>>::try_lift(buf)
-            .expect("lowering is always valid");
+        let lifted =
+            <DbId as FfiConverter<UniFfiTag>>::try_lift(buf).expect("lowering is always valid");
         assert_eq!(lifted, id);
     }
 

@@ -95,11 +95,14 @@ async fn open_db(database_url: &str) -> Result<livtet_data::orm::DatabaseConnect
 async fn add_file(edition_id_str: &str, file_path: &str, database_url: &str) -> Result<()> {
     let db = open_db(database_url).await?;
 
-    let edition_id: livtet_types::DbId = edition_id_str
-        .parse()
-        .map_err(|e: <livtet_types::DbId as std::str::FromStr>::Err| CliError::Operation {
-            message: format!("Invalid edition ID: {e}"),
-        })?;
+    let edition_id: livtet_types::DbId =
+        edition_id_str
+            .parse()
+            .map_err(
+                |e: <livtet_types::DbId as std::str::FromStr>::Err| CliError::Operation {
+                    message: format!("Invalid edition ID: {e}"),
+                },
+            )?;
 
     let edition = editions::Entity::find_by_id(edition_id)
         .one(&db)
@@ -111,10 +114,7 @@ async fn add_file(edition_id_str: &str, file_path: &str, database_url: &str) -> 
             message: format!("edition not found: {edition_id_str}"),
         })?;
 
-    let title = edition
-        .title
-        .as_deref()
-        .unwrap_or("<unnamed>");
+    let title = edition.title.as_deref().unwrap_or("<unnamed>");
 
     let di = digital_inventory::Entity::find_by_id(edition_id)
         .one(&db)
@@ -169,11 +169,14 @@ async fn add_file(edition_id_str: &str, file_path: &str, database_url: &str) -> 
 async fn remove_file(edition_id_str: &str, database_url: &str) -> Result<()> {
     let db = open_db(database_url).await?;
 
-    let edition_id: livtet_types::DbId = edition_id_str
-        .parse()
-        .map_err(|e: <livtet_types::DbId as std::str::FromStr>::Err| CliError::Operation {
-            message: format!("Invalid edition ID: {e}"),
-        })?;
+    let edition_id: livtet_types::DbId =
+        edition_id_str
+            .parse()
+            .map_err(
+                |e: <livtet_types::DbId as std::str::FromStr>::Err| CliError::Operation {
+                    message: format!("Invalid edition ID: {e}"),
+                },
+            )?;
 
     let edition = editions::Entity::find_by_id(edition_id)
         .one(&db)
@@ -185,10 +188,7 @@ async fn remove_file(edition_id_str: &str, database_url: &str) -> Result<()> {
             message: format!("edition not found: {edition_id_str}"),
         })?;
 
-    let title = edition
-        .title
-        .as_deref()
-        .unwrap_or("<unnamed>");
+    let title = edition.title.as_deref().unwrap_or("<unnamed>");
 
     let count = digital_inventory::Entity::delete_by_id(edition_id)
         .exec(&db)
@@ -239,10 +239,7 @@ async fn list_files(limit: u32, database_url: &str) -> Result<()> {
         .map(|e| (e.id, e))
         .collect();
 
-    let work_ids: Vec<livtet_types::DbId> = editions_map
-        .values()
-        .map(|e| e.work_id)
-        .collect();
+    let work_ids: Vec<livtet_types::DbId> = editions_map.values().map(|e| e.work_id).collect();
 
     let works_map: HashMap<livtet_types::DbId, works::Model> = works::Entity::find()
         .filter(works::Column::Id.is_in(work_ids))
@@ -274,17 +271,9 @@ async fn list_files(limit: u32, database_url: &str) -> Result<()> {
                 .unwrap_or("<unnamed>")
                 .to_string();
 
-            let file_path = d
-                .file_path
-                .as_deref()
-                .unwrap_or("—")
-                .to_string();
+            let file_path = d.file_path.as_deref().unwrap_or("—").to_string();
 
-            let file_format = d
-                .file_format
-                .as_deref()
-                .unwrap_or("—")
-                .to_string();
+            let file_format = d.file_format.as_deref().unwrap_or("—").to_string();
 
             SimpleRow {
                 edition_id: d.edition_id.to_string(),

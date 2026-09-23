@@ -190,6 +190,12 @@ impl From<FlatCategorization> for SavedSearchKind {
     }
 }
 
+// `parse_query` is re-exported to silence the unused-import lint
+// for the parser entry point. Consumers call `parse_user_dsl`
+// above to keep error-path policy in one place.
+#[allow(unused_imports)]
+use parse_query as _parse_query_silence_unused;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -213,7 +219,7 @@ mod tests {
         let err = k.into_ast_with_names(&HashMap::new()).unwrap_err();
         // The exact error depends on tantivy-version specifics;
         // any `InvalidDslError` is fine here.
-        assert_eq!(err.message.is_empty(), false);
+        assert!(!err.message.is_empty());
     }
 
     #[test]
@@ -245,9 +251,3 @@ mod tests {
         assert!(refs.contains(&(ResourceKind::Genre, g_id)));
     }
 }
-
-// `parse_query` is re-exported to silence the unused-import lint
-// for the parser entry point. Consumers call `parse_user_dsl`
-// above to keep error-path policy in one place.
-#[allow(unused_imports)]
-use parse_query as _parse_query_silence_unused;

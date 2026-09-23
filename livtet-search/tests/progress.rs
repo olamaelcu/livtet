@@ -105,9 +105,7 @@ async fn reindex_with_progress_ends_with_done_equals_total() {
         .expect("reindex with progress");
 
     assert!(
-        events
-            .iter()
-            .any(|e| matches!(e, ReindexEvent::Loading)),
+        events.iter().any(|e| matches!(e, ReindexEvent::Loading)),
         "expected at least one Loading event, got {events:?}"
     );
     let last = events.last().expect("at least one event");

@@ -107,7 +107,9 @@ impl LivtetStore {
                     total_reading_time_secs: Set(additional_seconds.max(0)),
                     created_at: Set(now_primitive()),
                 };
-                reading_progress::Entity::insert(active).exec_with_returning(&db).await?
+                reading_progress::Entity::insert(active)
+                    .exec_with_returning(&db)
+                    .await?
             }
         };
 
@@ -115,10 +117,7 @@ impl LivtetStore {
             id: model.id,
             edition_id: model.edition_id,
             progress: model.progress,
-            progress_unit: model
-                .progress_unit
-                .as_deref()
-                .and_then(unit_from_str),
+            progress_unit: model.progress_unit.as_deref().and_then(unit_from_str),
             last_location: model.last_location,
             total_reading_time_secs: model.total_reading_time_secs,
             created_at: ts(&model.created_at),
@@ -139,10 +138,7 @@ impl LivtetStore {
             id: m.id,
             edition_id: m.edition_id,
             progress: m.progress,
-            progress_unit: m
-                .progress_unit
-                .as_deref()
-                .and_then(unit_from_str),
+            progress_unit: m.progress_unit.as_deref().and_then(unit_from_str),
             last_location: m.last_location,
             total_reading_time_secs: m.total_reading_time_secs,
             created_at: ts(&m.created_at),
@@ -220,10 +216,7 @@ impl LivtetStore {
     }
 
     /// All annotations for an edition, oldest first.
-    pub async fn list_annotations(
-        &self,
-        edition_id: DbId,
-    ) -> Result<Vec<Annotation>, LivtetError> {
+    pub async fn list_annotations(&self, edition_id: DbId) -> Result<Vec<Annotation>, LivtetError> {
         let db = self.state.db_conn();
         let rows = livtet_data::entities::annotations::Entity::find()
             .filter(livtet_data::entities::annotations::Column::EditionId.eq(edition_id))
@@ -319,7 +312,11 @@ impl LivtetStore {
         if members.iter().any(|m| m.edition_id == edition_id) {
             return Ok(());
         }
-        let position = members.iter().map(|m| m.position).max().map_or(0, |p| p + 1);
+        let position = members
+            .iter()
+            .map(|m| m.position)
+            .max()
+            .map_or(0, |p| p + 1);
 
         reading_list_book::Entity::insert(reading_list_book::ActiveModel {
             reading_list_id: Set(list_id),
@@ -339,15 +336,13 @@ impl LivtetStore {
         edition_id: DbId,
     ) -> Result<bool, LivtetError> {
         let db = self.state.db_conn();
-        Ok(
-            reading_list_book::Entity::delete_many()
-                .filter(reading_list_book::Column::ReadingListId.eq(list_id))
-                .filter(reading_list_book::Column::EditionId.eq(edition_id))
-                .exec(&db)
-                .await?
-                .rows_affected
-                > 0,
-        )
+        Ok(reading_list_book::Entity::delete_many()
+            .filter(reading_list_book::Column::ReadingListId.eq(list_id))
+            .filter(reading_list_book::Column::EditionId.eq(edition_id))
+            .exec(&db)
+            .await?
+            .rows_affected
+            > 0)
     }
 
     /// Delete a reading list and its memberships. `false` when absent.
@@ -442,7 +437,11 @@ mod tests {
         .await
         .expect("seed");
 
-        let work = store.list_works(1, 0, None, None).await.unwrap().swap_remove(0);
+        let work = store
+            .list_works(1, 0, None, None)
+            .await
+            .unwrap()
+            .swap_remove(0);
         let edition = store.list_editions(work.id).await.unwrap()[0].id;
         (tmp, store, work.id, edition)
     }
@@ -450,7 +449,10 @@ mod tests {
     #[tokio::test]
     async fn work_status_roundtrip() {
         let (_tmp, store, work, _e) = seeded_store_with_edition().await;
-        store.set_work_status(work, WorkStatus::Reading).await.unwrap();
+        store
+            .set_work_status(work, WorkStatus::Reading)
+            .await
+            .unwrap();
         assert_eq!(
             store.get_work_status(work).await.unwrap(),
             Some(WorkStatus::Reading)
@@ -467,13 +469,23 @@ mod tests {
         let existing = store.get_reading_progress(edition).await.unwrap();
 
         let first = store
-            .record_reading_progress(edition, fmt, 0.25, Some(ProgressUnit::Percentage), None, 300)
+            .record_reading_progress(
+                edition,
+                fmt,
+                0.25,
+                Some(ProgressUnit::Percentage),
+                None,
+                300,
+            )
             .await
             .unwrap();
         match &existing {
             Some(prev) => {
                 assert_eq!(first.id, prev.id, "existing row is updated in place");
-                assert_eq!(first.total_reading_time_secs, prev.total_reading_time_secs + 300);
+                assert_eq!(
+                    first.total_reading_time_secs,
+                    prev.total_reading_time_secs + 300
+                );
             }
             None => assert_eq!(first.total_reading_time_secs, 300),
         }
@@ -545,11 +557,18 @@ mod tests {
         let mine = lists.iter().find(|l| l.id == list.id).unwrap();
         assert_eq!(mine.edition_ids, vec![edition]);
 
-        assert!(store.remove_edition_from_list(list.id, edition).await.unwrap());
-        assert!(!store
-            .remove_edition_from_list(list.id, edition)
-            .await
-            .unwrap());
+        assert!(
+            store
+                .remove_edition_from_list(list.id, edition)
+                .await
+                .unwrap()
+        );
+        assert!(
+            !store
+                .remove_edition_from_list(list.id, edition)
+                .await
+                .unwrap()
+        );
 
         assert!(store.delete_reading_list(list.id).await.unwrap());
         assert!(!store.delete_reading_list(list.id).await.unwrap());

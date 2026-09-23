@@ -6,6 +6,7 @@
 
 use camino::Utf8PathBuf;
 use clap::Parser;
+use fs_err as fs;
 use livtet_data::migration::{Migrator, MigratorTrait};
 
 use crate::{
@@ -94,11 +95,9 @@ impl ReindexArgs {
                     spinner.finish_and_clear();
                     let bar = indicatif::ProgressBar::new(total);
                     bar.set_style(
-                        indicatif::ProgressStyle::with_template(
-                            "[{bar:40.cyan/blue}] {pos}/{len}",
-                        )
-                        .expect("valid progress template")
-                        .progress_chars("#>-"),
+                        indicatif::ProgressStyle::with_template("[{bar:40.cyan/blue}] {pos}/{len}")
+                            .expect("valid progress template")
+                            .progress_chars("#>-"),
                     );
                     bar.set_message("Indexing");
                     bar
@@ -129,18 +128,17 @@ impl ReindexArgs {
             // unconditionally since migrate_to was a no-op.
             if self.force && prev == livtet_core::search::SCHEMA_VERSION {
                 if index_dir.exists() {
-                    std::fs::remove_dir_all(&index_dir).map_err(|e| {
-                        CliError::Operation {
-                            message: format!("Failed to clear {index_dir}: {e}"),
-                        }
+                    fs::remove_dir_all(&index_dir).map_err(|e| CliError::Operation {
+                        message: format!("Failed to clear {index_dir}: {e}"),
                     })?;
                 }
                 spinner.set_message("Rebuilding index");
                 let index =
-                    livtet_core::search::SearchIndex::open(index_dir.as_path())
-                        .map_err(|e| CliError::Operation {
+                    livtet_core::search::SearchIndex::open(index_dir.as_path()).map_err(|e| {
+                        CliError::Operation {
                             message: format!("Failed to open {index_dir}: {e}"),
-                        })?;
+                        }
+                    })?;
                 index
                     .reindex_with_progress(&conn, &mut on_event)
                     .await

@@ -58,7 +58,5 @@ pub fn config_dir() -> Option<Utf8PathBuf> {
 /// Per-bundle logs directory. Falls back to `<cwd>/logs` when the
 /// platform does not expose a data dir.
 pub fn logs_dir() -> Utf8PathBuf {
-    bundle_data_dir()
-        .unwrap_or_default()
-        .join("logs")
+    bundle_data_dir().unwrap_or_default().join("logs")
 }

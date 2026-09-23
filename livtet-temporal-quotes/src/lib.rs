@@ -169,8 +169,7 @@ fn build_pool() -> Pool {
     for (i, content) in greeting_files.into_iter().enumerate() {
         by_period[i] = parse_blocks(content);
     }
-    let mut labels_by_period: [Vec<&'static str>; 6] =
-        std::array::from_fn(|_| Vec::new());
+    let mut labels_by_period: [Vec<&'static str>; 6] = std::array::from_fn(|_| Vec::new());
     for (i, content) in label_files.into_iter().enumerate() {
         labels_by_period[i] = parse_labels(content);
     }
@@ -376,8 +375,7 @@ mod tests {
     #[test]
     fn parse_blocks_skips_malformed_blocks() {
         // Only one line in the first block — must be skipped.
-        let content =
-            "lonely line\n===\nfull text\nfull author\nfull work\n";
+        let content = "lonely line\n===\nfull text\nfull author\nfull work\n";
         let quotes = parse_blocks(content);
         assert_eq!(quotes.len(), 1);
         assert_eq!(quotes[0].text, "full text");
@@ -489,6 +487,10 @@ mod tests {
                 vec.len()
             );
         }
-        assert!(p.empty.len() >= 12, "empty pool has only {} quotes", p.empty.len());
+        assert!(
+            p.empty.len() >= 12,
+            "empty pool has only {} quotes",
+            p.empty.len()
+        );
     }
 }

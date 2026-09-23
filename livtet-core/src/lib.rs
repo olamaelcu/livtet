@@ -10,9 +10,9 @@ pub use livtet_data::{
 };
 
 pub mod core;
-pub mod paths;
 #[cfg(feature = "covers")]
 pub mod covers;
+pub mod paths;
 #[cfg(feature = "fake")]
 pub mod seed;
 pub mod user_agent;

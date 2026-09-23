@@ -839,8 +839,13 @@ impl SearchReader {
                     // tantivy's `Snippet::highlighted()` returns
                     // `&[Range<usize>]` indexed into the fragment
                     // bytes. Map to `HighlightRange` for IPC compatibility.
-                    let ranges: Vec<HighlightRange> = snippet.highlighted().iter()
-                        .map(|r| HighlightRange { start: r.start as u32, end: r.end as u32 })
+                    let ranges: Vec<HighlightRange> = snippet
+                        .highlighted()
+                        .iter()
+                        .map(|r| HighlightRange {
+                            start: r.start as u32,
+                            end: r.end as u32,
+                        })
                         .collect();
                     (Some(text), ranges)
                 }

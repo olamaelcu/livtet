@@ -34,3 +34,4 @@ required-features = ["cli"]
 livtet-data = { workspace = true, features = ["fake"] }
 livtet-test-utils = { workspace = true }
 camino-tempfile.workspace = true
+fs-err = { workspace = true }

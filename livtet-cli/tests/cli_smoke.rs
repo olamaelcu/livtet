@@ -26,7 +26,6 @@ fn path_unknown_kind_fails() {
         .stderr(predicate::str::contains("unknown path kind"));
 }
 
-
 #[test]
 fn editions_help_lists_subcommands() {
     cmd()

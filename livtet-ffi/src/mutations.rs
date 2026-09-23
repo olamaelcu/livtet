@@ -170,7 +170,7 @@ impl LivtetStore {
                         LivtetError::InvalidInput(format!("invalid calendar date: {e}"))
                     })?,
                 ))
-            },
+            }
             // Partial precision can't be stored: editions carries a
             // full `time::Date` column or NULL. Fail closed.
             Some(other) => {
@@ -251,8 +251,7 @@ mod tests {
 
     use super::*;
 
-    async fn seeded_store_with_edition(
-    ) -> (camino_tempfile::Utf8TempDir, Arc<LivtetStore>, DbId) {
+    async fn seeded_store_with_edition() -> (camino_tempfile::Utf8TempDir, Arc<LivtetStore>, DbId) {
         let tmp = camino_tempfile::tempdir().unwrap();
         let store = LivtetStore::open(
             tmp.path().join("livtet.db").to_string(),
@@ -317,17 +316,10 @@ mod tests {
             urn
         );
         let again = Identifier::parse(urn).unwrap();
-        store
-            .add_edition_identifier(edition, again)
-            .await
-            .unwrap();
+        store.add_edition_identifier(edition, again).await.unwrap();
 
         let detail = store.get_edition(edition).await.unwrap().unwrap();
-        let matches = detail
-            .identifiers
-            .iter()
-            .filter(|i| *i == urn)
-            .count();
+        let matches = detail.identifiers.iter().filter(|i| *i == urn).count();
         assert_eq!(matches, 1, "identifier appears exactly once");
     }
 

@@ -21,6 +21,7 @@ miette = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 camino = { workspace = true }
+fs-err = { workspace = true }
 tracing = { workspace = true }
 inquire = { version = "0.9", features = ["editor"] }
 indicatif = "0.18"

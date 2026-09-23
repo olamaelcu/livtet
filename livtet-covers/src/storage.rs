@@ -22,7 +22,8 @@ pub struct CachedCover {
 
 #[async_trait]
 pub trait CoverStorage: Send + Sync {
-    async fn store(&self, key: &super::fetcher::CacheKey, bytes: &[u8]) -> CoverResult<CachedCover>;
+    async fn store(&self, key: &super::fetcher::CacheKey, bytes: &[u8])
+    -> CoverResult<CachedCover>;
 
     async fn copy_to_permanent(
         &self,
@@ -101,9 +102,13 @@ impl CoverStorage for FileCoverStorage {
         }
         fs::write(&entry_path, bytes).await?;
 
-        let marker_dir = self.edition_markers_dir(key.identifier_value.parse::<DbId>().map_err(|_| {
-            CoverError::Cache(format!("invalid edition_id in key: {}", key.identifier_value))
-        })?);
+        let marker_dir =
+            self.edition_markers_dir(key.identifier_value.parse::<DbId>().map_err(|_| {
+                CoverError::Cache(format!(
+                    "invalid edition_id in key: {}",
+                    key.identifier_value
+                ))
+            })?);
         fs::create_dir_all(&marker_dir).await?;
         let marker_path = marker_dir.join(self.content_hash(&content_key));
         fs::write(&marker_path, content_key.as_bytes()).await?;
@@ -111,7 +116,10 @@ impl CoverStorage for FileCoverStorage {
         Ok(CachedCover {
             content_key,
             edition_id: key.identifier_value.parse().map_err(|_| {
-                CoverError::Cache(format!("invalid edition_id in key: {}", key.identifier_value))
+                CoverError::Cache(format!(
+                    "invalid edition_id in key: {}",
+                    key.identifier_value
+                ))
             })?,
             blurhash: None,
             dominant_color: None,
@@ -128,16 +136,20 @@ impl CoverStorage for FileCoverStorage {
         let content_key = key.content_key();
         let entry_path = self.entry_path(&content_key);
 
-        let bytes = fs::read(&entry_path).await.map_err(|e| {
-            CoverError::Cache(format!("cached entry not found: {}", e))
-        })?;
+        let bytes = fs::read(&entry_path)
+            .await
+            .map_err(|e| CoverError::Cache(format!("cached entry not found: {}", e)))?;
 
         let perm_dir = self.edition_permanent_dir(edition_id);
         fs::create_dir_all(&perm_dir).await?;
 
-        let ext_sanitized = ext.trim_start_matches('.').replace(['/', '\\', ':', '*', '?', '"', '<', '>', '|'], "");
+        let ext_sanitized = ext
+            .trim_start_matches('.')
+            .replace(['/', '\\', ':', '*', '?', '"', '<', '>', '|'], "");
         if ext_sanitized.is_empty() {
-            return Err(CoverError::Cache("empty extension after sanitization".into()));
+            return Err(CoverError::Cache(
+                "empty extension after sanitization".into(),
+            ));
         }
 
         let permanent_path = perm_dir.join(format!("cover.{}", ext_sanitized));
@@ -177,7 +189,10 @@ impl CoverStorage for FileCoverStorage {
                 continue;
             }
 
-            let hash = path.file_name().and_then(|s| s.split('.').next()).unwrap_or("");
+            let hash = path
+                .file_name()
+                .and_then(|s| s.split('.').next())
+                .unwrap_or("");
 
             let size = fs::metadata(self.entries_dir().join(hash))
                 .await
@@ -206,9 +221,13 @@ impl CoverStorage for FileCoverStorage {
     }
 
     fn permanent_path(&self, edition_id: DbId, ext: &str) -> CoverResult<Utf8PathBuf> {
-        let ext_sanitized = ext.trim_start_matches('.').replace(['/', '\\', ':', '*', '?', '"', '<', '>', '|'], "");
+        let ext_sanitized = ext
+            .trim_start_matches('.')
+            .replace(['/', '\\', ':', '*', '?', '"', '<', '>', '|'], "");
         if ext_sanitized.is_empty() {
-            return Err(CoverError::Cache("empty extension after sanitization".into()));
+            return Err(CoverError::Cache(
+                "empty extension after sanitization".into(),
+            ));
         }
         let perm_dir = self.edition_permanent_dir(edition_id);
         Ok(perm_dir.join(format!("cover.{}", ext_sanitized)))
@@ -247,12 +266,9 @@ mod tests {
     #[tokio::test]
     async fn store_copy_list_remove_roundtrip() {
         let dir = camino_tempfile::Utf8TempDir::new().unwrap();
-        let storage = FileCoverStorage::new(
-            dir.path().join("cache"),
-            dir.path().join("perm"),
-        )
-        .await
-        .unwrap();
+        let storage = FileCoverStorage::new(dir.path().join("cache"), dir.path().join("perm"))
+            .await
+            .unwrap();
 
         let state =
             livtet_data::SharedState::connect("sqlite::memory:", &[livtet_data::Kind::Business])
@@ -287,12 +303,9 @@ mod tests {
     #[tokio::test]
     async fn list_cached_empty_without_markers() {
         let dir = camino_tempfile::Utf8TempDir::new().unwrap();
-        let storage = FileCoverStorage::new(
-            dir.path().join("cache"),
-            dir.path().join("perm"),
-        )
-        .await
-        .unwrap();
+        let storage = FileCoverStorage::new(dir.path().join("cache"), dir.path().join("perm"))
+            .await
+            .unwrap();
 
         let state =
             livtet_data::SharedState::connect("sqlite::memory:", &[livtet_data::Kind::Business])

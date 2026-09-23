@@ -1,5 +1,7 @@
 use std::sync::{Mutex, OnceLock};
 
+use camino::Utf8Path;
+use fs_err as fs;
 use livtet_core::SharedState;
 use livtet_data::migrator::Kind;
 use magnus::{Error, Ruby, Value, prelude::*};
@@ -8,8 +10,9 @@ static RUNTIME: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
 static DB_HANDLE: Mutex<Option<(String, SharedState)>> = Mutex::new(None);
 
 fn runtime() -> &'static tokio::runtime::Runtime {
-    RUNTIME
-        .get_or_init(|| tokio::runtime::Runtime::new().expect("livtet: failed to create tokio runtime"))
+    RUNTIME.get_or_init(|| {
+        tokio::runtime::Runtime::new().expect("livtet: failed to create tokio runtime")
+    })
 }
 
 fn ruby_error(msg: String) -> Error {
@@ -42,11 +45,11 @@ pub fn db_open(path: Value) -> Result<bool, Error> {
         }
         s
     };
-    if let Some(parent) = std::path::Path::new(&db_path).parent() {
-        if !parent.as_os_str().is_empty() {
-            std::fs::create_dir_all(parent)
-                .map_err(|e| ruby_error(format!("livtet: cannot create database directory: {e}")))?;
-        }
+    if let Some(parent) = Utf8Path::new(&db_path).parent()
+        && !parent.as_str().is_empty()
+    {
+        fs::create_dir_all(parent)
+            .map_err(|e| ruby_error(format!("livtet: cannot create database directory: {e}")))?;
     }
     let state = runtime()
         .block_on(SharedState::connect(&db_path, &[Kind::Business]))

@@ -857,16 +857,16 @@ async fn build_query_with_format_label_filter() {
         .expect("build_query should accept format-only filter");
 
     let searcher = index.index().reader().expect("reader").searcher();
-    let mut top = tantivy::collector::TopDocs::with_limit(20).order_by_score();
-    let docs = searcher.search(&*query, &mut top).expect("search");
+    let top = tantivy::collector::TopDocs::with_limit(20).order_by_score();
+    let docs = searcher.search(&*query, &top).expect("search");
     assert!(!docs.is_empty(), "format filter must return hits");
     let mut edition_ids: Vec<String> = Vec::new();
     for (_, addr) in &docs {
         let doc: tantivy::TantivyDocument = searcher.doc(*addr).expect("retrieve doc");
-        if let Some(v) = doc.get_first(index.schema().get_field("edition_id").unwrap()) {
-            if let Some(s) = v.as_str() {
-                edition_ids.push(s.to_string());
-            }
+        if let Some(v) = doc.get_first(index.schema().get_field("edition_id").unwrap())
+            && let Some(s) = v.as_str()
+        {
+            edition_ids.push(s.to_string());
         }
     }
     let a = seed.edition_a_id.to_string();

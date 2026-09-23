@@ -24,12 +24,9 @@ pub enum EncodeError {
 pub type EncodeResult<T> = Result<T, EncodeError>;
 
 pub fn encode_cover(path: &Utf8Path) -> EncodeResult<CoverMetadata> {
-    let bytes = fs::read(path).map_err(|e| {
-        EncodeError::NotFound(e.to_string())
-    })?;
+    let bytes = fs::read(path).map_err(|e| EncodeError::NotFound(e.to_string()))?;
 
-    let img = image::load_from_memory(&bytes)
-        .map_err(|e| EncodeError::Decode(e.to_string()))?;
+    let img = image::load_from_memory(&bytes).map_err(|e| EncodeError::Decode(e.to_string()))?;
 
     let (width, height) = img.dimensions();
 

@@ -42,7 +42,11 @@ pub enum FetchError {
 pub trait CoverFetcher: Send + Sync {
     fn priority(&self) -> u8;
 
-    async fn keys_for(&self, edition_id: DbId, db: &DatabaseConnection) -> Result<Vec<CacheKey>, FetchError>;
+    async fn keys_for(
+        &self,
+        edition_id: DbId,
+        db: &DatabaseConnection,
+    ) -> Result<Vec<CacheKey>, FetchError>;
 
     async fn fetch(&self, key: &CacheKey) -> Result<FetchedCover, FetchError>;
 }
