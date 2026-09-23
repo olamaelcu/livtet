@@ -7,6 +7,9 @@ members = [
   "livtet-ffi",
   "livtet-temporal-quotes",
   "livtet-data",
+  "livtet-sync",
+  "livtet-sync-http",
+  "livtet-sync-server",
   "livtet-search",
   "livtet-types",
   "livtet-test-utils",
@@ -29,6 +32,9 @@ rust-version = "1.97.0"
 livtet-core = { path = "livtet-core" }
 livtet-cli-common = { path = "livtet-cli-common" }
 livtet-data = { path = "livtet-data" }
+livtet-sync = { path = "livtet-sync" }
+livtet-sync-http = { path = "livtet-sync-http" }
+livtet-sync-server = { path = "livtet-sync-server" }
 livtet-ffi = { path = "livtet-ffi" }
 livtet-search = { path = "livtet-search" }
 livtet-temporal-quotes = { path = "livtet-temporal-quotes" }

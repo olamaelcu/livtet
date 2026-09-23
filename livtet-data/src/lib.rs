@@ -3,7 +3,10 @@
 //! ## Module structure
 //!
 //! - [`entities`] — SeaORM entity models for the server catalog schema
+//! - [`client_entities`] — SeaORM entity models for client-owned tables
+//!   (sync change-log, device pairing, client settings)
 //! - [`migration`] — Database migrations for the server catalog schema
+//! - [`client_migration`] — Database migrations for client-owned tables
 //! - [`migrator`] — Migration runner abstraction over business + client schemas
 //! - [`state`] — Connection pool, SQLite pragmas, `SharedState` + global init/get
 //! - [`seed`] — Database seeding for development/testing (behind `fake` feature)
@@ -27,6 +30,8 @@ pub mod state;
 pub mod test_db;
 pub mod unique_index;
 
+pub mod client_entities;
+pub mod client_migration;
 pub mod entities;
 pub mod migration;
 
@@ -39,7 +44,7 @@ pub use db_error::ConstraintViolation;
 pub use entities::*;
 pub use error::{CoreError, Result as CoreResult};
 pub use index::NamedIndex;
-pub use migrator::{Kind, connect_with_migrations};
+pub use migrator::{Kind, connect_with_migrations, run_kinds};
 pub use primary_key::PrimaryKey;
 #[cfg(feature = "fake")]
 pub use seed::{SeedConfig, SeedResult, seed_database};

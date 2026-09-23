@@ -48,3 +48,7 @@ specta = { workspace = true, optional = true }
 # Required by the moved state/test_db modules:
 camino-tempfile = { workspace = true }
 mutants = { workspace = true }
+
+[dev-dependencies]
+# Serializes tests that mutate process-global state (see state::tests).
+serial_test = "3"

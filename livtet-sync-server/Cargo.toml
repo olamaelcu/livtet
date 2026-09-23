@@ -1,0 +1,56 @@
+[package]
+name = "livtet-sync-server"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+
+[package.metadata.workspaces]
+independent = true
+
+[lints]
+workspace = true
+
+[lib]
+name = "livtet_sync_server"
+path = "src/lib.rs"
+
+[[bin]]
+name = "livtet-sync-server"
+path = "src/main.rs"
+
+[dependencies]
+livtet-sync = { workspace = true }
+livtet-sync-http = { workspace = true, features = ["poem"] }
+livtet-data = { workspace = true }
+livtet-types = { workspace = true }
+poem = { version = "3.1", default-features = false, features = ["server"] }
+tokio = { workspace = true, features = [
+  "rt-multi-thread",
+  "macros",
+  "sync",
+  "time",
+  "io-util",
+  "io-std",
+  "net",
+  "process",
+  "signal",
+] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true, features = ["env-filter"] }
+thiserror = { workspace = true }
+ulid = { workspace = true }
+time = { workspace = true }
+camino = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = [
+  "macros",
+  "rt-multi-thread",
+  "time",
+  "process",
+  "io-util",
+  "io-std",
+] }
+fs-err = { workspace = true }

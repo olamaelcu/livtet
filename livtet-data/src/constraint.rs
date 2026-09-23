@@ -62,6 +62,11 @@ pub enum Constraint {
     ReadingProgressEdition,
     ReadingProgressFormat,
     WorkStatusWork,
+
+    // ── client-0002-pairing_tables ─────────────────────────────────
+    PairedDevicesType,
+    PendingPairingsDeviceType,
+    PendingPairingsStatus,
 }
 
 impl Constraint {
@@ -121,6 +126,11 @@ impl Constraint {
             Self::ReadingProgressEdition => "Referenced edition does not exist",
             Self::ReadingProgressFormat => "Referenced format does not exist",
             Self::WorkStatusWork => "Referenced work does not exist",
+
+            // ── client-0002-pairing_tables ─────────────────────────
+            Self::PairedDevicesType => "Referenced device type does not exist",
+            Self::PendingPairingsDeviceType => "Referenced device type does not exist",
+            Self::PendingPairingsStatus => "Referenced pairing status does not exist",
         }
     }
 

@@ -116,6 +116,7 @@ pub async fn optimize_and_close() -> Result<(), sqlx::Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial_test::serial;
 
     #[tokio::test]
     async fn shared_state_connect_works() {
@@ -124,6 +125,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn shared_state_init_and_get() {
         // `STATE` is a process-global `OnceLock`; once any test
         // in this binary sets it, it stays set for the rest of
@@ -147,6 +149,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn shared_state_cannot_init_twice() {
         // Only meaningful before any other test has initialized
         // `STATE`. After that the second `init_state` is still

@@ -1,6 +1,7 @@
 [tools]
 rust = "latest"
 "github:corca-ai/nose" = "v0.20.0"
+"cargo:cargo-machete" = "0.7"
 
 [tasks.check-dupes]
 description = "Detect new copy-paste duplication (25+ shared lines per occurrence); gates on --fail-on new vs .nose/baseline.json. Smaller duplications are accepted as noise."
@@ -9,3 +10,17 @@ run = "nose query . --mode syntax 'shared_lines>25' --baseline .nose/baseline.js
 [tasks]
 cli = "cargo run -p livtet-cli"
 
+[tasks.lint]
+description = "Run all lint checks (Rust)"
+run = [
+  "cargo fmt --all --check",
+  "cargo clippy --workspace --all-targets -- -D warnings",
+  "cargo-machete",
+]
+
+[tasks.test]
+description = "Run all unit + integration tests (Rust)"
+run = [
+  "cargo test --doc --workspace",
+  "cargo test --workspace --all-targets",
+]

@@ -10,6 +10,23 @@ use crate::state::sqlite_pool_options;
 pub enum Kind {
     /// Catalog / inventory / reading / annotations (livtet-migration)
     Business,
+    /// Sync change-log / device pairing / client settings (client_migration)
+    Client,
+}
+
+/// Run the selected migration kinds in dependency order (Business → Client).
+///
+/// Business and client migrate independently: each owns its own migration
+/// table (`core_migrations` / `client_migrations`), so running one kind
+/// never touches the other's bookkeeping.
+pub async fn run_kinds(pool: &SqlitePool, kinds: &[Kind]) -> Result<(), sqlx::Error> {
+    if kinds.contains(&Kind::Business) {
+        crate::migration::Migrator::run(pool).await?;
+    }
+    if kinds.contains(&Kind::Client) {
+        crate::client_migration::Migrator::run(pool).await?;
+    }
+    Ok(())
 }
 
 /// Convenience: connect with shared pool options, set database-level pragmas,
@@ -42,11 +59,8 @@ pub async fn connect_with_migrations(
         .execute(&pool)
         .await?;
 
-    let kinds = Vec::from_iter(kinds);
-
-    if kinds.contains(&&Kind::Business) {
-        crate::migration::Migrator::run(&pool).await?;
-    }
+    let kinds: Vec<Kind> = kinds.into_iter().copied().collect();
+    run_kinds(&pool, &kinds).await?;
 
     Ok(pool)
 }
@@ -80,5 +94,21 @@ mod tests {
         let pool =
             super::connect_with_migrations("sqlite::memory:", &[super::Kind::Business]).await;
         assert!(pool.is_ok(), "sqlite::memory: should still work: {pool:?}");
+    }
+
+    #[tokio::test]
+    async fn connect_with_migrations_runs_client_kind() {
+        let pool = super::connect_with_migrations("sqlite::memory:", &[super::Kind::Client]).await;
+        assert!(
+            pool.is_ok(),
+            "client migrations should run on their own: {pool:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn connect_with_migrations_runs_both_kinds() {
+        let kinds = [super::Kind::Business, super::Kind::Client];
+        let pool = super::connect_with_migrations("sqlite::memory:", &kinds).await;
+        assert!(pool.is_ok(), "business + client should migrate: {pool:?}");
     }
 }
