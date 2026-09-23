@@ -9,7 +9,7 @@ use crate::path::{default_db_path, default_index_dir};
 
 use livtet_data::entities::{authors, digital_inventory, edition_authors, editions, formats};
 use livtet_data::orm::{ColumnTrait, Database, EntityTrait, QueryFilter};
-use livtet_search::{SearchIndex, SearchOptions, model::HitKind};
+use livtet_search::{SearchOptions, SearchReader, model::HitKind};
 
 #[derive(Args, Debug)]
 pub struct EditionsArgs {
@@ -115,9 +115,9 @@ fn limit_u(limit: u32) -> usize {
 }
 
 
-async fn open_index() -> crate::Result<SearchIndex> {
+async fn open_index() -> crate::Result<SearchReader> {
     let dir = default_index_dir()?;
-    SearchIndex::open(&dir).map_err(|e| CliError::Operation {
+    SearchReader::open(&dir).map_err(|e| CliError::Operation {
         message: format!("Failed to open index at {dir}: {e}"),
     })
 }

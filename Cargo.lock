@@ -2792,6 +2792,7 @@ dependencies = [
  "livtet-core",
  "livtet-data",
  "livtet-search",
+ "livtet-temporal-quotes",
  "livtet-test-utils",
  "livtet-types",
  "thiserror",

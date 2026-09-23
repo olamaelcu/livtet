@@ -15,12 +15,18 @@
 //! per-edition edits happen through [`SearchIndex::add_edition`]
 //! and [`SearchIndex::delete_edition`] against an already-open index.
 //!
+//! Handles come in two flavours: [`SearchReader`] opens the index for
+//! reading only and never takes Tantivy's writer lock, so any number of
+//! readers may be open on the same directory at once (in one process or
+//! several); [`SearchIndex`] adds the exclusive writer and is the only
+//! handle that can mutate the index.
+//!
 //! Search APIs:
 //!
-//! - [`SearchIndex::search`] — edition-level text search.
-//! - [`SearchIndex::search_works`] — over-fetches and collapses
+//! - [`SearchReader::search`] — edition-level text search.
+//! - [`SearchReader::search_works`] — over-fetches and collapses
 //!   editions onto a work.
-//! - [`SearchIndex::search_with_facets`] — edition-level + facet
+//! - [`SearchReader::search_with_facets`] — edition-level + facet
 //!   counts and a `pub_date`-desc tiebreak.
 //!
 //! Lookups for categorical IDs live alongside the index in
@@ -43,7 +49,7 @@ pub mod user_input_translator;
 pub mod write;
 
 pub use doc::{AuthorDoc, EditionDoc};
-pub use index::{SearchError, SearchIndex};
+pub use index::{SearchError, SearchIndex, SearchReader};
 pub use label_resolver::LabelResolver;
 pub use lookups::{AuthorLookup, EditionLookup, ResourceKind, ResourceLookup, WorkLookup};
 pub use model::{

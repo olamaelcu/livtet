@@ -65,11 +65,11 @@ pub mod fields {
 /// Default snippet budget for [`SearchHit::snippet_text`].
 pub const DEFAULT_SNIPPET_CHARS: usize = 180;
 
-/// Default over-fetch multiplier for [`SearchIndex::search_works`].
+/// Default over-fetch multiplier for [`SearchReader::search_works`](crate::SearchReader::search_works).
 pub const WORK_GROUP_OVERFETCH: usize = 8;
 
 /// Maximum number of work IDs returned by
-/// [`SearchIndex::matching_work_ids`]. The OPDS server caps the
+/// [`SearchReader::matching_work_ids`](crate::SearchReader::matching_work_ids). The OPDS server caps the
 /// per-page response at this magnitude; the search backend should
 /// not enumerate further.
 pub const OPDS_WORK_ID_LIMIT: usize = 1_000;

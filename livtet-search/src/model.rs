@@ -122,13 +122,13 @@ pub struct SearchOptions {
     /// is false.
     pub snippet_chars: i64,
     /// When true, edition hits are collapsed onto works. Equivalent
-    /// to calling [`SearchIndex::search_works`].
+    /// to calling [`SearchReader::search_works`](crate::SearchReader::search_works).
     pub collapse_to_works: bool,
     /// Over-fetch multiplier for the work-collapse path. The default
     /// is 8 (`WORK_GROUP_OVERFETCH`).
     pub work_overfetch: i64,
     /// Optional explicit sort. When `Some`,
-    /// [`SearchIndex::search_with_options`] sorts the top-N result
+    /// [`SearchReader::search_with_options`](crate::SearchReader::search_with_options) sorts the top-N result
     /// by the corresponding fast field (`Title` / `CreatedAt` /
     /// `UpdatedAt`) in the requested direction; `Score` is a no-op
     /// since score-ordering is the default. When `None`, the
@@ -178,7 +178,7 @@ impl Default for SearchOptions {
 }
 
 /// Search result bundle that includes facet counts. Returned by
-/// [`SearchIndex::search_with_facets`].
+/// [`SearchReader::search_with_facets`](crate::SearchReader::search_with_facets).
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct FacetedSearchResult {

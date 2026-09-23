@@ -7,7 +7,7 @@
 //! `UserInputAst` trees without owning a tantivy schema. Once a
 //! search request reaches this crate, the AST has to be reified
 //! into a concrete [`Box<dyn Query>`] using the
-//! `SearchIndex`-bound [`QueryParser`](tantivy::query::QueryParser).
+//! `SearchReader`-bound [`QueryParser`](tantivy::query::QueryParser).
 //!
 //! We reach `UserInputAst` through tantivy's `pub use query_grammar`
 //! re-export so this crate doesn't need a direct `tantivy-query-grammar`
@@ -15,12 +15,12 @@
 
 use tantivy::{query::Query, query_grammar::UserInputAst};
 
-use crate::{SearchError, SearchIndex};
+use crate::{SearchError, SearchReader};
 
 /// Lower a composed `UserInputAst` into a Tantivy `Box<dyn Query>`
-/// that can be executed against [`SearchIndex`].
+/// that can be executed against [`SearchReader`].
 pub fn user_input_ast_to_query(
-    index: &SearchIndex,
+    index: &SearchReader,
     ast: UserInputAst,
 ) -> Result<Box<dyn Query>, SearchError> {
     // Tantivy's `QueryParser` API splits its parse errors into two

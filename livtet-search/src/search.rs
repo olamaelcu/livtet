@@ -12,7 +12,7 @@ use tantivy::{
 };
 
 use crate::{
-    index::SearchIndex,
+    index::SearchReader,
     model::{FacetCount, FacetedSearchResult, HighlightRange, HitKind, SearchHit, SearchOptions},
     schema::{OPDS_WORK_ID_LIMIT, fields, kinds},
 };
@@ -188,7 +188,7 @@ impl WorkFiltersQuery {
 }
 
 /// Build a tantivy QueryParser for free-text with the schema's field
-/// boosts and fuzzy-on-title. Mirrors the parser in SearchIndex but
+/// boosts and fuzzy-on-title. Mirrors the parser in SearchReader but
 /// uses the index's tokenizers and schema.
 pub(crate) fn knn_query_parser(index: &Index) -> QueryParser {
     let schema = index.schema();
@@ -275,7 +275,20 @@ fn map_text_filter(
     clauses.push((Occur::Must, Box::new(TermSetQuery::new(terms))));
 }
 
-impl SearchIndex {
+impl SearchReader {
+    // ---- Reader refresh ------------------------------------------------
+
+    /// Reload the reader — picking up commits made by this process or by
+    /// another one — then hand back a fresh [`tantivy::Searcher`].
+    ///
+    /// Reload is a no-op when nothing has been committed since the last
+    /// call, so the cost per search is negligible; the payoff is that a
+    /// read-only handle never serves stale results.
+    fn refreshed_searcher(&self) -> tantivy::Result<tantivy::Searcher> {
+        self.reader.reload()?;
+        Ok(self.reader.searcher())
+    }
+
     // ---- Query parser --------------------------------------------------
 
     /// Build a configured [`QueryParser`] covering every full-text field
@@ -399,7 +412,7 @@ impl SearchIndex {
         opts: &SearchOptions,
     ) -> tantivy::Result<Vec<SearchHit>> {
         let start = std::time::Instant::now();
-        let searcher = self.reader.searcher();
+        let searcher = self.refreshed_searcher()?;
         // Parse + AND with the kind=edition discriminator and any
         // caller-supplied filters via the shared query backbone.
         let mut query =
@@ -495,7 +508,7 @@ impl SearchIndex {
     /// Search with a pre-built `Box<dyn Query>` (e.g. from
     /// [`WorkFiltersQuery::build_query`]) instead of a query string.
     /// Applies `kind = "edition"` filter and optional work-collapse
-    /// just like [`SearchIndex::search_with_options`].
+    /// just like [`SearchReader::search_with_options`].
     #[tracing::instrument(
         level = "debug",
         name = "search.tantivy.query",
@@ -509,7 +522,7 @@ impl SearchIndex {
         opts: &SearchOptions,
     ) -> tantivy::Result<Vec<SearchHit>> {
         let start = std::time::Instant::now();
-        let searcher = self.reader.searcher();
+        let searcher = self.refreshed_searcher()?;
 
         // When offset is requested, fetch extra hits so we can drop
         // the first `offset` results in-memory.
@@ -567,7 +580,7 @@ impl SearchIndex {
 
     /// Search across every document kind (editions and authors).
     ///
-    /// Unlike [`SearchIndex::search_with_options`] this method does
+    /// Unlike [`SearchReader::search_with_options`] this method does
     /// NOT filter on `kind = "edition"` — it surfaces author
     /// documents as `HitKind::Person` hits alongside edition hits. Use
     /// this for the "people + works" dropdown UI; stick to
@@ -585,7 +598,7 @@ impl SearchIndex {
         opts: &SearchOptions,
     ) -> tantivy::Result<Vec<SearchHit>> {
         let start = std::time::Instant::now();
-        let searcher = self.reader.searcher();
+        let searcher = self.refreshed_searcher()?;
         let query = self.build_query_parser(query_str)?;
 
         // When offset is requested, fetch extra hits so we can drop
@@ -627,7 +640,7 @@ impl SearchIndex {
         }
     }
 
-    /// Work-level search. Internally calls [`SearchIndex::search`]
+    /// Work-level search. Internally calls [`SearchReader::search`]
     /// with the collapse flag, over-fetching by `WORK_GROUP_OVERFETCH`
     /// so the per-work grouping has enough raw data.
     pub async fn search_works(
@@ -649,7 +662,7 @@ impl SearchIndex {
         query_str: &str,
         limit: usize,
     ) -> tantivy::Result<FacetedSearchResult> {
-        let searcher = self.reader.searcher();
+        let searcher = self.refreshed_searcher()?;
         // Use the shared query backbone so the filter/kind logic
         // stays in lock-step with `search_with_options`.
         let query = self.build_filtered_query(query_str, &livtet_types::WorkFilters::default())?;
@@ -883,10 +896,10 @@ impl SearchIndex {
     // ---- Phase A additions: shared query backbone, count, ids ----
 
     /// Build the shared query backbone used by
-    /// [`SearchIndex::search_with_options`],
-    /// [`SearchIndex::search_with_facets`],
-    /// [`SearchIndex::count_works_filtered`], and
-    /// [`SearchIndex::matching_work_ids`].
+    /// [`SearchReader::search_with_options`],
+    /// [`SearchReader::search_with_facets`],
+    /// [`SearchReader::count_works_filtered`], and
+    /// [`SearchReader::matching_work_ids`].
     ///
     /// The returned `Box<dyn Query>` AND-combines:
     /// - The parsed user query (when `query_str` is non-empty), or
@@ -947,7 +960,7 @@ impl SearchIndex {
         query_str: &str,
         filters: &livtet_types::WorkFilters,
     ) -> tantivy::Result<usize> {
-        let searcher = self.reader.searcher();
+        let searcher = self.refreshed_searcher()?;
         let query = self.build_filtered_query(query_str, filters)?;
         searcher.search(&*query, &Count)
     }
@@ -958,7 +971,7 @@ impl SearchIndex {
     /// [`WorkFiltersQuery`].
     #[tracing::instrument(level = "debug", name = "search.count_with_query", skip(self, query))]
     pub async fn count_with_query(&self, query: Box<dyn Query>) -> tantivy::Result<usize> {
-        let searcher = self.reader.searcher();
+        let searcher = self.refreshed_searcher()?;
         let kind_filter = self.schema.get_field(fields::KIND).expect("kind");
         let edition_query: Box<dyn Query> = Box::new(tantivy::query::BooleanQuery::new(vec![
             (Occur::Must, query),
@@ -994,7 +1007,7 @@ impl SearchIndex {
         query_str: &str,
         filters: &livtet_types::WorkFilters,
     ) -> tantivy::Result<Vec<livtet_types::DbId>> {
-        let searcher = self.reader.searcher();
+        let searcher = self.refreshed_searcher()?;
         let query = self.build_filtered_query(query_str, filters)?;
         let top_docs = searcher.search(
             &*query,
@@ -1032,7 +1045,7 @@ impl SearchIndex {
         &self,
         query: &dyn Query,
     ) -> tantivy::Result<Vec<livtet_types::DbId>> {
-        let searcher = self.reader.searcher();
+        let searcher = self.refreshed_searcher()?;
         let kind_filter = self.schema.get_field(fields::KIND).expect("kind");
         let edition_query: Box<dyn Query> = Box::new(tantivy::query::BooleanQuery::new(vec![
             (Occur::Must, query.box_clone() as Box<dyn Query>),
@@ -1224,7 +1237,7 @@ fn facet_counts(counts: &tantivy::collector::FacetCounts) -> Vec<FacetCount> {
 }
 
 /// Stable 64-bit hash of a work's ULID string. Used by
-/// [`SearchIndex::search_works`] to group raw edition hits onto a
+/// [`SearchReader::search_works`] to group raw edition hits onto a
 /// work. `std::hash::Hasher` would be overkill — we just want a
 /// uniform 64-bit value.
 pub(crate) fn hash_work_id(work_id: &str) -> u64 {

@@ -60,6 +60,7 @@ impl SearchIndex {
         F: FnMut(ReindexEvent) + Send + Sync,
     {
         let start = std::time::Instant::now();
+        on_event(ReindexEvent::Loading);
         use livtet_data::entities::{
             authors::Entity as Authors, digital_inventory::Entity as DigitalInventory,
             edition_authors::Entity as EditionAuthors,
@@ -77,7 +78,7 @@ impl SearchIndex {
         //              we need from the DB into HashMaps so we can
         //              resolve joins in O(1).
         {
-            let mut writer = self.writer.write().await;
+            let mut writer = self.writer.lock().await;
             writer.delete_all_documents()?;
             writer.commit()?;
         }
@@ -358,7 +359,7 @@ impl SearchIndex {
             all_works.iter().map(|w| (w.id, w)).collect();
 
         // ---- Phase 2: write documents.
-        let mut writer = self.writer.write().await;
+        let mut writer = self.writer.lock().await;
         let edition_id_field = self
             .schema
             .get_field(fields::EDITION_ID)
@@ -986,7 +987,7 @@ impl SearchIndex {
         // default to the same "catalog" bucket reindex uses.
         d.add_text(source_field, "catalog");
 
-        let mut writer = self.writer.write().await;
+        let mut writer = self.writer.lock().await;
         let term = Term::from_field_text(edition_id_field, &doc.edition_id);
         writer.delete_term(term);
         writer.add_document(d)?;
@@ -1025,7 +1026,7 @@ impl SearchIndex {
         d.add_text(primary_author_sort_field, doc.sort_name.to_lowercase());
         d.add_text(source_field, &doc.source);
 
-        let mut writer = self.writer.write().await;
+        let mut writer = self.writer.lock().await;
         let term = Term::from_field_text(author_id_field, &doc.author_id);
         writer.delete_term(term);
         writer.add_document(d)?;
@@ -1046,7 +1047,7 @@ impl SearchIndex {
             .get_field(fields::EDITION_ID)
             .expect("edition_id");
         let term = Term::from_field_text(edition_id_field, &edition_id.to_string());
-        let mut writer = self.writer.write().await;
+        let mut writer = self.writer.lock().await;
         writer.delete_term(term);
         writer.commit()?;
         self.reader.reload()?;
