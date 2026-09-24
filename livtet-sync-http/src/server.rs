@@ -78,13 +78,15 @@ async fn get_pull_full(engine: Data<&Arc<RwLock<SyncEngine>>>) -> Result<Json<Fu
 async fn post_pair(
     engine: Data<&Arc<RwLock<SyncEngine>>>,
     pair_waiters: Data<&PairWaiters>,
+    remote: &poem::web::RemoteAddr,
+    local: &poem::web::LocalAddr,
     Json(body): Json<PairRequest>,
 ) -> Result<Json<serde_json::Value>, Error> {
     let inner = engine.read().await;
 
     use livtet_data::client_entities::pending_pairings;
     use livtet_data::orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, Set};
-    use livtet_types::{DbId, DeviceType, PairingStatus};
+    use livtet_types::{Address, DbId, DeviceType, PairingStatus};
 
     let pending_id = DbId::from(PairingStatus::Pending);
     let now = time::OffsetDateTime::now_utc();
@@ -113,6 +115,17 @@ async fn post_pair(
     model.device_name = Set(Some(body.name.clone()));
     model.device_type_id = Set(device_type_id);
     model.device_id = Set(device_id);
+    // Record where the request came from so the daemon can tell this remote
+    // request apart from a ticket it minted itself (which has no origin). The
+    // peer's source port is ephemeral, so relate its IP to the address this
+    // server was reached on: a request from the server's own IP therefore
+    // normalizes to the server's exact `ip:port` and reads back as self.
+    let origin_addr = remote
+        .0
+        .as_socket_addr()
+        .zip(local.0.as_socket_addr())
+        .map(|(peer, server)| Address::new(std::net::SocketAddr::new(peer.ip(), server.port())));
+    model.origin_addr = Set(origin_addr);
     model
         .update(inner.db())
         .await

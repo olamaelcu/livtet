@@ -69,6 +69,7 @@ pub enum PendingPairings {
     DeviceName,
     DeviceTypeId,
     DeviceId,
+    OriginAddr,
     CreatedAt,
     ExpiresAt,
 }

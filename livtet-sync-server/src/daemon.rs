@@ -490,12 +490,14 @@ async fn handle_status(state: &Arc<DaemonState>) -> Result<serde_json::Value, Rp
     let latest_version = state.engine.get_latest_version().await?;
     let paired_device_count = paired_devices::Entity::find().count(db).await?;
 
-    // Only count pairings a remote device has actually claimed; the local
-    // desktop's own unclaimed tickets are not "pending pairings".
+    // A pending pairing counts only when it arrived from another host. Tickets
+    // this daemon minted carry no origin, and a request from the daemon's own
+    // address is itself, so both are excluded by the `!=` comparison.
+    let self_addr = self_address(state).await;
     let pending_pairing_count = pending_pairings::Entity::find()
         .filter(pending_pairings::Column::StatusId.eq(DbId::from(PairingStatus::Pending)))
         .filter(pending_pairings::Column::ExpiresAt.gt(primitive_now()))
-        .filter(pending_pairings::Column::DeviceTypeId.is_not_null())
+        .filter(pending_pairings::Column::OriginAddr.ne(self_addr))
         .count(db)
         .await?;
 
@@ -562,6 +564,7 @@ async fn handle_pairing_begin(
         device_name: Set(None),
         device_type_id: Set(None),
         device_id: Set(None),
+        origin_addr: Set(None),
         created_at: Set(primitive_now()),
         expires_at: Set(time::PrimitiveDateTime::new(expires.date(), expires.time())),
     };
@@ -578,13 +581,14 @@ async fn handle_pairing_begin(
 async fn handle_pairing_list(state: &Arc<DaemonState>) -> Result<serde_json::Value, RpcFailure> {
     use livtet_data::client_entities::pending_pairings;
 
-    // A ticket only becomes a pairable device once a remote claims it, which
-    // stamps its `device_type_id`. Without this filter the desktop lists the
-    // tickets it minted itself as unknown devices.
+    // A ticket is a pairable device only when the request came from another
+    // host. Tickets this daemon minted have no origin, so they never appear;
+    // the `!=` also drops anything sent from the daemon's own address.
+    let self_addr = self_address(state).await;
     let rows = pending_pairings::Entity::find()
         .filter(pending_pairings::Column::StatusId.eq(DbId::from(PairingStatus::Pending)))
         .filter(pending_pairings::Column::ExpiresAt.gt(primitive_now()))
-        .filter(pending_pairings::Column::DeviceTypeId.is_not_null())
+        .filter(pending_pairings::Column::OriginAddr.ne(self_addr))
         .all(state.engine.db())
         .await?;
 
@@ -623,12 +627,17 @@ async fn handle_pairing_approve(
         .await?
         .ok_or_else(|| invalid_params(format!("unknown pairing token: {}", params.token)))?;
 
-    // Fail closed: only a ticket a remote device actually claimed (which stamps
-    // its `device_type_id`) is a pairing. Approving an unclaimed ticket would
-    // mint a phantom device for the desktop itself.
-    if pending.device_type_id.is_none() {
+    // Fail closed: only a request that originated elsewhere is a pairing.
+    // A ticket this daemon minted has no origin, and a request from the
+    // daemon's own address is itself, not a remote device.
+    let self_addr = self_address(state).await;
+    if pending
+        .origin_addr
+        .as_ref()
+        .is_none_or(|addr| addr.to_string() == self_addr)
+    {
         return Err(invalid_params(format!(
-            "pairing token has not been claimed by a remote device: {}",
+            "pairing token did not originate from a remote device: {}",
             params.token
         )));
     }
@@ -806,6 +815,13 @@ async fn current_host_port(state: &Arc<DaemonState>) -> (String, u16) {
         Some(addr) => (addr.ip().to_string(), addr.port()),
         None => (state.config.host.clone(), state.config.port),
     }
+}
+
+/// The daemon's own `host:port`, used to tell a self-originated pairing from a
+/// remote one. `pairing.begin` listens on it; `/sync/pair` compares to it.
+async fn self_address(state: &Arc<DaemonState>) -> String {
+    let (host, port) = current_host_port(state).await;
+    format!("{host}:{port}")
 }
 
 fn primitive_now() -> time::PrimitiveDateTime {

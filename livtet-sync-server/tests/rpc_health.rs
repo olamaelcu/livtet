@@ -131,7 +131,8 @@ async fn rpc_health_status_pairing_roundtrip() {
         "unclaimed ticket must not be counted as a pending pairing: {status}"
     );
 
-    // A remote device claims the ticket over the HTTP pairing endpoint.
+    // A pair request from the loopback address shares the server's IP, so its
+    // origin normalizes to the server's own `ip:port` and stays hidden.
     let host = status["host"].as_str().expect("host").to_string();
     let port = status["port"].as_u64().expect("port");
     let pair_url = format!("http://{host}:{port}{}", livtet_sync_http::PAIR_PATH);
@@ -152,7 +153,46 @@ async fn rpc_health_status_pairing_roundtrip() {
         response.status()
     );
 
-    // Once claimed, the pending pairing is visible and countable again.
+    let list = client
+        .request(rpc::method::PAIRING_LIST, serde_json::json!({}))
+        .await
+        .expect("pairing.list response");
+    let list = list.result.expect("list result");
+    let entries = list.as_array().expect("list result is an array");
+    assert!(
+        !entries
+            .iter()
+            .any(|entry| entry["token"].as_str() == Some(token.as_str())),
+        "a request from the server's own IP must be excluded: {list}"
+    );
+
+    let status = client
+        .request(rpc::method::STATUS, serde_json::json!({}))
+        .await
+        .expect("status response");
+    let status = status.result.expect("status result");
+    assert_eq!(
+        status["pending_pairing_count"].as_i64(),
+        Some(0),
+        "a request from the server's own IP must not be counted: {status}"
+    );
+
+    // A request from another host is a real pairing: it is listed and counted.
+    let pool = livtet_data::sql::sqlite::SqlitePoolOptions::new()
+        .connect_with(
+            livtet_data::sql::sqlite::SqliteConnectOptions::new()
+                .filename(&db_path)
+                .create_if_missing(false),
+        )
+        .await
+        .expect("open db");
+    livtet_data::sql::query("UPDATE pending_pairings SET origin_addr = ? WHERE token = ?")
+        .bind(format!("10.0.0.5:{port}"))
+        .bind(token.clone())
+        .execute(&pool)
+        .await
+        .expect("stamp remote origin");
+
     let list = client
         .request(rpc::method::PAIRING_LIST, serde_json::json!({}))
         .await
@@ -163,7 +203,7 @@ async fn rpc_health_status_pairing_roundtrip() {
         entries
             .iter()
             .any(|entry| entry["token"].as_str() == Some(token.as_str())),
-        "claimed token missing from pairing.list: {list}"
+        "remote-origin pairing missing from pairing.list: {list}"
     );
 
     let status = client
@@ -174,7 +214,40 @@ async fn rpc_health_status_pairing_roundtrip() {
     assert_eq!(
         status["pending_pairing_count"].as_i64(),
         Some(1),
-        "claimed ticket must be counted as a pending pairing: {status}"
+        "remote-origin pairing must be counted: {status}"
+    );
+
+    // Stamping the server's own address drops it back out of the list.
+    livtet_data::sql::query("UPDATE pending_pairings SET origin_addr = ? WHERE token = ?")
+        .bind(format!("{host}:{port}"))
+        .bind(token.clone())
+        .execute(&pool)
+        .await
+        .expect("stamp self origin");
+    pool.close().await;
+
+    let list = client
+        .request(rpc::method::PAIRING_LIST, serde_json::json!({}))
+        .await
+        .expect("pairing.list response");
+    let list = list.result.expect("list result");
+    let entries = list.as_array().expect("list result is an array");
+    assert!(
+        !entries
+            .iter()
+            .any(|entry| entry["token"].as_str() == Some(token.as_str())),
+        "self-originated pairing must be excluded: {list}"
+    );
+
+    let status = client
+        .request(rpc::method::STATUS, serde_json::json!({}))
+        .await
+        .expect("status response");
+    let status = status.result.expect("status result");
+    assert_eq!(
+        status["pending_pairing_count"].as_i64(),
+        Some(0),
+        "self-originated pairing must not be counted: {status}"
     );
 
     // `shutdown`

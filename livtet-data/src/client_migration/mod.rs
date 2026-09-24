@@ -9,6 +9,7 @@ pub mod m0003_session_tokens;
 pub mod m0004_client_settings;
 pub mod m0005_sync_triggers;
 pub mod m0006_pending_pairings_device_id;
+pub mod m0007_pending_pairings_origin_addr;
 pub mod schema;
 
 pub use sea_orm_migration::MigratorTrait;
@@ -29,6 +30,7 @@ impl MigratorTrait for Migrator {
             Box::new(crate::client_migration::m0004_client_settings::Migration),
             Box::new(crate::client_migration::m0005_sync_triggers::Migration),
             Box::new(crate::client_migration::m0006_pending_pairings_device_id::Migration),
+            Box::new(crate::client_migration::m0007_pending_pairings_origin_addr::Migration),
         ]
     }
 }
