@@ -527,10 +527,17 @@ impl SearchReader {
         // When offset is requested, fetch extra hits so we can drop
         // the first `offset` results in-memory.
         let effective_limit = limit.saturating_add(opts.offset as usize);
-        let fetch_limit = if opts.collapse_to_works {
+        let base_limit = if opts.collapse_to_works {
             effective_limit.saturating_mul(opts.work_overfetch.max(1) as usize)
         } else {
             effective_limit
+        };
+        // Post-sorting by a fast field needs a wider fetch so truncation
+        // to `base_limit` doesn't bias the top-N toward score-best items.
+        let fetch_limit = if opts.sort.is_some() {
+            base_limit.saturating_mul(2).max(base_limit + 64)
+        } else {
+            base_limit
         };
 
         // Filter out author documents from the result set.
@@ -558,6 +565,17 @@ impl SearchReader {
             hits = top_docs.len(),
             "tantivy search_with_query"
         );
+
+        // Apply explicit sort (when requested) before handing off to
+        // build_hits. For `Score` the slice is already in score order so
+        // the helper short-circuits to a clone.
+        if let Some(spec) = opts.sort.as_ref() {
+            top_docs = sort_top_docs_by_spec(&searcher, &self.schema, top_docs, spec)?;
+        }
+        // Truncate to the work-overfetched (or user-requested) count so
+        // build_hits and any collapse logic operate on the intended
+        // slice.
+        top_docs.truncate(base_limit);
 
         // Apply in-memory offset: drop the first `offset` hits.
         let offset = opts.offset.max(0) as usize;
@@ -1132,6 +1150,12 @@ impl Eq for SortKey {}
 /// fast-column iteration would be a future optimisation but doesn't
 /// change the wire shape.
 ///
+/// `Title` is likewise read from a stored column: `title_sort` is a
+/// fast-but-not-stored column, so `searcher.doc` cannot return it. The
+/// stored `title` field is the same source string the indexer
+/// lowercases into `title_sort`, so lowercasing it here reproduces the
+/// intended sort key.
+///
 /// Returns a new `Vec` ordered according to `spec.direction`, with
 /// insertion-order tie-breaking for `sort_by`.
 fn sort_top_docs_by_spec(
@@ -1148,7 +1172,9 @@ fn sort_top_docs_by_spec(
         return Ok(top_docs);
     }
     let field_name = match spec.field {
-        SortField::Title => fields::TITLE_SORT,
+        // `title_sort` is `STRING | FAST` (not stored), so read the
+        // stored `title` column instead; see the fn doc comment.
+        SortField::Title => fields::TITLE,
         SortField::CreatedAt => fields::CREATED_AT,
         SortField::UpdatedAt => fields::UPDATED_AT,
         SortField::Score => unreachable!("handled above"),
@@ -1163,7 +1189,7 @@ fn sort_top_docs_by_spec(
             SortField::Title => SortKey::Title(
                 doc.get_first(field)
                     .and_then(|v| v.as_str())
-                    .map(String::from)
+                    .map(|s| s.to_lowercase())
                     .unwrap_or_default(),
             ),
             SortField::CreatedAt | SortField::UpdatedAt => SortKey::Date(

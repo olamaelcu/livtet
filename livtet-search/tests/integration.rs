@@ -1687,3 +1687,48 @@ async fn user_input_ast_and_or_not_combinators_produce_boolean_query() {
         "OR with title:fear must add no new docs (edition_d already in AND-NOT arm)"
     );
 }
+
+#[tokio::test]
+async fn search_with_query_honours_sort() {
+    let db = fresh_db().await;
+    let _seed = seed_work_with_two_editions(&db).await;
+
+    let dir = TempDir::new().expect("tempdir");
+    let index = SearchIndex::open(dir.path()).expect("open index");
+    index.reindex(&db).await.expect("reindex");
+
+    let query = WorkFiltersQuery::from_filters(WorkFilters::default(), "wind".to_string())
+        .build_query(index.index())
+        .expect("build query");
+
+    // "wind" matches both edition titles. BM25 length normalisation
+    // scores the shorter plain-edition title above the longer special
+    // edition, so the raw score order is deterministically
+    // [plain, special]. Descending title order flips that to
+    // [special, plain], which makes this a real assertion that the sort
+    // was applied rather than a coincidence of score order.
+    let opts = SearchOptions {
+        sort: Some(livtet_types::SortSpec {
+            field: livtet_types::SortField::Title,
+            direction: livtet_types::SortDirection::Desc,
+            limit: None,
+        }),
+        ..SearchOptions::default()
+    };
+
+    let hits = index
+        .search_with_query(query, 10, &opts)
+        .await
+        .expect("search");
+
+    assert!(
+        hits.len() >= 2,
+        "expected both editions, got {}",
+        hits.len()
+    );
+    assert!(
+        hits[0].title >= hits[1].title,
+        "expected title-descending order, got {:?}",
+        hits.iter().map(|h| h.title.clone()).collect::<Vec<_>>()
+    );
+}
