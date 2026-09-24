@@ -93,38 +93,61 @@ pub fn must_not_clause(child: UserInputAst) -> UserInputAst {
     UserInputAst::Clause(vec![(Some(Occur::MustNot), child)])
 }
 
+/// Characters tantivy's parser treats as query syntax (`+`, `-`, `!`,
+/// `(`, `)`, `{`, `}`, `[`, `]`, `^`, `"`, `~`, `*`, `?`, `:`, `\`,
+/// `/`).
+fn is_query_syntax(ch: char) -> bool {
+    matches!(
+        ch,
+        '\\' | '+'
+            | '-'
+            | '!'
+            | '('
+            | ')'
+            | '{'
+            | '}'
+            | '['
+            | ']'
+            | '^'
+            | '"'
+            | '~'
+            | '*'
+            | '?'
+            | ':'
+            | '/'
+    )
+}
+
+/// Whitespace the parser relies on as a term delimiter.
+fn is_delimiter_whitespace(ch: char) -> bool {
+    matches!(ch, ' ' | '\t' | '\n' | '\r')
+}
+
+/// Escape every query-syntax character so it is taken literally, while
+/// leaving whitespace as a term delimiter. Use this for free-text user
+/// input: each word matches literally (so a pasted title survives `:`,
+/// `.`, `-`, …) and multi-word queries still AND their terms.
+pub fn escape_query_text(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for ch in s.chars() {
+        if is_query_syntax(ch) {
+            out.push('\\');
+        }
+        out.push(ch);
+    }
+    out
+}
+
 /// Escape a term that will be emitted unquoted inside a tantivy
 /// query. Tantivy's parser splits on whitespace and treats a small
 /// set of characters (`+`, `-`, `!`, `(`, `)`, `{`, `}`, `[`, `]`,
 /// `^`, `"`, `~`, `*`, `?`, `:`, `\`, `/`) as syntax. We backslash-
-/// escape the lot so the value is taken literally.
+/// escape the lot, whitespace included, so the value is taken as one
+/// literal term.
 pub fn escape(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for ch in s.chars() {
-        let needs = matches!(
-            ch,
-            '\\' | '+'
-                | '-'
-                | '!'
-                | '('
-                | ')'
-                | '{'
-                | '}'
-                | '['
-                | ']'
-                | '^'
-                | '"'
-                | '~'
-                | '*'
-                | '?'
-                | ':'
-                | '/'
-                | ' '
-                | '\t'
-                | '\n'
-                | '\r'
-        );
-        if needs {
+        if is_query_syntax(ch) || is_delimiter_whitespace(ch) {
             out.push('\\');
         }
         out.push(ch);
@@ -173,6 +196,21 @@ mod tests {
         assert_eq!(escape("a\tb"), "a\\\tb");
         assert_eq!(escape("a\nb"), "a\\\nb");
         assert_eq!(escape("a\rb"), "a\\\rb");
+    }
+
+    #[test]
+    fn escape_query_text_keeps_whitespace_as_delimiter() {
+        assert_eq!(escape_query_text("riot strike riot"), "riot strike riot");
+        assert_eq!(escape_query_text("a\tb"), "a\tb");
+    }
+
+    #[test]
+    fn escape_query_text_escapes_syntax_only() {
+        assert_eq!(
+            escape_query_text("Riot. Strike. Riot: The New Era"),
+            "Riot. Strike. Riot\\: The New Era"
+        );
+        assert_eq!(escape_query_text("sci-fi"), "sci\\-fi");
     }
 
     #[test]

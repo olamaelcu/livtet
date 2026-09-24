@@ -11,6 +11,8 @@ use tantivy::{
     snippet::SnippetGenerator,
 };
 
+use livtet_types::search::dsl::escape_query_text;
+
 use crate::{
     index::SearchReader,
     model::{FacetCount, FacetedSearchResult, HighlightRange, HitKind, SearchHit, SearchOptions},
@@ -105,10 +107,11 @@ impl WorkFiltersQuery {
         let mut must_clauses: Vec<(Occur, Box<dyn Query>)> = Vec::new();
 
         // Free-text query via QueryParser (preserves field boosts,
-        // fuzzy-on-title, conjunction-by-default).
+        // fuzzy-on-title, conjunction-by-default). User input is escaped
+        // so query-syntax punctuation is matched literally.
         if has_query {
             let parser = knn_query_parser(index);
-            let q = parser.parse_query(&self.query)?;
+            let q = parser.parse_query(&escape_query_text(&self.query))?;
             must_clauses.push((Occur::Must, q));
         }
 
@@ -375,10 +378,15 @@ impl SearchReader {
     }
 
     /// Parse a free-text query string with the configured
-    /// [`QueryParser`]. Equivalent to
-    /// `self.get_query_parser().parse_query(query_str)`.
+    /// [`QueryParser`]. Query-syntax characters are escaped (see
+    /// [`livtet_types::search::dsl::escape_query_text`]) so user input is
+    /// matched literally while whitespace still delimits terms. Use
+    /// [`get_query_parser`](Self::get_query_parser) directly when you need
+    /// the raw syntax-aware parser for a pre-composed AST.
     pub fn build_query_parser(&self, query_str: &str) -> tantivy::Result<Box<dyn Query>> {
-        Ok(self.get_query_parser().parse_query(query_str)?)
+        Ok(self
+            .get_query_parser()
+            .parse_query(&escape_query_text(query_str))?)
     }
 
     // ---- Search APIs ---------------------------------------------------

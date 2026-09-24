@@ -249,6 +249,45 @@ async fn search_returns_hits_for_title_match() {
 }
 
 #[tokio::test]
+async fn search_treats_query_punctuation_as_literal_text() {
+    let db = fresh_db().await;
+    let _seed = seed_work_with_two_editions(&db).await;
+    let (index, _dir) = fresh_index(&db).await;
+
+    // `:` is tantivy query syntax (field separator). User input must be taken
+    // literally so a title copied from the UI still matches.
+    let hits = index
+        .search("The Name: of the Wind", 10)
+        .await
+        .expect("a colon in the query must be literal text, not a syntax error");
+    assert_eq!(
+        hits.len(),
+        2,
+        "both editions should match the literal terms"
+    );
+}
+
+#[tokio::test]
+async fn build_query_treats_query_punctuation_as_literal_text() {
+    let db = fresh_db().await;
+    let _seed = seed_work_with_two_editions(&db).await;
+    let (index, _dir) = fresh_index(&db).await;
+
+    let q = WorkFiltersQuery::from_filters(WorkFilters::default(), "The Name: of the Wind".into());
+    let query = q
+        .build_query(index.index())
+        .expect("punctuation in the free-text query must not fail to parse");
+    let searcher = index.index().reader().expect("reader").searcher();
+    let top = tantivy::collector::TopDocs::with_limit(20).order_by_score();
+    let docs = searcher.search(&*query, &top).expect("search");
+    assert_eq!(
+        docs.len(),
+        2,
+        "both editions should match the literal terms"
+    );
+}
+
+#[tokio::test]
 async fn search_works_collapses_editions_into_works() {
     let db = fresh_db().await;
     let (work_id, edition_a_id, edition_b_id, _author_id, _isbn_id) =
