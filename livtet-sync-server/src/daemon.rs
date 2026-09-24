@@ -490,9 +490,12 @@ async fn handle_status(state: &Arc<DaemonState>) -> Result<serde_json::Value, Rp
     let latest_version = state.engine.get_latest_version().await?;
     let paired_device_count = paired_devices::Entity::find().count(db).await?;
 
+    // Only count pairings a remote device has actually claimed; the local
+    // desktop's own unclaimed tickets are not "pending pairings".
     let pending_pairing_count = pending_pairings::Entity::find()
         .filter(pending_pairings::Column::StatusId.eq(DbId::from(PairingStatus::Pending)))
         .filter(pending_pairings::Column::ExpiresAt.gt(primitive_now()))
+        .filter(pending_pairings::Column::DeviceTypeId.is_not_null())
         .count(db)
         .await?;
 
@@ -575,9 +578,13 @@ async fn handle_pairing_begin(
 async fn handle_pairing_list(state: &Arc<DaemonState>) -> Result<serde_json::Value, RpcFailure> {
     use livtet_data::client_entities::pending_pairings;
 
+    // A ticket only becomes a pairable device once a remote claims it, which
+    // stamps its `device_type_id`. Without this filter the desktop lists the
+    // tickets it minted itself as unknown devices.
     let rows = pending_pairings::Entity::find()
         .filter(pending_pairings::Column::StatusId.eq(DbId::from(PairingStatus::Pending)))
         .filter(pending_pairings::Column::ExpiresAt.gt(primitive_now()))
+        .filter(pending_pairings::Column::DeviceTypeId.is_not_null())
         .all(state.engine.db())
         .await?;
 
@@ -615,6 +622,16 @@ async fn handle_pairing_approve(
         .one(db)
         .await?
         .ok_or_else(|| invalid_params(format!("unknown pairing token: {}", params.token)))?;
+
+    // Fail closed: only a ticket a remote device actually claimed (which stamps
+    // its `device_type_id`) is a pairing. Approving an unclaimed ticket would
+    // mint a phantom device for the desktop itself.
+    if pending.device_type_id.is_none() {
+        return Err(invalid_params(format!(
+            "pairing token has not been claimed by a remote device: {}",
+            params.token
+        )));
+    }
 
     let session_token = ulid::Ulid::generate().to_string();
     let device_id = pending.device_id.unwrap_or_else(DbId::new);

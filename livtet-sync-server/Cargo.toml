@@ -54,3 +54,4 @@ tokio = { workspace = true, features = [
   "io-std",
 ] }
 fs-err = { workspace = true }
+reqwest = { workspace = true, features = ["json"] }

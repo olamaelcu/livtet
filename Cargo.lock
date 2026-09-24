@@ -2811,6 +2811,7 @@ dependencies = [
  "livtet-sync-http",
  "livtet-types",
  "poem",
+ "reqwest",
  "serde",
  "serde_json",
  "thiserror",
