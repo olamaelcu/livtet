@@ -389,14 +389,77 @@ impl SearchReader {
             .await
     }
 
+    /// Shared tail for edition searches: derive fetch limits, apply sort,
+    /// clamp to the base limit, drain the offset, build hits, then
+    /// collapse/take. Both `search_with_options` and `search_with_query`
+    /// delegate here so their ordering semantics stay identical.
+    async fn finish_edition_search(
+        &self,
+        searcher: &tantivy::Searcher,
+        edition_query: Box<dyn Query>,
+        limit: usize,
+        opts: &SearchOptions,
+    ) -> tantivy::Result<Vec<SearchHit>> {
+        let start = std::time::Instant::now();
+        let effective_limit = limit.saturating_add(opts.offset as usize);
+        let base_limit = if opts.collapse_to_works {
+            effective_limit.saturating_mul(opts.work_overfetch.max(1) as usize)
+        } else {
+            effective_limit
+        };
+        let fetch_limit = if opts.sort.is_some() {
+            base_limit
+                .saturating_mul(2)
+                .max(base_limit.saturating_add(64))
+        } else {
+            base_limit
+        };
+
+        let query_for_hit_build = edition_query.box_clone();
+        let mut top_docs = searcher.search(
+            &*edition_query,
+            &TopDocs::with_limit(fetch_limit).order_by_score(),
+        )?;
+
+        tracing::debug!(
+            target: "livtet.search.perf",
+            elapsed_us = start.elapsed().as_micros(),
+            hits = top_docs.len(),
+            "tantivy edition search"
+        );
+
+        if let Some(spec) = opts.sort.as_ref() {
+            top_docs = sort_top_docs_by_spec(searcher, &self.schema, top_docs, spec)?;
+        }
+        top_docs.truncate(base_limit);
+
+        let offset = opts.offset.max(0) as usize;
+        if offset > 0 && offset < top_docs.len() {
+            top_docs.drain(..offset);
+        } else if offset >= top_docs.len() {
+            top_docs.clear();
+        }
+
+        let hits = self
+            .build_hits(searcher, &*query_for_hit_build, &top_docs, opts)
+            .await?;
+
+        if opts.collapse_to_works {
+            Ok(collapse_editions_to_works(hits, limit))
+        } else {
+            Ok(hits.into_iter().take(limit).collect())
+        }
+    }
+
     /// Edition-level search with full option control. Internal
     /// workhorse — `search` and `search_works` both delegate here
     /// with different option sets.
     ///
     /// When [`SearchOptions::sort`] is `Some`, the top-N result is
-    /// post-sorted by the corresponding fast field before truncation;
-    /// see the field-level docs on `SearchOptions::sort` for the
-    /// trade-off (tantivy's text-fast-field API doesn't support
+    /// post-sorted before truncation — dates via their stored fast
+    /// field, title via the stored (lowercased) `title`; see the
+    /// field-level docs on `SearchOptions::sort` for the trade-off
+    /// (tantivy's text-fast-field API doesn't support
     /// `order_by_fast_field::<String>` so all four `SortField`
     /// variants use the same read-and-rewrite path).
     #[tracing::instrument(
@@ -411,7 +474,6 @@ impl SearchReader {
         limit: usize,
         opts: &SearchOptions,
     ) -> tantivy::Result<Vec<SearchHit>> {
-        let start = std::time::Instant::now();
         let searcher = self.refreshed_searcher()?;
         // Parse + AND with the kind=edition discriminator and any
         // caller-supplied filters via the shared query backbone.
@@ -439,70 +501,8 @@ impl SearchReader {
                 ),
             ]));
         }
-        // When offset is requested, we need to fetch extra hits so
-        // we can drop the first `offset` results in-memory.
-        let effective_limit = limit.saturating_add(opts.offset as usize);
-        let base_limit = if opts.collapse_to_works {
-            // Over-fetch so the per-work collapse has enough raw
-            // hits to cover the limit even when many editions of
-            // the same work are present.
-            effective_limit.saturating_mul(opts.work_overfetch.max(1) as usize)
-        } else {
-            effective_limit
-        };
-        // When post-sorting by a fast field we don't know the
-        // ranking of items beyond the score-best slice, so bump the
-        // fetch so truncation to `base_limit` doesn't bias the
-        // top-N toward score-best items.
-        let fetch_limit = if opts.sort.is_some() {
-            base_limit.saturating_mul(2).max(base_limit + 64)
-        } else {
-            base_limit
-        };
-
-        // `query` is borrowed below; clone it via tantivy's
-        // `QueryClone` trait so we still hold a handle for snippet
-        // and explanation generation in `build_hits`.
-        let query_for_hit_build = query.box_clone();
-        let mut top_docs =
-            searcher.search(&*query, &TopDocs::with_limit(fetch_limit).order_by_score())?;
-
-        tracing::debug!(
-            target: "livtet.search.perf",
-            elapsed_us = start.elapsed().as_micros(),
-            hits = top_docs.len(),
-            "tantivy search"
-        );
-
-        // Apply explicit sort (when requested) before handing off
-        // to build_hits. For `Score` the slice is already in score
-        // order so the helper short-circuits to a clone.
-        if let Some(spec) = opts.sort.as_ref() {
-            top_docs = sort_top_docs_by_spec(&searcher, &self.schema, top_docs, spec)?;
-        }
-        // Truncate to the user-requested (or work-overfetched)
-        // count so build_hits and any collapse logic operate on the
-        // intended slice.
-        top_docs.truncate(base_limit);
-        // Apply in-memory offset: drop the first `offset` hits.
-        // This happens after sorting so the offset is relative to
-        // the requested sort order, not the raw score order.
-        let offset = opts.offset.max(0) as usize;
-        if offset > 0 && offset < top_docs.len() {
-            top_docs.drain(..offset);
-        } else if offset >= top_docs.len() {
-            top_docs.clear();
-        }
-
-        let hits = self
-            .build_hits(&searcher, &*query_for_hit_build, &top_docs, opts)
-            .await?;
-
-        if opts.collapse_to_works {
-            Ok(collapse_editions_to_works(hits, limit))
-        } else {
-            Ok(hits.into_iter().take(limit).collect())
-        }
+        self.finish_edition_search(&searcher, query, limit, opts)
+            .await
     }
 
     /// Search with a pre-built `Box<dyn Query>` (e.g. from
@@ -521,28 +521,10 @@ impl SearchReader {
         limit: usize,
         opts: &SearchOptions,
     ) -> tantivy::Result<Vec<SearchHit>> {
-        let start = std::time::Instant::now();
         let searcher = self.refreshed_searcher()?;
-
-        // When offset is requested, fetch extra hits so we can drop
-        // the first `offset` results in-memory.
-        let effective_limit = limit.saturating_add(opts.offset as usize);
-        let base_limit = if opts.collapse_to_works {
-            effective_limit.saturating_mul(opts.work_overfetch.max(1) as usize)
-        } else {
-            effective_limit
-        };
-        // Post-sorting by a fast field needs a wider fetch so truncation
-        // to `base_limit` doesn't bias the top-N toward score-best items.
-        let fetch_limit = if opts.sort.is_some() {
-            base_limit.saturating_mul(2).max(base_limit + 64)
-        } else {
-            base_limit
-        };
 
         // Filter out author documents from the result set.
         let kind_filter = self.schema.get_field(fields::KIND).expect("kind");
-        let query_for_hit_build = query.box_clone();
         let edition_query: Box<dyn Query> = Box::new(tantivy::query::BooleanQuery::new(vec![
             (Occur::Must, query),
             (
@@ -554,48 +536,14 @@ impl SearchReader {
             ),
         ]));
 
-        let mut top_docs = searcher.search(
-            &edition_query,
-            &TopDocs::with_limit(fetch_limit).order_by_score(),
-        )?;
-
-        tracing::debug!(
-            target: "livtet.search.perf",
-            elapsed_us = start.elapsed().as_micros(),
-            hits = top_docs.len(),
-            "tantivy search_with_query"
-        );
-
-        // Apply explicit sort (when requested) before handing off to
-        // build_hits. For `Score` the slice is already in score order so
-        // the helper short-circuits to a clone.
-        if let Some(spec) = opts.sort.as_ref() {
-            top_docs = sort_top_docs_by_spec(&searcher, &self.schema, top_docs, spec)?;
-        }
-        // Truncate to the work-overfetched (or user-requested) count so
-        // build_hits and any collapse logic operate on the intended
-        // slice.
-        top_docs.truncate(base_limit);
-
-        // Apply in-memory offset: drop the first `offset` hits.
-        let offset = opts.offset.max(0) as usize;
-        if offset > 0 && offset < top_docs.len() {
-            top_docs.drain(..offset);
-        } else if offset >= top_docs.len() {
-            top_docs.clear();
-        }
-
-        let hits = self
-            .build_hits(&searcher, &*query_for_hit_build, &top_docs, opts)
-            .await?;
-
-        if opts.collapse_to_works {
-            Ok(collapse_editions_to_works(hits, limit))
-        } else {
-            Ok(hits.into_iter().take(limit).collect())
-        }
+        self.finish_edition_search(&searcher, edition_query, limit, opts)
+            .await
     }
 
+    /// `opts.sort` is honoured only by the edition search paths
+    /// (`search_with_options` / `search_with_query`); this all-kinds path
+    /// does not sort.
+    ///
     /// Search across every document kind (editions and authors).
     ///
     /// Unlike [`SearchReader::search_with_options`] this method does
@@ -1187,6 +1135,10 @@ fn sort_top_docs_by_spec(
         let doc: TantivyDocument = searcher.doc(*addr)?;
         let key = match spec.field {
             SortField::Title => SortKey::Title(
+                // `title_sort` is STRING|FAST but NOT STORED, so it cannot be read
+                // back from the document. For reindexed docs, `title.to_lowercase()`
+                // equals the stored `title_sort`; NAPI `upsert_edition` callers whose
+                // `title_sort` differs from `title` would diverge — see follow-up.
                 doc.get_first(field)
                     .and_then(|v| v.as_str())
                     .map(|s| s.to_lowercase())

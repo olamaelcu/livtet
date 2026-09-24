@@ -129,7 +129,7 @@ pub struct SearchOptions {
     pub work_overfetch: i64,
     /// Optional explicit sort. When `Some`,
     /// [`SearchReader::search_with_options`](crate::SearchReader::search_with_options) sorts the top-N result
-    /// by the corresponding fast field (`Title` / `CreatedAt` /
+    /// by the corresponding field (`Title` / `CreatedAt` /
     /// `UpdatedAt`) in the requested direction; `Score` is a no-op
     /// since score-ordering is the default. When `None`, the
     /// legacy BM25 score ordering is preserved.
@@ -141,7 +141,9 @@ pub struct SearchOptions {
     /// keep the API uniform across all four [`livtet_types::SortField`]
     /// variants we always collect a score-ordered top-N and then
     /// post-sort by reading each document's stored value of the
-    /// relevant field. The over-fetch is bumped to
+    /// relevant field. Title sorting uses the stored `title`
+    /// (lowercased), which matches the indexer's `title_sort` for
+    /// reindexed documents. The over-fetch is bumped to
     /// `max(limit * 2, limit + 64)` so post-sort truncation to
     /// `limit` doesn't bias toward the score-best slice.
     pub sort: Option<livtet_types::SortSpec>,

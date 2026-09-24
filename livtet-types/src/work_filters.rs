@@ -136,7 +136,8 @@ pub enum SortDirection {
 #[serde(rename_all = "snake_case")]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum SortField {
-    /// Sort by title (alphabetical via `title_sort` fast field).
+    /// Sort by title. Reads the stored (lowercased) `title` for reindexed
+    /// documents, matching the indexer's `title_sort` fast field.
     Title,
     /// Sort by creation date (`created_at` fast field).
     #[default]

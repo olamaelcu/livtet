@@ -1690,6 +1690,9 @@ async fn user_input_ast_and_or_not_combinators_produce_boolean_query() {
 
 #[tokio::test]
 async fn search_with_query_honours_sort() {
+    const PLAIN: &str = "The Name of the Wind";
+    const SPECIAL: &str = "The Name of the Wind (Special Edition)";
+
     let db = fresh_db().await;
     let _seed = seed_work_with_two_editions(&db).await;
 
@@ -1697,38 +1700,69 @@ async fn search_with_query_honours_sort() {
     let index = SearchIndex::open(dir.path()).expect("open index");
     index.reindex(&db).await.expect("reindex");
 
-    let query = WorkFiltersQuery::from_filters(WorkFilters::default(), "wind".to_string())
-        .build_query(index.index())
-        .expect("build query");
+    // `Box<dyn Query>` is consumed by `search_with_query`, so rebuild it
+    // per call.
+    let build_query = || {
+        WorkFiltersQuery::from_filters(WorkFilters::default(), "wind".to_string())
+            .build_query(index.index())
+            .expect("build query")
+    };
 
     // "wind" matches both edition titles. BM25 length normalisation
     // scores the shorter plain-edition title above the longer special
     // edition, so the raw score order is deterministically
-    // [plain, special]. Descending title order flips that to
-    // [special, plain], which makes this a real assertion that the sort
-    // was applied rather than a coincidence of score order.
-    let opts = SearchOptions {
+    // [plain, special]; the assertions below prove the requested sort
+    // overrides that.
+    let sort = |direction| SearchOptions {
         sort: Some(livtet_types::SortSpec {
             field: livtet_types::SortField::Title,
-            direction: livtet_types::SortDirection::Desc,
+            direction,
             limit: None,
         }),
         ..SearchOptions::default()
     };
 
+    // Descending title order flips the score order to [special, plain].
     let hits = index
-        .search_with_query(query, 10, &opts)
+        .search_with_query(build_query(), 10, &sort(livtet_types::SortDirection::Desc))
         .await
-        .expect("search");
-
-    assert!(
-        hits.len() >= 2,
-        "expected both editions, got {}",
-        hits.len()
+        .expect("search desc");
+    assert_eq!(hits.len(), 2, "expected both editions");
+    assert_eq!(
+        hits[0].title, SPECIAL,
+        "descending: first is the special edition"
     );
-    assert!(
-        hits[0].title >= hits[1].title,
-        "expected title-descending order, got {:?}",
-        hits.iter().map(|h| h.title.clone()).collect::<Vec<_>>()
+    assert_eq!(
+        hits[1].title, PLAIN,
+        "descending: second is the plain edition"
+    );
+
+    // Ascending is the exact reverse.
+    let hits = index
+        .search_with_query(build_query(), 10, &sort(livtet_types::SortDirection::Asc))
+        .await
+        .expect("search asc");
+    assert_eq!(hits.len(), 2, "expected both editions");
+    assert_eq!(
+        hits[0].title, PLAIN,
+        "ascending: first is the plain edition"
+    );
+    assert_eq!(
+        hits[1].title, SPECIAL,
+        "ascending: second is the special edition"
+    );
+
+    // Offset is applied *after* sorting, so dropping the first descending
+    // hit leaves the second one (the plain edition).
+    let mut opts = sort(livtet_types::SortDirection::Desc);
+    opts.offset = 1;
+    let hits = index
+        .search_with_query(build_query(), 10, &opts)
+        .await
+        .expect("search desc + offset");
+    assert_eq!(hits.len(), 1, "offset of 1 should leave one hit");
+    assert_eq!(
+        hits[0].title, PLAIN,
+        "offset must be applied after sorting, leaving the second sorted hit"
     );
 }
