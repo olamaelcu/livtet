@@ -156,6 +156,11 @@ fn reject_unsupported(filters: &WorkFilters) -> Result<(), LivtetError> {
             )));
         }
     }
+    if filters.has_file.is_some() {
+        return Err(LivtetError::InvalidInput(
+            "filter dimension `has_file` is not supported yet".to_string(),
+        ));
+    }
     Ok(())
 }
 

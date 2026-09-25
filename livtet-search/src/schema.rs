@@ -52,7 +52,8 @@ pub mod fields {
     pub const SOURCE: &str = "source";
 
     /// Whether the edition has a row in `digital_inventory`
-    /// (i.e. there is a file on disk). Indexed as a bool.
+    /// (i.e. there is a file on disk). Indexed to allow filtering by
+    /// file availability.
     pub const HAS_FILE: &str = "has_file";
 
     pub const TAG_ID: &str = "tag_id";
@@ -76,7 +77,7 @@ pub const OPDS_WORK_ID_LIMIT: usize = 1_000;
 
 /// Current schema version. Stored in `search_schema_version.json` next to the
 /// tantivy index dir. Bumped when `build_schema()` changes.
-pub const SCHEMA_VERSION: u32 = 3;
+pub const SCHEMA_VERSION: u32 = 4;
 
 /// Build the Tantivy schema.
 ///
@@ -199,7 +200,7 @@ pub fn build_schema() -> Schema {
     b.add_u64_field(fields::POPULARITY, FAST);
     b.add_text_field(fields::SOURCE, TEXT | STORED);
 
-    b.add_bool_field(fields::HAS_FILE, STORED | FAST);
+    b.add_bool_field(fields::HAS_FILE, STORED | FAST | INDEXED);
 
     b.build()
 }

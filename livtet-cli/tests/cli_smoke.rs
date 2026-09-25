@@ -4,6 +4,10 @@ use predicates::prelude::*;
 fn cmd() -> Command {
     let mut cmd = Command::cargo_bin("livtet-cli").expect("livtet-cli binary");
     cmd.env_remove("RUST_LOG").env("RUST_LOG", "error");
+    // Isolate the data dir: commands that take no explicit `--database` /
+    // `--index-dir` must never resolve the developer's real library, whose
+    // search index may be on an older schema version and would fail to open.
+    cmd.env("XDG_DATA_HOME", env!("CARGO_TARGET_TMPDIR"));
     cmd
 }
 

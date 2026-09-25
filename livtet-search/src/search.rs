@@ -95,7 +95,8 @@ impl WorkFiltersQuery {
             || !filters.publisher_ids.is_empty()
             || !filters.author_ids.is_empty()
             || !self.resolved.format_labels.is_empty()
-            || !self.resolved.language_labels.is_empty();
+            || !self.resolved.language_labels.is_empty()
+            || filters.has_file.is_some();
 
         // Empty query AND empty filters → AllQuery (MatchAllDocs).
         // An empty-armed BooleanQuery returns zero hits, so this
@@ -154,6 +155,19 @@ impl WorkFiltersQuery {
         let language_field = schema.get_field(fields::LANGUAGE).ok();
         if let Some(field) = language_field {
             map_text_filter(&self.resolved.language_labels, field, &mut must_clauses);
+        }
+
+        // ---- File availability (bool TermQuery) ----
+        if let Some(has_file) = filters.has_file
+            && let Some(field) = schema.get_field(fields::HAS_FILE).ok()
+        {
+            must_clauses.push((
+                Occur::Must,
+                Box::new(TermQuery::new(
+                    Term::from_field_bool(field, has_file),
+                    IndexRecordOption::Basic,
+                )),
+            ));
         }
 
         Ok(Box::new(tantivy::query::BooleanQuery::new(must_clauses)))

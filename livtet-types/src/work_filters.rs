@@ -21,6 +21,13 @@ pub struct WorkFilters {
     pub format_ids: Vec<DbId>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub language_ids: Vec<DbId>,
+    /// Restrict to editions whose file is (or is not) present on disk.
+    ///
+    /// `None` applies no constraint; `Some(true)` keeps only editions
+    /// with a `digital_inventory` row, `Some(false)` keeps only those
+    /// without one (virtual / remotely-referenced editions).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub has_file: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sort_by: Option<WorkSortBy>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

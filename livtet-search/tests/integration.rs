@@ -27,9 +27,9 @@ use livtet_data::orm::{ActiveModelTrait, DatabaseConnection, Set};
 use livtet_data::sql::{AssertSqlSafe, sqlite::SqlitePoolOptions};
 use livtet_data::{
     entities::{
-        authors, edition_authors, edition_genres, edition_identifiers, edition_publishers,
-        edition_subjects, edition_tags, editions, formats, genres, identifiers, languages,
-        publishers, series, series_entries, subjects, tags, works,
+        authors, digital_inventory, edition_authors, edition_genres, edition_identifiers,
+        edition_publishers, edition_subjects, edition_tags, editions, formats, genres, identifiers,
+        languages, publishers, series, series_entries, subjects, tags, works,
     },
     migration::Migrator,
 };
@@ -1804,4 +1804,101 @@ async fn search_with_query_honours_sort() {
         hits[0].title, PLAIN,
         "offset must be applied after sorting, leaving the second sorted hit"
     );
+}
+
+/// Collect the `edition_id` values matched by `filters` (raw query, no kind
+/// filter applied). Mirrors how `build_query` is exercised by the other
+/// `build_query_*` tests.
+fn edition_ids_from_filters(index: &SearchIndex, filters: WorkFilters) -> Vec<String> {
+    let q = WorkFiltersQuery::from_filters(filters, String::new());
+    let query = q.build_query(index.index()).expect("build_query");
+    let searcher = index.index().reader().expect("reader").searcher();
+    let top = tantivy::collector::TopDocs::with_limit(50).order_by_score();
+    let docs = searcher.search(&*query, &top).expect("search");
+    let edition_field = index.schema().get_field("edition_id").expect("edition_id");
+    let mut ids = Vec::new();
+    for (_, addr) in &docs {
+        let d: tantivy::TantivyDocument = searcher.doc(*addr).expect("doc");
+        if let Some(v) = d.get_first(edition_field)
+            && let Some(s) = v.as_str()
+        {
+            ids.push(s.to_string());
+        }
+    }
+    ids
+}
+
+/// `has_file` restricts hits to editions that do (or do not) have a
+/// `digital_inventory` row. Only `edition_a` gets a file here.
+#[tokio::test]
+async fn build_query_with_has_file_filter() {
+    let db = fresh_db().await;
+    let seed = seed_comprehensive(&db).await;
+
+    digital_inventory::ActiveModel {
+        id: Set(DbId::new()),
+        edition_id: Set(seed.edition_a_id),
+        file_path: Set(Some("/library/edition-a.epub".to_string())),
+        cover_path: Set(None),
+        blurhash: Set(None),
+        dominant_color: Set(None),
+        file_hash: Set(None),
+        file_size_bytes: Set(None),
+        file_format: Set(Some("EPUB".into())),
+        notes: Set(None),
+        added_at: Set(now_p()),
+        updated_at: Set(None),
+    }
+    .insert(&db)
+    .await
+    .expect("insert inventory");
+
+    let (index, _dir) = fresh_index(&db).await;
+
+    let a = seed.edition_a_id.to_string();
+    let b = seed.edition_b_id.to_string();
+    let c = seed.edition_c_id.to_string();
+
+    let with_file = edition_ids_from_filters(
+        &index,
+        WorkFilters {
+            has_file: Some(true),
+            ..WorkFilters::default()
+        },
+    );
+    assert!(
+        with_file.contains(&a),
+        "edition_a has a file: {with_file:?}"
+    );
+    assert!(
+        !with_file.contains(&b),
+        "edition_b has no file: {with_file:?}"
+    );
+    assert!(
+        !with_file.contains(&c),
+        "edition_c has no file: {with_file:?}"
+    );
+
+    let without_file = edition_ids_from_filters(
+        &index,
+        WorkFilters {
+            has_file: Some(false),
+            ..WorkFilters::default()
+        },
+    );
+    assert!(
+        !without_file.contains(&a),
+        "edition_a has a file: {without_file:?}"
+    );
+    assert!(
+        without_file.contains(&b),
+        "edition_b has no file: {without_file:?}"
+    );
+    assert!(
+        without_file.contains(&c),
+        "edition_c has no file: {without_file:?}"
+    );
+
+    let any = edition_ids_from_filters(&index, WorkFilters::default());
+    assert!(any.contains(&a) && any.contains(&b) && any.contains(&c));
 }
