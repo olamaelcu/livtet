@@ -33,6 +33,7 @@ pub enum KnownFormats {
     Pdf = 6,
     Epub = 7,
     Mobi = 8,
+    Azw3 = 9,
 }
 
 impl KnownFormats {
@@ -46,6 +47,7 @@ impl KnownFormats {
             Self::Pdf,
             Self::Epub,
             Self::Mobi,
+            Self::Azw3,
         ]
     }
 
@@ -68,6 +70,7 @@ impl KnownFormats {
             KnownFormats::Pdf => "PDF",
             KnownFormats::Epub => "EPUB",
             KnownFormats::Mobi => "MOBI",
+            KnownFormats::Azw3 => "AZW3",
         }
     }
     pub fn schema(self) -> crate::FormatMetadataSchema {
@@ -75,7 +78,9 @@ impl KnownFormats {
             Self::Hardcover | Self::TradePaperback | Self::MassMarketPaperback => {
                 crate::FormatMetadataSchema::PhysicalBook
             }
-            Self::Ebook | Self::Pdf | Self::Epub | Self::Mobi => crate::FormatMetadataSchema::Ebook,
+            Self::Ebook | Self::Pdf | Self::Epub | Self::Mobi | Self::Azw3 => {
+                crate::FormatMetadataSchema::Ebook
+            }
             Self::Audiobook => crate::FormatMetadataSchema::Audiobook,
         }
     }
@@ -83,14 +88,14 @@ impl KnownFormats {
     /// Returns the default progress unit for this format.
     ///
     /// - Physical books (Hardcover, TradePaperback, MassMarketPaperback, Pdf) → "page"
-    /// - Digital text (Ebook, Epub, Mobi) → "virtual_page"
+    /// - Digital text (Ebook, Epub, Mobi, Azw3) → "virtual_page"
     /// - Audio (Audiobook) → "timestamp"
     pub fn default_progress_unit(self) -> &'static str {
         match self {
             Self::Hardcover | Self::TradePaperback | Self::MassMarketPaperback | Self::Pdf => {
                 "page"
             }
-            Self::Ebook | Self::Epub | Self::Mobi => "virtual_page",
+            Self::Ebook | Self::Epub | Self::Mobi | Self::Azw3 => "virtual_page",
             Self::Audiobook => "timestamp",
         }
     }
@@ -130,6 +135,7 @@ impl From<Ulid> for KnownFormats {
             6 => KnownFormats::Pdf,
             7 => KnownFormats::Epub,
             8 => KnownFormats::Mobi,
+            9 => KnownFormats::Azw3,
             _ => panic!("Unknown ULID for KnownFormats: {ulid}"),
         }
     }
