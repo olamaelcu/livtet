@@ -412,6 +412,7 @@ async fn generate_works_and_editions(
                 language_id: Set(Some(english_id)),
                 notes: Set(None),
                 description: Set(None),
+                format_metadata: Set(None),
                 created_at: Set(timestamp),
                 updated_at: Set(None),
             };
@@ -428,6 +429,7 @@ async fn generate_works_and_editions(
                 language_id: Some(english_id),
                 notes: None,
                 description: None,
+                format_metadata: None,
                 created_at: timestamp,
                 updated_at: None,
             });

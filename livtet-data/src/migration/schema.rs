@@ -415,6 +415,7 @@ pub enum Editions {
     LanguageId,
     Notes,
     Description,
+    FormatMetadata,
 }
 
 // Junction tables

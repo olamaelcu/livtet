@@ -12,6 +12,7 @@ pub mod m0006_search_history;
 pub mod m0008_saved_searches;
 pub mod m0009_edition_specific_covers;
 pub mod m0010_azw3_format;
+pub mod m0011_edition_format_metadata;
 pub mod schema;
 
 pub use sea_orm_migration::MigratorTrait;
@@ -35,6 +36,7 @@ impl MigratorTrait for Migrator {
             Box::new(crate::migration::m0008_saved_searches::Migration),
             Box::new(crate::migration::m0009_edition_specific_covers::Migration),
             Box::new(crate::migration::m0010_azw3_format::Migration),
+            Box::new(crate::migration::m0011_edition_format_metadata::Migration),
         ]
     }
 }

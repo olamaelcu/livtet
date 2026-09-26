@@ -66,6 +66,7 @@ async fn seed_minimal(db: &DatabaseConnection) {
         language_id: Set(None),
         notes: Set(None),
         description: Set(None),
+        format_metadata: Set(None),
         created_at: Set(now),
         updated_at: Set(None),
     }

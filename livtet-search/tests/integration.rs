@@ -101,6 +101,7 @@ async fn seed_work_with_two_editions(db: &DatabaseConnection) -> (DbId, DbId, Db
         language_id: Set(None),
         notes: Set(None),
         description: Set(Some("The first edition of Rothfuss's debut novel.".into())),
+        format_metadata: Set(None),
         created_at: Set(now),
         updated_at: Set(None),
     };
@@ -117,6 +118,7 @@ async fn seed_work_with_two_editions(db: &DatabaseConnection) -> (DbId, DbId, Db
         language_id: Set(None),
         notes: Set(None),
         description: Set(Some("Anniversary hardcover with extra commentary.".into())),
+        format_metadata: Set(None),
         created_at: Set(now),
         updated_at: Set(None),
     };
@@ -686,6 +688,7 @@ async fn seed_comprehensive(db: &DatabaseConnection) -> Seed {
             language_id: Set(Some(language)),
             notes: Set(None),
             description: Set(Some(desc.into())),
+            format_metadata: Set(None),
             created_at: Set(now),
             updated_at: Set(None),
         }
@@ -708,6 +711,7 @@ async fn seed_comprehensive(db: &DatabaseConnection) -> Seed {
         description: Set(Some(
             "Sequel novel chronicling Kvothe's arrival at the Maer's court.".into(),
         )),
+        format_metadata: Set(None),
         created_at: Set(now),
         updated_at: Set(None),
     }
@@ -1405,6 +1409,7 @@ async fn edition_isbns_empty_for_no_identifiers() {
         language_id: Set(None),
         notes: Set(None),
         description: Set(None),
+        format_metadata: Set(None),
         created_at: Set(now),
         updated_at: Set(None),
     }
