@@ -1,0 +1,41 @@
+name: Tests
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  sync:
+    name: Sync crates
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install mise
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          curl https://mise.run | sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          echo "MISE_DATA_DIR=$HOME/.mise" >> "$GITHUB_ENV"
+          mise install
+          eval "$(mise activate bash)" && echo "PATH=$PATH" >> "$GITHUB_ENV"
+
+      - uses: Swatinem/rust-cache@v2
+
+      # The sync engine, its HTTP transport, and the daemon. The full
+      # workspace suite (including the slow FFI bindings contract test) can
+      # join this job once it is fast enough to run on every PR.
+      - name: Test sync crates
+        run: >
+          cargo test --all-targets
+          -p livtet-sync
+          -p livtet-sync-http
+          -p livtet-sync-server
+          -p livtet-test-utils
