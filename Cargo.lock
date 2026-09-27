@@ -1754,6 +1754,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "futures_codec"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ad004dd81205978a2bba6c566ed70535ccf88c0be34649e628186474603f43ca"
+dependencies = [
+ "bytes",
+ "futures-sink",
+ "futures-util",
+ "memchr",
+ "pin-project-lite",
+]
+
+[[package]]
 name = "fuzzy-matcher"
 version = "0.3.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2766,6 +2779,7 @@ dependencies = [
  "fake",
  "hex",
  "livtet-data",
+ "livtet-test-utils",
  "livtet-types",
  "miette",
  "serde",
@@ -2783,11 +2797,15 @@ version = "0.1.0"
 dependencies = [
  "async-stream",
  "async-trait",
+ "camino-tempfile",
+ "fs-err",
  "futures-util",
  "hex",
  "http-range",
  "livtet-data",
  "livtet-sync",
+ "livtet-sync-http",
+ "livtet-test-utils",
  "livtet-types",
  "poem",
  "reqwest",
@@ -2836,6 +2854,8 @@ version = "0.1.0"
 dependencies = [
  "camino",
  "fs-err",
+ "livtet-data",
+ "livtet-sync",
  "tokio",
 ]
 
@@ -3515,6 +3535,7 @@ dependencies = [
  "serde_json",
  "serde_urlencoded",
  "smallvec",
+ "sse-codec",
  "sync_wrapper",
  "thiserror",
  "tokio",
@@ -4994,6 +5015,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "sse-codec"
+version = "0.3.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3a395a858c7ff5c4b42aeab0501e07c978ac5e1ae5059f301884dab3fa405f47"
+dependencies = [
+ "futures-io",
+ "futures_codec",
+ "memchr",
+]
+
+[[package]]
 name = "stable_deref_trait"
 version = "1.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5484,6 +5516,7 @@ checksum = "494815d09bf52b5548659851081238f0ca39ff638363907596da739561c62c52"
 dependencies = [
  "bytes",
  "futures-core",
+ "futures-io",
  "futures-sink",
  "libc",
  "pin-project-lite",

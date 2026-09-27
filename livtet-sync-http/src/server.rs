@@ -402,14 +402,31 @@ impl SyncServerInstance {
         }
     }
 
+    /// Start listening on every interface at `port`.
+    ///
+    /// Equivalent to [`Self::start_on`] with `0.0.0.0:{port}`, discarding
+    /// the bound address.
     pub async fn start(
         &mut self,
         db: livtet_data::orm::DatabaseConnection,
         device_id: String,
         port: u16,
     ) -> Result<(), DynError> {
+        let addr = std::net::SocketAddr::from(([0, 0, 0, 0], port));
+        self.start_on(db, device_id, addr).await.map(|_| ())
+    }
+
+    /// Start listening on `addr` and return the address actually bound,
+    /// which differs from `addr` when it asks for an ephemeral port (`:0`).
+    pub async fn start_on(
+        &mut self,
+        db: livtet_data::orm::DatabaseConnection,
+        device_id: String,
+        addr: std::net::SocketAddr,
+    ) -> Result<std::net::SocketAddr, DynError> {
         use std::collections::HashMap;
 
+        use poem::listener::Acceptor;
         use tokio::time::Duration;
 
         if self.is_running() {
@@ -420,13 +437,18 @@ impl SyncServerInstance {
         let pair_waiters: PairWaiters = Arc::new(Mutex::new(HashMap::new()));
         crate::pairing::set_pair_waiters(pair_waiters.clone());
         let app = make_sync_routes(engine, pair_waiters);
-        let listener = TcpListener::bind(format!("0.0.0.0:{}", port));
-        tracing::info!("sync server starting on 0.0.0.0:{}", port);
+        let listener = TcpListener::bind(addr);
 
         let acceptor = listener
             .into_acceptor()
             .await
             .map_err(|e| Box::new(e) as DynError)?;
+        let bound = acceptor
+            .local_addr()
+            .first()
+            .and_then(|local| local.as_socket_addr().copied())
+            .ok_or("sync server listener has no socket address")?;
+        tracing::info!("sync server starting on {bound}");
 
         let (shutdown_tx, mut shutdown_rx) = watch::channel(false);
 
@@ -450,7 +472,7 @@ impl SyncServerInstance {
         self.shutdown_tx = Some(shutdown_tx);
         self.join = Some(join);
 
-        Ok(())
+        Ok(bound)
     }
 
     pub async fn stop(&mut self) -> Result<(), DynError> {

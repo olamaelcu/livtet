@@ -4,7 +4,15 @@ version = "0.1.0"
 edition.workspace = true
 rust-version.workspace = true
 
+[features]
+default = []
+# Sync fixtures: temp databases with business + client migrations, seeded
+# data, and a `SyncEngine` per simulated device.
+sync = ["dep:livtet-data", "dep:livtet-sync"]
+
 [dependencies]
+livtet-data = { workspace = true, features = ["fake"], optional = true }
+livtet-sync = { workspace = true, optional = true }
 camino = { workspace = true }
 fs-err = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "io-util"] }

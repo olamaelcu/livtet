@@ -1,6 +1,10 @@
-//! Test utilities shared across the workspace. Stub: only the
-//! minimum surface required by `livtet-plugins`'s HTTP integration
-//! tests. Extend as new tests need it.
+//! Test utilities shared across the workspace. The `sync` feature adds
+//! database-backed fixtures for the sync crates (see [`sync`]). The rest
+//! is a stub: only the minimum surface required by `livtet-plugins`'s HTTP
+//! integration tests. Extend as new tests need it.
+
+#[cfg(feature = "sync")]
+pub mod sync;
 
 use std::{collections::HashMap, sync::Arc};
 

@@ -61,4 +61,15 @@ tracing = { workspace = true, optional = true }
 livtet-types = { workspace = true, optional = true }
 
 [dev-dependencies]
+# Integration tests exercise both backends against each other. Enabling the
+# features through a dev-dependency on this crate keeps them in plain
+# `cargo test --workspace` runs (resolver 3 keeps dev features out of
+# normal builds).
+livtet-sync-http = { path = ".", features = ["poem", "reqwest"] }
+livtet-test-utils = { workspace = true, features = ["sync"] }
+camino-tempfile = { workspace = true }
+fs-err = { workspace = true }
+hex = { workspace = true }
+poem = { version = "3.1", default-features = false, features = ["test"] }
+serde_json = { workspace = true }
 tokio = { workspace = true, features = ["rt", "macros"] }
