@@ -886,12 +886,9 @@ impl SearchIndex {
         let source_field = self.schema.get_field(fields::SOURCE).expect("source");
 
         let work_id_hash = hash_work_id(&doc.work_id);
-        let pub_date_value = doc
-            .pub_date
-            .map(|secs| tantivy::DateTime::from_timestamp_secs(secs));
+        let pub_date_value = doc.pub_date.map(tantivy::DateTime::from_timestamp_secs);
         let published_year = doc.published_year.map(|y| y.max(0) as u64).unwrap_or(0);
-        let created_at_value =
-            tantivy::DateTime::from_timestamp_secs(doc.created_at);
+        let created_at_value = tantivy::DateTime::from_timestamp_secs(doc.created_at);
 
         let mut d = doc!();
         d.add_text(edition_id_field, &doc.edition_id);
