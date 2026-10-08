@@ -9,10 +9,7 @@ use clap::Parser;
 use fs_err as fs;
 use livtet_data::migration::{Migrator, MigratorTrait};
 
-use crate::{
-    CliError, Result,
-    path::{default_db_path, default_index_dir},
-};
+use crate::{CliError, Result, context::Context};
 
 #[derive(Parser, Debug)]
 pub struct ReindexArgs {
@@ -36,15 +33,15 @@ pub struct ReindexArgs {
 }
 
 impl ReindexArgs {
-    pub async fn run(&self) -> Result<()> {
-        let db_path = match &self.database {
-            Some(p) => p.clone(),
-            None => default_db_path()?,
-        };
-        let index_dir = match &self.index_dir {
-            Some(p) => p.clone(),
-            None => default_index_dir()?,
-        };
+    pub async fn run(&self, ctx: &Context) -> Result<()> {
+        // The flags override the context so `--database` / `--index-dir`
+        // keep working, but there is still only one place paths are
+        // resolved from when they are absent.
+        let db_path = self.database.clone().unwrap_or_else(|| ctx.db_path.clone());
+        let index_dir = self
+            .index_dir
+            .clone()
+            .unwrap_or_else(|| ctx.index_dir.clone());
 
         if !self.yes {
             let confirmed = inquire::Confirm::new(&format!(

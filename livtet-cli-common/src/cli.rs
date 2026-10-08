@@ -1,6 +1,7 @@
 use clap::{Args, Parser, Subcommand};
 
 use crate::Result;
+use crate::context::Context;
 
 #[derive(Parser, Debug)]
 #[command(name = "livtet", about = "Livtet CLI", version)]
@@ -40,6 +41,18 @@ pub struct PathArgs {
 
 impl Command {
     pub fn run(self) -> Result<()> {
+        // `Path` is the one command that reads no catalog, so it must not
+        // fail when the data directory cannot be resolved -- printing where
+        // livtet *would* look is exactly what it is for.
+        if let Command::Path(args) = self {
+            return args.run();
+        }
+        let ctx = Context::from_defaults()?;
+        self.run_with(&ctx)
+    }
+
+    /// Run against an explicit [`Context`] rather than the platform defaults.
+    pub fn run_with(self, ctx: &Context) -> Result<()> {
         match self {
             #[cfg(feature = "fake")]
             Command::Seed(args) => {
@@ -54,7 +67,7 @@ impl Command {
                     tokio::runtime::Runtime::new().map_err(|e| crate::CliError::Operation {
                         message: format!("tokio runtime: {e}"),
                     })?;
-                rt.block_on(args.run())
+                rt.block_on(args.run(ctx))
             }
             Command::Path(args) => args.run(),
             Command::Editions(args) => {
@@ -62,14 +75,14 @@ impl Command {
                     tokio::runtime::Runtime::new().map_err(|e| crate::CliError::Operation {
                         message: format!("tokio runtime: {e}"),
                     })?;
-                rt.block_on(args.run())
+                rt.block_on(args.run(ctx))
             }
             Command::Edition(args) => {
                 let rt =
                     tokio::runtime::Runtime::new().map_err(|e| crate::CliError::Operation {
                         message: format!("tokio runtime: {e}"),
                     })?;
-                rt.block_on(args.run())
+                rt.block_on(args.run(ctx))
             }
         }
     }

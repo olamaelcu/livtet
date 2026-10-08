@@ -6,6 +6,7 @@
 //! implementations, error types, and default path resolution.
 
 pub mod cli;
+pub mod context;
 pub mod edition;
 pub mod editions;
 pub mod error;
@@ -16,6 +17,7 @@ pub mod reindex;
 pub mod seed;
 
 pub use cli::Cli;
+pub use context::Context;
 pub use error::{CliError, Result};
 pub use path::{default_db_path, default_index_dir};
 pub use reindex::ReindexArgs;
