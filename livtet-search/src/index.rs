@@ -137,9 +137,15 @@ fn open_index_parts(index_dir: &Utf8Path) -> Result<(Index, IndexReader, Schema)
     let dir = MmapDirectory::open(index_dir)
         .map_err(|e| tantivy::TantivyError::InvalidArgument(e.to_string()))?;
     let index = Index::open_or_create(dir, schema.clone())?;
+    // `Manual`, not `OnCommitWithDelay`: every read path goes through
+    // `refreshed_searcher`, which calls `reader.reload()` before handing
+    // out a searcher, and every commit path reloads too. The delayed
+    // policy would add a background watch thread per reader whose only
+    // job is to repeat work the explicit reloads already did, and it
+    // makes visibility depend on a timer rather than on the reload call.
     let reader = index
         .reader_builder()
-        .reload_policy(ReloadPolicy::OnCommitWithDelay)
+        .reload_policy(ReloadPolicy::Manual)
         .try_into()?;
     Ok((index, reader, schema))
 }
