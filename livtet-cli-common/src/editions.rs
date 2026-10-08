@@ -147,6 +147,12 @@ async fn query_rows(
     limit: u32,
     offset: u32,
 ) -> crate::Result<Vec<Row>> {
+    // `--limit 0` is accepted by the arg parser (range 0..=100), but
+    // tantivy's `TopDocs::with_limit` asserts on a zero limit, so asking the
+    // index would panic. Nothing to return is the honest answer.
+    if limit == 0 {
+        return Ok(Vec::new());
+    }
     let index = open_index(ctx)?;
     let opts = SearchOptions {
         offset: offset as i64,
@@ -237,7 +243,8 @@ pub async fn get_detail(ctx: &Context, id: &str) -> crate::Result<EditionDetail>
             message: format!("edition not found: {id}"),
         })?;
 
-    let inv = digital_inventory::Entity::find_by_id(edition.id)
+    let inv = digital_inventory::Entity::find()
+        .filter(digital_inventory::Column::EditionId.eq(edition.id))
         .one(&db)
         .await
         .map_err(|e| CliError::Operation {

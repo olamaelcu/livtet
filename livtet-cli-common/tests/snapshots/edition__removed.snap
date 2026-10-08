@@ -1,0 +1,5 @@
+---
+source: livtet-cli-common/tests/edition.rs
+expression: "render_removed(&change(true, None))"
+---
+Removed file association from edition 01ARZ3NDEKTSV4RRFFQ69G5FAV (The Name of the Wind)

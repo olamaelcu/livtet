@@ -1,0 +1,5 @@
+---
+source: livtet-cli-common/tests/edition.rs
+expression: "render_added(&change(true, Some(\"/books/a.epub\")))"
+---
+Associated file '/books/a.epub' with edition 01ARZ3NDEKTSV4RRFFQ69G5FAV (The Name of the Wind)

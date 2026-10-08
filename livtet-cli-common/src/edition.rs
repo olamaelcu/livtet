@@ -12,7 +12,8 @@ use clap::{Args, Subcommand};
 
 use livtet_data::entities::{digital_inventory, editions, works};
 use livtet_data::orm::{
-    ActiveModelTrait, ColumnTrait, Database, EntityTrait, QueryFilter, QuerySelect, Set,
+    ActiveModelTrait, ActiveValue, ColumnTrait, Database, EntityTrait, QueryFilter, QuerySelect,
+    Set,
 };
 use livtet_types::now_primitive;
 
@@ -147,16 +148,35 @@ async fn load_edition(
 }
 
 /// The inventory row for an edition.
+///
+/// Filtered on `edition_id`, which is a UNIQUE column but *not* the primary
+/// key -- that is `digital_inventory.id`. Reaching for `find_by_id` here
+/// silently queries the wrong column.
 async fn inventory_for(
     db: &livtet_data::orm::DatabaseConnection,
     edition_id: livtet_types::DbId,
 ) -> Result<Option<digital_inventory::Model>> {
-    digital_inventory::Entity::find_by_id(edition_id)
+    digital_inventory::Entity::find()
+        .filter(digital_inventory::Column::EditionId.eq(edition_id))
         .one(db)
         .await
         .map_err(|e| CliError::Operation {
             message: format!("Query failed: {e}"),
         })
+}
+
+/// The `file_format` value to store for `path`.
+///
+/// `digital_inventory.file_format` is NOT NULL with a DB default of `EPUB`,
+/// even though the entity models it as `Option<String>`. Setting it to an
+/// explicit `None` is therefore a constraint violation, not "unknown" -- so
+/// derive the format from the extension, and leave the column unset when
+/// there is no extension to let the schema default apply.
+fn file_format_for(path: &str) -> ActiveValue<Option<String>> {
+    match camino::Utf8Path::new(path).extension() {
+        Some(ext) if !ext.is_empty() => Set(Some(ext.to_ascii_uppercase())),
+        _ => ActiveValue::NotSet,
+    }
 }
 
 /// Associate `file_path` with an edition, replacing any existing path.
@@ -171,6 +191,7 @@ pub async fn add_file(ctx: &Context, edition_id_str: &str, file_path: &str) -> R
         Some(existing) => {
             let mut model: digital_inventory::ActiveModel = existing.into();
             model.file_path = Set(Some(file_path.to_string()));
+            model.file_format = file_format_for(file_path);
             model.updated_at = Set(Some(current_time));
             model.update(&db).await.map_err(|e| CliError::Operation {
                 message: format!("Update failed: {e}"),
@@ -186,7 +207,7 @@ pub async fn add_file(ctx: &Context, edition_id_str: &str, file_path: &str) -> R
                 dominant_color: Set(None),
                 file_hash: Set(None),
                 file_size_bytes: Set(None),
-                file_format: Set(None),
+                file_format: file_format_for(file_path),
                 notes: Set(None),
                 added_at: Set(current_time),
                 updated_at: Set(None),
@@ -215,14 +236,19 @@ pub async fn remove_file(ctx: &Context, edition_id_str: &str) -> Result<FileChan
     let edition = load_edition(&db, edition_id, edition_id_str).await?;
     let title = edition.title.as_deref().unwrap_or("<unnamed>").to_string();
 
-    let changed = digital_inventory::Entity::delete_by_id(edition_id)
-        .exec(&db)
-        .await
-        .map_err(|e| CliError::Operation {
-            message: format!("Delete failed: {e}"),
-        })?
-        .rows_affected
-        > 0;
+    let changed = match inventory_for(&db, edition_id).await? {
+        Some(existing) => {
+            digital_inventory::Entity::delete_by_id(existing.id)
+                .exec(&db)
+                .await
+                .map_err(|e| CliError::Operation {
+                    message: format!("Delete failed: {e}"),
+                })?
+                .rows_affected
+                > 0
+        }
+        None => false,
+    };
 
     Ok(FileChange {
         edition_id: edition_id_str.to_string(),

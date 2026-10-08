@@ -1,0 +1,8 @@
+---
+source: livtet-cli-common/tests/editions.rs
+expression: "render_detail(&EditionDetail\n{\n    title: \"The Name of the Wind (Ebook)\".to_string(), authors:\n    vec![\"Patrick Rothfuss\".to_string()], format: Some(\"Ebook\".to_string()),\n    file_path: Some(\"/books/the-name-of-the-wind.epub\".to_string()),\n})"
+---
+  Title:   The Name of the Wind (Ebook)
+  Author:  Patrick Rothfuss
+  Format:  Ebook
+  On-disk: * /books/the-name-of-the-wind.epub

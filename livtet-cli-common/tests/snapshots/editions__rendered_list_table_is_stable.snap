@@ -1,0 +1,14 @@
+---
+source: livtet-cli-common/tests/editions.rs
+expression: render_table(&rows)
+---
+┌────────┬──────────────────────────────┬──────────────────┬───────────┬───────┐
+│ ID     │ TITLE                        │ AUTHOR           │ FORMAT    │ *     │
+├────────┼──────────────────────────────┼──────────────────┼───────────┼───────┤
+│ <ulid> │ The Fifth Season             │ N. K. Jemisin    │ Hardcover │ false │
+├────────┼──────────────────────────────┼──────────────────┼───────────┼───────┤
+│ <ulid> │ The Name of the Wind         │ Patrick Rothfuss │ Hardcover │ false │
+├────────┼──────────────────────────────┼──────────────────┼───────────┼───────┤
+│ <ulid> │ The Name of the Wind (Ebook) │ Patrick Rothfuss │ Ebook     │ true  │
+└────────┴──────────────────────────────┴──────────────────┴───────────┴───────┘
+3 edition(s)

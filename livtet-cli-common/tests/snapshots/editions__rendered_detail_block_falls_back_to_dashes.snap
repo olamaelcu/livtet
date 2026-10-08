@@ -1,0 +1,8 @@
+---
+source: livtet-cli-common/tests/editions.rs
+expression: "render_detail(&EditionDetail\n{\n    title: \"Untitled\".to_string(), authors: Vec::new(), format: None,\n    file_path: None,\n})"
+---
+  Title:   Untitled
+  Author:  —
+  Format:  —
+  On-disk: —

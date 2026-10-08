@@ -1,0 +1,10 @@
+---
+source: livtet-cli-common/tests/edition.rs
+expression: "render_file_table(&[FileRow\n{\n    edition_id: \"01ARZ3NDEKTSV4RRFFQ69G5FAV\".to_string(), title:\n    \"The Name of the Wind (Ebook)\".to_string(), work_title:\n    \"The Name of the Wind\".to_string(), file_path:\n    \"/books/the-name-of-the-wind.epub\".to_string(), file_format:\n    \"epub\".to_string(),\n}])"
+---
+┌────────────────────────────┬──────────────────────────────┬──────────────────────┬──────────────────────────────────┬────────┐
+│ ID                         │ TITLE                        │ WORK                 │ FILE                             │ FORMAT │
+├────────────────────────────┼──────────────────────────────┼──────────────────────┼──────────────────────────────────┼────────┤
+│ 01ARZ3NDEKTSV4RRFFQ69G5FAV │ The Name of the Wind (Ebook) │ The Name of the Wind │ /books/the-name-of-the-wind.epub │ epub   │
+└────────────────────────────┴──────────────────────────────┴──────────────────────┴──────────────────────────────────┴────────┘
+1 edition(s) with files

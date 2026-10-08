@@ -1,0 +1,5 @@
+---
+source: livtet-cli-common/tests/edition.rs
+expression: "render_removed(&change(false, None))"
+---
+Edition 01ARZ3NDEKTSV4RRFFQ69G5FAV has no associated file

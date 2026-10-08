@@ -29,3 +29,7 @@ tabled = { version = "0.20", features = ["derive"] }
 
 [dev-dependencies]
 camino-tempfile = { workspace = true }
+insta = { workspace = true }
+livtet-test-utils = { workspace = true, features = ["cli"] }
+livtet-types = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
