@@ -295,20 +295,50 @@ impl CommonLanguages {
         }
     }
 
-    /// Normalize an arbitrary ISO 639 language code into a
-    /// [`LanguageInfo`] struct with the canonical 2-letter code,
-    /// English name, autonym, and flag emoji.
+    /// Normalize an arbitrary language tag into a [`LanguageInfo`] struct
+    /// with a canonical code, English name, autonym, and flag emoji.
     ///
-    /// Returns `None` when `isolang` does not recognize the input.
+    /// Accepts ISO 639-1 and 639-3 codes, plus region-tagged forms in
+    /// either the BCP-47 (`en-GB`) or POSIX (`en_GB`) spelling. Matching
+    /// is ASCII case-insensitive. A tag that exactly matches a
+    /// [`CommonLanguages`] code resolves to that variant, so region-tagged
+    /// entries keep their own identity; everything else narrows to its
+    /// 2-letter code.
+    ///
+    /// Returns `None` for input neither this table nor `isolang` knows.
     pub fn normalize_language_code(raw: &str) -> Option<LanguageInfo> {
-        let normalized = raw.replace('_', "-");
-        let lang = if let Some(l) = isolang::Language::from_locale(&normalized) {
-            Some(l)
-        } else if let Some(l) = isolang::Language::from_639_3(&normalized) {
-            Some(l)
-        } else {
-            isolang::Language::from_639_1(&normalized)
-        }?;
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+            return None;
+        }
+        // BCP-47 writes region tags with `-` (`en-GB`); POSIX locales use
+        // `_` (`en_GB`). Accept either: `-` for our own table and for
+        // `isolang`'s 639 lookups, `_` for `from_locale`, which only
+        // parses the POSIX spelling.
+        let hyphenated = trimmed.replace('_', "-");
+        let lowered = hyphenated.to_ascii_lowercase();
+
+        // An exact hit on our own table wins, so a region-tagged entry
+        // resolves to itself instead of collapsing to its base language.
+        // Without this, `en-GB` would reach `isolang`, come back as
+        // `Eng`, narrow to 639-1 `"en"`, and match `English` — leaving
+        // `UkEnglish` unreachable despite declaring the `en-GB` code.
+        if let Some(common) = CommonLanguages::all()
+            .into_iter()
+            .find(|l| l.code().eq_ignore_ascii_case(&hyphenated))
+        {
+            let code = common.code().to_owned();
+            return Some(LanguageInfo {
+                english_name: common.name().to_string(),
+                autonym: common.autonym().map(String::from),
+                flag_emoji: flag_emoji_for(&code),
+                code,
+            });
+        }
+
+        let lang = isolang::Language::from_locale(&lowered.replace('-', "_"))
+            .or_else(|| isolang::Language::from_639_3(&lowered))
+            .or_else(|| isolang::Language::from_639_1(&lowered))?;
 
         let code = lang.to_639_1()?.to_owned();
         let common = CommonLanguages::all()
@@ -1480,6 +1510,8 @@ mod tests {
 
     #[rstest]
     #[case("en", "en", "English", Some("English"))]
+    #[case("EN", "en", "English", Some("English"))]
+    #[case("  en  ", "en", "English", Some("English"))]
     #[case("es", "es", "Spanish", Some("Espa\u{f1}ol"))]
     #[case("spa", "es", "Spanish", Some("Espa\u{f1}ol"))]
     #[case("ht", "ht", "Haitian Kreyol", Some("Krey\u{f2}l Ayisyen"))]
@@ -1503,6 +1535,26 @@ mod tests {
     #[case("english")]
     fn normalize_language_code_rejects_unknown_input(#[case] raw: &str) {
         assert!(CommonLanguages::normalize_language_code(raw).is_none());
+    }
+
+    /// Region-tagged input resolves to the region-tagged entry instead of
+    /// collapsing to its base language, in either the BCP-47 (`-`) or
+    /// POSIX (`_`) spelling and in any case. This previously returned
+    /// `None` for every spelling: the function rewrote `_` to `-` before
+    /// calling `isolang::Language::from_locale`, which only parses the
+    /// POSIX form, so the locale path could never match and `UkEnglish`
+    /// was unreachable despite declaring the `en-GB` code.
+    #[rstest]
+    #[case("en-GB")]
+    #[case("en_GB")]
+    #[case("EN-gb")]
+    fn normalize_language_code_resolves_region_tags(#[case] raw: &str) {
+        let info = CommonLanguages::normalize_language_code(raw)
+            .unwrap_or_else(|| panic!("{raw:?} should normalize"));
+        assert_eq!(info.code, "en-GB");
+        assert_eq!(info.english_name, "UK English");
+        assert_eq!(info.autonym.as_deref(), Some("English (UK)"));
+        assert_eq!(info.flag_emoji.as_deref(), Some("\u{1F1EC}\u{1F1E7}"));
     }
 
     #[rstest]
