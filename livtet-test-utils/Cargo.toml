@@ -13,6 +13,3 @@ sync = ["dep:livtet-data", "dep:livtet-sync"]
 [dependencies]
 livtet-data = { workspace = true, features = ["fake"], optional = true }
 livtet-sync = { workspace = true, optional = true }
-camino = { workspace = true }
-fs-err = { workspace = true }
-tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "io-util"] }
