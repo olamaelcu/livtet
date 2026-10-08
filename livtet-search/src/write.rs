@@ -583,12 +583,12 @@ impl SearchIndex {
 
                 let pub_date_value = edition.published_date.map(|d| {
                     let nanos = d.midnight().assume_utc().unix_timestamp_nanos();
-                    tantivy::DateTime::from_timestamp_millis((nanos / 1_000_000) as i64)
+                    tantivy::DateTime::from_timestamp_nanos(nanos.try_into().unwrap_or(0))
                 });
                 let published_year = edition.published_date.map(|d| d.year() as u64).unwrap_or(0);
                 let created_at_value = Some({
                     let nanos = edition.created_at.assume_utc().unix_timestamp_nanos();
-                    tantivy::DateTime::from_timestamp_millis((nanos / 1_000_000) as i64)
+                    tantivy::DateTime::from_timestamp_nanos(nanos.try_into().unwrap_or(0))
                 });
 
                 let mut d = doc!();
@@ -689,7 +689,7 @@ impl SearchIndex {
                     let nanos = ua.assume_utc().unix_timestamp_nanos();
                     d.add_date(
                         updated_at_field,
-                        tantivy::DateTime::from_timestamp_millis((nanos / 1_000_000) as i64),
+                        tantivy::DateTime::from_timestamp_nanos(nanos.try_into().unwrap_or(0)),
                     );
                 }
                 // popularity is currently unset; we still add the field
@@ -888,10 +888,10 @@ impl SearchIndex {
         let work_id_hash = hash_work_id(&doc.work_id);
         let pub_date_value = doc
             .pub_date
-            .map(|secs| tantivy::DateTime::from_timestamp_millis(secs.saturating_mul(1_000)));
+            .map(|secs| tantivy::DateTime::from_timestamp_secs(secs));
         let published_year = doc.published_year.map(|y| y.max(0) as u64).unwrap_or(0);
         let created_at_value =
-            tantivy::DateTime::from_timestamp_millis(doc.created_at.saturating_mul(1_000));
+            tantivy::DateTime::from_timestamp_secs(doc.created_at);
 
         let mut d = doc!();
         d.add_text(edition_id_field, &doc.edition_id);
@@ -979,7 +979,7 @@ impl SearchIndex {
         if let Some(secs) = doc.updated_at {
             d.add_date(
                 updated_at_field,
-                tantivy::DateTime::from_timestamp_millis(secs.saturating_mul(1_000)),
+                tantivy::DateTime::from_timestamp_secs(secs),
             );
         }
         d.add_u64(popularity_field, doc.popularity.max(0) as u64);
