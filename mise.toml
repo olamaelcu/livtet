@@ -3,6 +3,7 @@ rust = "latest"
 "github:corca-ai/nose" = "v0.20.0"
 "cargo:cargo-machete" = "0.7"
 "cargo:cargo-llvm-cov" = "0.6"
+"cargo:cargo-mutants" = "27.1"
 
 [tasks.check-dupes]
 description = "Detect new copy-paste duplication (25+ shared lines per occurrence); gates on --fail-on new vs .nose/baseline.json. Smaller duplications are accepted as noise."
@@ -41,3 +42,6 @@ run = [
   "mise run coverage",
 ]
 
+[tasks.mutants]
+description = "Mutation-test livtet-types: injects bugs and checks the suite notices. Coverage says a line ran; this says a test would catch it breaking. Slow. Other crates: cargo mutants -p <crate>"
+run = "cargo mutants --no-shuffle -p livtet-types"

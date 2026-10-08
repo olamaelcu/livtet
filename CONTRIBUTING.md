@@ -97,6 +97,15 @@ llvm-cov keeps reporting the vanished file's lines as uncovered.
 `coverage` task is the fast one for "did the code I just wrote get
 exercised?"; it is not trustworthy for a baseline or a trend.
 
+### Mutation testing
+
+`mise run mutants` injects bugs into `livtet-types` and reports which
+ones no test caught. Coverage tells you a line ran; this tells you a
+test would notice if it broke. Worth running after adding table-driven
+tests over large `match` statements, which can execute every arm while
+asserting almost nothing. Scope other crates with `cargo mutants -p
+<crate>`; annotate genuinely untestable code with `#[mutants::skip]`.
+
 ## AI Disclosure
 
 **Important**: If you are using **any kind of AI assistance** to

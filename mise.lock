@@ -8,6 +8,10 @@ backend = "cargo:cargo-llvm-cov"
 version = "0.7.0"
 backend = "cargo:cargo-machete"
 
+[[tools."cargo:cargo-mutants"]]
+version = "27.1.0"
+backend = "cargo:cargo-mutants"
+
 [[tools."github:corca-ai/nose"]]
 version = "0.20.0"
 backend = "github:corca-ai/nose"

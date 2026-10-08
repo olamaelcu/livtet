@@ -42,4 +42,5 @@ search = ["dep:tantivy-query-grammar", "dep:mutants"]
 uniffi = ["dep:uniffi"]
 
 [dev-dependencies]
+rstest = { workspace = true }
 tokio = { workspace = true, features = ["rt", "macros"] }
