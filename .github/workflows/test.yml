@@ -9,10 +9,10 @@ permissions:
   contents: read
 
 jobs:
-  sync:
-    name: Sync crates
+  workspace:
+    name: Workspace
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
 
     steps:
       - uses: actions/checkout@v4
@@ -29,13 +29,14 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      # The sync engine, its HTTP transport, and the daemon. The full
-      # workspace suite (including the slow FFI bindings contract test) can
-      # join this job once it is fast enough to run on every PR.
-      - name: Test sync crates
-        run: >
-          cargo test --all-targets
-          -p livtet-sync
-          -p livtet-sync-http
-          -p livtet-sync-server
-          -p livtet-test-utils
+      # `mise run test` is the single definition of "the whole suite" —
+      # doctests plus every unit and integration target across the
+      # workspace. Keeping CI on the task rather than its own `cargo test`
+      # invocation means the two cannot drift apart.
+      #
+      # This compiles `livtet-ruby` as well. That crate has no Rust tests,
+      # but it is a workspace member, so `--workspace` links it against
+      # libruby via magnus. If a runner image ever ships without Ruby
+      # headers, that is what breaks here first.
+      - name: Test workspace
+        run: mise run test
