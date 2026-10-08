@@ -1272,3 +1272,296 @@ impl From<Ulid> for KnownReadingSources {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use rstest::rstest;
+
+    use super::*;
+    use crate::FormatMetadataSchema;
+
+    /// Generates the contract every `Known*` enum in this module shares.
+    ///
+    /// The assertions deliberately cross-check two independently written
+    /// `match` statements against each other: `all()` and `From<Ulid>`.
+    /// Adding a variant to one but not the other fails here, which a test
+    /// that merely iterates `all()` would not catch.
+    macro_rules! known_enum_contract {
+        ($mod_name:ident, $ty:ident, $time_ms:expr, $first:expr, $count:expr) => {
+            mod $mod_name {
+                use ulid::Ulid;
+
+                use crate::known::*;
+
+                #[test]
+                fn all_enumerates_a_gapless_discriminant_block() {
+                    let discriminants: Vec<u128> =
+                        $ty::all().iter().map(|variant| *variant as u128).collect();
+                    let expected: Vec<u128> = ($first..$first + $count).collect();
+                    assert_eq!(
+                        discriminants, expected,
+                        "all() must list every variant in discriminant order, with no \
+                         gaps, duplicates, or omissions"
+                    );
+                }
+
+                #[test]
+                fn names_are_non_empty_and_unique() {
+                    let names: Vec<&str> =
+                        $ty::all().iter().map(|variant| variant.name()).collect();
+                    for (variant, name) in $ty::all().iter().zip(&names) {
+                        assert!(!name.trim().is_empty(), "{variant:?} has a blank name");
+                    }
+                    let mut deduped = names.clone();
+                    deduped.sort_unstable();
+                    deduped.dedup();
+                    assert_eq!(
+                        deduped.len(),
+                        names.len(),
+                        "name() returns the same label for two different variants"
+                    );
+                }
+
+                #[test]
+                fn ulid_encodes_the_enum_timestamp_and_discriminant() {
+                    for variant in $ty::all() {
+                        let ulid = variant.ulid();
+                        assert_eq!(
+                            ulid.timestamp_ms(),
+                            $time_ms,
+                            "{variant:?} must use this enum's own timestamp constant"
+                        );
+                        assert_eq!(ulid.random(), variant as u128, "{variant:?}");
+                    }
+                }
+
+                #[test]
+                fn ulid_round_trips_through_from() {
+                    for variant in $ty::all() {
+                        assert_eq!($ty::from(variant.ulid()), variant);
+                    }
+                }
+
+                #[test]
+                fn ulid_and_db_id_conversions_agree_with_ulid() {
+                    for variant in $ty::all() {
+                        assert_eq!(Ulid::from(variant), variant.ulid());
+                        assert_eq!(crate::DbId::from(variant).0, variant.ulid());
+                    }
+                }
+
+                #[test]
+                #[should_panic(expected = "Unknown ULID")]
+                fn from_ulid_rejects_a_discriminant_past_the_block() {
+                    let past_end = Ulid::from_parts($time_ms, $first + $count);
+                    let _ = $ty::from(past_end);
+                }
+            }
+        };
+    }
+
+    known_enum_contract!(
+        known_formats,
+        KnownFormats,
+        crate::KNOWN_FORMAT_TIME_MS,
+        1,
+        9
+    );
+    known_enum_contract!(
+        common_languages,
+        CommonLanguages,
+        crate::KNOWN_LANGUAGE_TIME_MS,
+        100,
+        30
+    );
+    known_enum_contract!(
+        known_genres,
+        KnownGenres,
+        crate::KNOWN_GENRE_TIME_MS,
+        200,
+        58
+    );
+    known_enum_contract!(
+        known_subjects,
+        KnownSubjects,
+        crate::KNOWN_SUBJECT_TIME_MS,
+        600,
+        59
+    );
+    known_enum_contract!(
+        known_reading_sources,
+        KnownReadingSources,
+        crate::KNOWN_READING_SOURCE_TIME_MS,
+        1,
+        7
+    );
+
+    // ─── KnownFormats accessors ──────────────────────────────────────────
+
+    /// Cases, not a loop: each format's schema and progress unit are
+    /// independent editorial decisions, and `Pdf` is deliberately the odd
+    /// one out (ebook schema, but paged progress).
+    #[rstest]
+    #[case(KnownFormats::Hardcover, FormatMetadataSchema::PhysicalBook, "page")]
+    #[case(
+        KnownFormats::TradePaperback,
+        FormatMetadataSchema::PhysicalBook,
+        "page"
+    )]
+    #[case(
+        KnownFormats::MassMarketPaperback,
+        FormatMetadataSchema::PhysicalBook,
+        "page"
+    )]
+    #[case(KnownFormats::Pdf, FormatMetadataSchema::Ebook, "page")]
+    #[case(KnownFormats::Ebook, FormatMetadataSchema::Ebook, "virtual_page")]
+    #[case(KnownFormats::Epub, FormatMetadataSchema::Ebook, "virtual_page")]
+    #[case(KnownFormats::Mobi, FormatMetadataSchema::Ebook, "virtual_page")]
+    #[case(KnownFormats::Azw3, FormatMetadataSchema::Ebook, "virtual_page")]
+    #[case(KnownFormats::Audiobook, FormatMetadataSchema::Audiobook, "timestamp")]
+    fn format_schema_and_progress_unit(
+        #[case] format: KnownFormats,
+        #[case] schema: FormatMetadataSchema,
+        #[case] progress_unit: &str,
+    ) {
+        assert_eq!(format.schema(), schema);
+        assert_eq!(format.default_progress_unit(), progress_unit);
+    }
+
+    /// `default_progress_unit_enum` dispatches on the *string* returned by
+    /// `default_progress_unit`, so the two can drift apart. The panic arm
+    /// also pins that no format reaches the `_ => Percentage` fallback.
+    #[test]
+    fn progress_unit_string_and_enum_agree() {
+        for format in KnownFormats::all() {
+            let expected = match format.default_progress_unit() {
+                "page" => ProgressUnit::Page,
+                "virtual_page" => ProgressUnit::VirtualPage,
+                "timestamp" => ProgressUnit::Timestamp,
+                other => panic!("{format:?} returned unmapped progress unit {other:?}"),
+            };
+            assert_eq!(format.default_progress_unit_enum(), expected, "{format:?}");
+        }
+    }
+
+    // ─── CommonLanguages accessors ───────────────────────────────────────
+
+    #[test]
+    fn language_codes_are_non_empty_and_unique() {
+        let codes: Vec<&str> = CommonLanguages::all()
+            .iter()
+            .map(|language| language.code())
+            .collect();
+        for (language, code) in CommonLanguages::all().iter().zip(&codes) {
+            assert!(!code.is_empty(), "{language:?} has a blank code");
+            assert_eq!(*code, code.trim(), "{language:?} code has stray whitespace");
+        }
+        let mut deduped = codes.clone();
+        deduped.sort_unstable();
+        deduped.dedup();
+        assert_eq!(deduped.len(), codes.len(), "two languages share a code");
+    }
+
+    #[test]
+    fn languages_carry_a_flag_and_a_non_blank_autonym_when_present() {
+        for language in CommonLanguages::all() {
+            assert!(
+                !language.flag_emoji().is_empty(),
+                "{language:?} has no flag emoji"
+            );
+            if let Some(autonym) = language.autonym() {
+                assert!(
+                    !autonym.trim().is_empty(),
+                    "{language:?} has a blank autonym"
+                );
+            }
+        }
+    }
+
+    #[rstest]
+    #[case("en", "en", "English", Some("English"))]
+    #[case("es", "es", "Spanish", Some("Espa\u{f1}ol"))]
+    #[case("spa", "es", "Spanish", Some("Espa\u{f1}ol"))]
+    #[case("ht", "ht", "Haitian Kreyol", Some("Krey\u{f2}l Ayisyen"))]
+    fn normalize_language_code_resolves_to_a_common_language(
+        #[case] raw: &str,
+        #[case] code: &str,
+        #[case] english_name: &str,
+        #[case] autonym: Option<&str>,
+    ) {
+        let info = CommonLanguages::normalize_language_code(raw)
+            .unwrap_or_else(|| panic!("{raw:?} should normalize"));
+        assert_eq!(info.code, code);
+        assert_eq!(info.english_name, english_name);
+        assert_eq!(info.autonym.as_deref(), autonym);
+        assert!(info.flag_emoji.is_some(), "{raw:?} should resolve a flag");
+    }
+
+    #[rstest]
+    #[case("zzz")]
+    #[case("")]
+    #[case("english")]
+    fn normalize_language_code_rejects_unknown_input(#[case] raw: &str) {
+        assert!(CommonLanguages::normalize_language_code(raw).is_none());
+    }
+
+    #[rstest]
+    #[case("en", true)]
+    #[case("es", true)]
+    #[case("ja", true)]
+    #[case("en-GB", true)]
+    #[case("zz", false)]
+    #[case("", false)]
+    fn flag_emoji_for_resolves_only_mapped_codes(#[case] code: &str, #[case] mapped: bool) {
+        assert_eq!(flag_emoji_for(code).is_some(), mapped);
+    }
+
+    // ─── KnownReadingSources accessors ───────────────────────────────────
+
+    #[test]
+    fn reading_source_urns_are_namespaced_and_unique() {
+        let urns: Vec<String> = KnownReadingSources::all()
+            .iter()
+            .map(|source| source.urn())
+            .collect();
+        for (source, urn) in KnownReadingSources::all().iter().zip(&urns) {
+            assert!(
+                urn.starts_with("urn:"),
+                "{source:?} urn {urn:?} is not urn-namespaced"
+            );
+        }
+        let mut deduped = urns.clone();
+        deduped.sort_unstable();
+        deduped.dedup();
+        assert_eq!(deduped.len(), urns.len(), "two sources share a urn");
+    }
+
+    #[test]
+    fn reading_source_emoji_are_present_and_unique() {
+        let emoji: Vec<&str> = KnownReadingSources::all()
+            .iter()
+            .map(|source| source.emoji())
+            .collect();
+        for (source, glyph) in KnownReadingSources::all().iter().zip(&emoji) {
+            assert!(!glyph.is_empty(), "{source:?} has no emoji");
+        }
+        let mut deduped = emoji.clone();
+        deduped.sort_unstable();
+        deduped.dedup();
+        assert_eq!(deduped.len(), emoji.len(), "two sources share an emoji");
+    }
+
+    #[test]
+    fn reading_source_colors_are_six_digit_hex() {
+        for source in KnownReadingSources::all() {
+            let color = source.color();
+            assert_eq!(color.len(), 7, "{source:?} color {color:?} is not #RRGGBB");
+            let (hash, digits) = color.split_at(1);
+            assert_eq!(hash, "#", "{source:?} color {color:?} must start with #");
+            assert!(
+                digits.chars().all(|c| c.is_ascii_hexdigit()),
+                "{source:?} color {color:?} has non-hex digits"
+            );
+        }
+    }
+}
