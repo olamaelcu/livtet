@@ -9,7 +9,22 @@ default = []
 # Sync fixtures: temp databases with business + client migrations, seeded
 # data, and a `SyncEngine` per simulated device.
 sync = ["dep:livtet-data", "dep:livtet-sync"]
+# CLI fixtures: a temp-directory database and search index laid out like a
+# real install, holding a fixed catalog (see [`cli`]).
+cli = [
+  "dep:livtet-data",
+  "dep:livtet-search",
+  "dep:livtet-types",
+  "dep:camino",
+  "dep:fs-err",
+  "dep:serde_json",
+]
 
 [dependencies]
 livtet-data = { workspace = true, features = ["fake"], optional = true }
+livtet-search = { workspace = true, optional = true }
 livtet-sync = { workspace = true, optional = true }
+livtet-types = { workspace = true, optional = true }
+camino = { workspace = true, optional = true }
+fs-err = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }
