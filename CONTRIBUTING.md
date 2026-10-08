@@ -65,6 +65,38 @@ sea-orm derive paths.
 - Keep PRs focused. One logical change per PR. If you find a second
   thing to fix while writing the first, open it as a separate PR.
 
+### Coverage
+
+`mise run coverage` measures line and region coverage with
+[cargo-llvm-cov](https://github.com/taiki-e/cargo-llvm-cov). It runs
+the suite once, prints a per-file summary, and writes a browsable
+report to `target/llvm-cov/html/index.html`.
+
+Nothing gates on the number yet — it is there to tell you whether the
+code you just touched is actually exercised.
+
+Two things the number does not include:
+
+- `livtet-ffi` and `livtet-ruby`. The uniffi bindings contract test is
+  slow and the Ruby crate is a `magnus` cdylib exercised from
+  `livtet-ruby/test`, so neither is worth instrumenting from here.
+- Doctests. `cargo llvm-cov --doctests` still requires nightly.
+  `mise run test` keeps running them; they just do not contribute to
+  the reported coverage.
+
+Instrumented builds use their own `target/llvm-cov-target` directory,
+so a coverage run will not invalidate your normal `cargo` build cache.
+Expect the first run to rebuild the workspace from scratch.
+
+**Quoting a number?** Use `mise run coverage-clean`. Deleting or renaming
+a source file leaves its object behind in `target/llvm-cov-target`, and
+llvm-cov keeps reporting the vanished file's lines as uncovered.
+`cargo llvm-cov clean` will not remove them — that directory has no
+`CACHEDIR.TAG`, so `cargo clean` refuses it and exits non-zero — so
+`coverage-clean` deletes the directory outright and rebuilds. The plain
+`coverage` task is the fast one for "did the code I just wrote get
+exercised?"; it is not trustworthy for a baseline or a trend.
+
 ## AI Disclosure
 
 **Important**: If you are using **any kind of AI assistance** to

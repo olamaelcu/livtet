@@ -2,6 +2,7 @@
 rust = "latest"
 "github:corca-ai/nose" = "v0.20.0"
 "cargo:cargo-machete" = "0.7"
+"cargo:cargo-llvm-cov" = "0.6"
 
 [tasks.check-dupes]
 description = "Detect new copy-paste duplication (25+ shared lines per occurrence); gates on --fail-on new vs .nose/baseline.json. Smaller duplications are accepted as noise."
@@ -24,3 +25,19 @@ run = [
   "cargo test --doc --workspace",
   "cargo test --workspace --all-targets",
 ]
+
+[tasks.coverage]
+description = "Measure line/region coverage for the Rust crates (excludes livtet-ffi and livtet-ruby). HTML report: target/llvm-cov/html/index.html"
+run = [
+  "cargo llvm-cov --no-report --workspace --all-targets --exclude livtet-ffi --exclude livtet-ruby",
+  "cargo llvm-cov report --summary-only",
+  "cargo llvm-cov report --html",
+]
+
+[tasks.coverage-clean]
+description = "Coverage from a full rebuild. Use this for any number you intend to quote: orphaned objects from deleted or renamed source otherwise linger in target/llvm-cov-target and keep getting reported. `cargo llvm-cov clean` cannot remove them (that dir has no CACHEDIR.TAG, so cargo refuses), hence the rm."
+run = [
+  "rm -rf target/llvm-cov-target target/llvm-cov",
+  "mise run coverage",
+]
+
