@@ -1112,13 +1112,52 @@ async fn search_with_query_accepts_pre_built_query() {
 #[tokio::test]
 async fn search_with_facets_returns_facet_counts() {
     let db = fresh_db().await;
-    let _seed = seed_comprehensive(&db).await;
+    let seed = seed_comprehensive(&db).await;
     let (index, _dir) = fresh_index(&db).await;
 
     let result = index
         .search_with_facets("wind", 10)
         .await
         .expect("search_with_facets");
+
+    // `english count >= 2` below has been observed failing with count 1,
+    // rarely (order of 2% of runs) and only under parallel load. The cause
+    // is not yet understood, so every assertion here attaches the state
+    // needed to diagnose it: editions a and c are both english and b is
+    // spanish, so a count of 1 means one of a/c is missing from the match
+    // set. Report which, plus the facets and how many documents the
+    // searcher can actually see.
+    let diagnostic = || {
+        let hit_editions: Vec<&str> = result
+            .hits
+            .iter()
+            .map(|h| h.edition_id.as_deref().unwrap_or("<no edition_id>"))
+            .collect();
+        let visible_docs = index
+            .index()
+            .reader()
+            .map(|r| r.searcher().num_docs().to_string())
+            .unwrap_or_else(|e| format!("<reader error: {e}>"));
+        format!(
+            "\n  seeded english editions: a={a} c={c}\n  \
+             seeded spanish edition:  b={b}\n  \
+             a in hits: {a_hit}, c in hits: {c_hit}\n  \
+             hit edition_ids: {hit_editions:?}\n  \
+             language_facets: {langs:?}\n  \
+             documents visible to searcher: {visible_docs}",
+            a = seed.edition_a_id,
+            c = seed.edition_c_id,
+            b = seed.edition_b_id,
+            a_hit = hit_editions
+                .iter()
+                .any(|id| *id == seed.edition_a_id.to_string()),
+            c_hit = hit_editions
+                .iter()
+                .any(|id| *id == seed.edition_c_id.to_string()),
+            langs = result.language_facets,
+        )
+    };
+
     // The 3 editions of "The Name of the Wind" all match; the
     // Title token "wind" also hits edition_d because the identifier
     // index / fuzzy on title can broaden the match. The structural
@@ -1126,15 +1165,40 @@ async fn search_with_facets_returns_facet_counts() {
     // exact hit count.
     assert!(
         result.hits.len() >= 3,
-        "all 3 work1 editions match 'wind' (got {})",
-        result.hits.len()
+        "all 3 work1 editions match 'wind' (got {}){}",
+        result.hits.len(),
+        diagnostic()
     );
-    let lang = result
-        .language_facets
-        .iter()
-        .find(|fc| fc.label == "/english")
-        .expect("english facet must be present");
-    assert!(lang.count >= 2, "english count >= 2; got {}", lang.count);
+    // Ground truth from `seed_comprehensive`: editions a, c, and d carry the
+    // english language row, b carries the spanish one, and all four match
+    // "wind". Asserted exactly. A `>=` bound here is what let a facet
+    // collector that mislabelled every count survive in this suite for as
+    // long as it did.
+    let language_count = |label: &str| -> i64 {
+        result
+            .language_facets
+            .iter()
+            .find(|fc| fc.label == label)
+            .map_or(0, |fc| fc.count)
+    };
+    assert_eq!(
+        language_count("/english"),
+        3,
+        "english facet count{}",
+        diagnostic()
+    );
+    assert_eq!(
+        language_count("/spanish"),
+        1,
+        "spanish facet count{}",
+        diagnostic()
+    );
+    assert_eq!(
+        result.language_facets.len(),
+        2,
+        "only english and spanish are seeded{}",
+        diagnostic()
+    );
     let pub_facet = result
         .publisher_facets
         .iter()
@@ -1500,6 +1564,20 @@ async fn reindex_populates_every_facet_axis() {
     assert!(
         lang_labels.contains(&"/english"),
         "english facet label present; got {lang_labels:?}"
+    );
+    // Exact count, for the same reason as in
+    // `search_with_facets_returns_facet_counts`: a bare presence check
+    // passes even when every facet count has been collapsed into one
+    // arbitrarily labelled bucket.
+    assert_eq!(
+        result
+            .language_facets
+            .iter()
+            .find(|fc| fc.label == "/english")
+            .map_or(0, |fc| fc.count),
+        3,
+        "editions a, c, and d are seeded english; got {:?}",
+        result.language_facets
     );
 
     let publisher_labels: Vec<&str> = result

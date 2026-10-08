@@ -662,13 +662,20 @@ impl SearchReader {
 
         let mut collectors = tantivy::collector::MultiCollector::new();
         let top_handle = collectors.add_collector(TopDocs::with_limit(limit).order_by_score());
-        let lang_handle =
-            collectors.add_collector(FacetCollector::for_field(fields::LANGUAGE_FACET));
-        let pub_handle =
-            collectors.add_collector(FacetCollector::for_field(fields::PUBLISHER_FACET));
-        let subj_handle =
-            collectors.add_collector(FacetCollector::for_field(fields::SUBJECT_FACET));
-        let genre_handle = collectors.add_collector(FacetCollector::for_field(fields::GENRE_FACET));
+        // Each `FacetCollector` MUST declare the prefixes it counts. With
+        // none declared, tantivy maps every term in the facet dictionary to
+        // the same sentinel ordinal (`u64::MAX`), collapses all of them into
+        // a single counter, and then labels that counter by resolving the
+        // out-of-range sentinel — which yields an arbitrary term. The result
+        // is one bucket per segment holding every document's count under a
+        // meaningless label, varying between runs with how the writer
+        // distributed documents across segments. `add_facet("/")` records
+        // the direct children of the root, which is what `facet_counts`
+        // then reads back via `top_k("/", _)`.
+        let lang_handle = collectors.add_collector(root_facet_collector(fields::LANGUAGE_FACET));
+        let pub_handle = collectors.add_collector(root_facet_collector(fields::PUBLISHER_FACET));
+        let subj_handle = collectors.add_collector(root_facet_collector(fields::SUBJECT_FACET));
+        let genre_handle = collectors.add_collector(root_facet_collector(fields::GENRE_FACET));
         // The `pub_date` fast field stores tantivy's `DateTime`. Annotating
         // the closure return type (`Vec<(Option<DateTime>, _), _>`) lets
         // Tantivy pick the right `FastValue` impl without inferring `()`
@@ -1224,6 +1231,17 @@ fn collapse_editions_to_works(hits: Vec<SearchHit>, limit: usize) -> Vec<SearchH
         }
     }
     out
+}
+
+/// A [`FacetCollector`] that counts the direct children of the facet root.
+///
+/// Pairs with [`facet_counts`], which reads the results back with
+/// `top_k("/", _)`. Declaring the prefix is not optional: see the comment
+/// at the call site for what an empty prefix set does.
+fn root_facet_collector(field_name: &str) -> FacetCollector {
+    let mut collector = FacetCollector::for_field(field_name);
+    collector.add_facet("/");
+    collector
 }
 
 fn facet_counts(counts: &tantivy::collector::FacetCounts) -> Vec<FacetCount> {
