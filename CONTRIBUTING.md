@@ -72,8 +72,15 @@ sea-orm derive paths.
 the suite once, prints a per-file summary, and writes a browsable
 report to `target/llvm-cov/html/index.html`.
 
-Nothing gates on the number yet — it is there to tell you whether the
-code you just touched is actually exercised.
+**The floor is 80% workspace-wide line coverage.** `mise run
+coverage-check` fails below it. The floor is deliberately workspace-wide
+rather than per-crate: a handful of files are dominated by process
+lifecycle — `livtet-sync-server`'s `daemon.rs` most of all, with its
+socket binding, signal handling and shutdown — where a test that
+*executes* the lines verifies almost nothing, and the harness to reach
+them costs more than it returns. Holding every crate to 80%
+independently would force that work; holding the workspace to it does
+not. If you drop a crate well below the floor, say why in the PR.
 
 Two things the number does not include:
 
