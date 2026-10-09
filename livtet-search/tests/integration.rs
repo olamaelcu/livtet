@@ -1985,3 +1985,150 @@ async fn build_query_with_has_file_filter() {
     let any = edition_ids_from_filters(&index, WorkFilters::default());
     assert!(any.contains(&a) && any.contains(&b) && any.contains(&c));
 }
+
+// ---------------------------------------------------------------------------
+// LabelResolver: DbId axes → text labels, with a TTL cache.
+// ---------------------------------------------------------------------------
+
+/// Every format and language the seed left in the catalog, as
+/// `(id, name)` pairs, so the resolver's output can be checked against the
+/// rows it is supposed to be reading.
+async fn catalog_labels(db: &DatabaseConnection) -> (Vec<(DbId, String)>, Vec<(DbId, String)>) {
+    use livtet_data::orm::EntityTrait;
+    let formats = formats::Entity::find()
+        .all(db)
+        .await
+        .expect("formats")
+        .into_iter()
+        .map(|f| (f.id, f.name))
+        .collect();
+    let languages = languages::Entity::find()
+        .all(db)
+        .await
+        .expect("languages")
+        .into_iter()
+        .map(|l| (l.id, l.name))
+        .collect();
+    (formats, languages)
+}
+
+#[tokio::test]
+async fn label_resolver_resolves_both_axes_to_names() {
+    let db = fresh_db().await;
+    let _seed = seed_comprehensive(&db).await;
+    let (formats, languages) = catalog_labels(&db).await;
+
+    let format_ids: Vec<DbId> = formats.iter().map(|(id, _)| *id).collect();
+    let language_ids: Vec<DbId> = languages.iter().map(|(id, _)| *id).collect();
+
+    let resolver = livtet_search::label_resolver::LabelResolver::new();
+    let (got_formats, got_languages) = resolver
+        .resolve(&db, &format_ids, &language_ids)
+        .await
+        .expect("resolve");
+
+    let mut expected_formats: Vec<String> = formats.iter().map(|(_, n)| n.clone()).collect();
+    let mut sorted_formats = got_formats.clone();
+    expected_formats.sort();
+    sorted_formats.sort();
+    assert_eq!(sorted_formats, expected_formats);
+
+    assert_eq!(
+        got_languages.len(),
+        languages.len(),
+        "every language id must resolve to a name"
+    );
+}
+
+/// The empty guards skip the query entirely rather than issuing an
+/// `IN ()` that matches everything.
+#[tokio::test]
+async fn label_resolver_returns_nothing_for_empty_input() {
+    let db = fresh_db().await;
+    let _seed = seed_comprehensive(&db).await;
+
+    let resolver = livtet_search::label_resolver::LabelResolver::new();
+    let (formats, languages) = resolver.resolve(&db, &[], &[]).await.expect("resolve");
+    assert!(formats.is_empty(), "got {formats:?}");
+    assert!(languages.is_empty(), "got {languages:?}");
+
+    // One axis empty, the other not: only the populated axis resolves.
+    let (all_formats, _) = catalog_labels(&db).await;
+    let format_ids: Vec<DbId> = all_formats.iter().map(|(id, _)| *id).collect();
+    let (formats, languages) = resolver
+        .resolve(&db, &format_ids, &[])
+        .await
+        .expect("resolve");
+    assert_eq!(formats.len(), all_formats.len());
+    assert!(languages.is_empty());
+}
+
+/// An unknown id is not an error -- it simply resolves to no label, because
+/// the query is a filter rather than a lookup per id.
+#[tokio::test]
+async fn label_resolver_ignores_ids_with_no_row() {
+    let db = fresh_db().await;
+    let _seed = seed_comprehensive(&db).await;
+
+    let resolver = livtet_search::label_resolver::LabelResolver::new();
+    let (formats, _) = resolver
+        .resolve(&db, &[DbId::new()], &[])
+        .await
+        .expect("resolve");
+    assert!(formats.is_empty(), "got {formats:?}");
+}
+
+/// A second call inside the TTL must come back from the cache, and the key
+/// is a sorted byte view, so a reordered id list hits the same entry.
+#[tokio::test]
+async fn label_resolver_caches_within_the_ttl_regardless_of_id_order() {
+    let db = fresh_db().await;
+    let _seed = seed_comprehensive(&db).await;
+    let (formats, _) = catalog_labels(&db).await;
+    assert!(formats.len() >= 2, "need two formats to reorder");
+
+    let forward: Vec<DbId> = formats.iter().map(|(id, _)| *id).collect();
+    let reversed: Vec<DbId> = forward.iter().rev().copied().collect();
+
+    let resolver = livtet_search::label_resolver::LabelResolver::new();
+    let first = resolver.resolve(&db, &forward, &[]).await.expect("first");
+    let cached = resolver.resolve(&db, &forward, &[]).await.expect("cached");
+    let reordered = resolver
+        .resolve(&db, &reversed, &[])
+        .await
+        .expect("reordered");
+
+    assert_eq!(cached, first, "a second call must return the cached labels");
+    assert_eq!(
+        reordered, first,
+        "sorting the key makes id order irrelevant, so this must hit the same entry"
+    );
+}
+
+/// With the TTL elapsed on every lookup the cache never serves a hit, so
+/// each call re-queries -- and must still return the right labels.
+#[tokio::test]
+async fn label_resolver_requeries_once_entries_have_expired() {
+    use std::time::Duration;
+
+    let db = fresh_db().await;
+    let _seed = seed_comprehensive(&db).await;
+    let (formats, _) = catalog_labels(&db).await;
+    let format_ids: Vec<DbId> = formats.iter().map(|(id, _)| *id).collect();
+
+    let resolver =
+        livtet_search::label_resolver::LabelResolver::new().with_ttl(Duration::from_nanos(1));
+    let first = resolver
+        .resolve(&db, &format_ids, &[])
+        .await
+        .expect("first");
+    let second = resolver
+        .resolve(&db, &format_ids, &[])
+        .await
+        .expect("second");
+    assert_eq!(
+        first, second,
+        "an expired entry must be refreshed, not dropped"
+    );
+    assert_eq!(first.0.len(), formats.len());
+}
