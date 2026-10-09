@@ -398,6 +398,156 @@ async fn the_daemon_emits_well_formed_notifications() {
     cleanup(&db_path);
 }
 
+/// The whole pairing handshake, through to a paired device.
+///
+/// `rpc_health.rs` and the rejection test above only ever drive
+/// `pairing.approve` to failure, because a ticket this daemon minted has no
+/// remote origin and a claim from loopback shares the daemon's own address —
+/// both of which `handle_pairing_approve` fails closed on. Getting to the
+/// success path needs a claim stamped with an address that is not the
+/// daemon's, which is what the SQL below simulates. Nothing else in the
+/// suite reaches the device insert, the session-token persist, or the
+/// transition of the pending row to Approved.
+#[tokio::test]
+async fn approving_a_remote_claim_pairs_the_device() {
+    let db_path = temp_db_path("approve");
+    let mut client = spawn(&db_path).await;
+
+    let status = ok_result(&mut client, rpc::method::STATUS, serde_json::json!({})).await;
+    let host = status["host"].as_str().expect("host").to_string();
+    let port = status["port"].as_u64().expect("port");
+
+    let begin = ok_result(
+        &mut client,
+        rpc::method::PAIRING_BEGIN,
+        serde_json::json!({}),
+    )
+    .await;
+    let token = begin["token"].as_str().expect("token").to_string();
+
+    // A remote device claims the ticket over HTTP, which fills in its name,
+    // type and device id.
+    let remote_device_id = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
+    let response = reqwest::Client::new()
+        .post(format!(
+            "http://{host}:{port}{}",
+            livtet_sync_http::PAIR_PATH
+        ))
+        .json(&serde_json::json!({
+            "device_id": remote_device_id,
+            "name": "Remote Phone",
+            "device_type": "android",
+            "token": token,
+        }))
+        .send()
+        .await
+        .expect("pair POST");
+    assert!(
+        response.status().is_success(),
+        "pair POST: {}",
+        response.status()
+    );
+
+    // The claim came from loopback, so its origin is the daemon's own
+    // address and approval would still refuse. Stamp a different origin to
+    // stand in for a claim from another host.
+    let pool = livtet_data::sql::sqlite::SqlitePoolOptions::new()
+        .connect_with(
+            livtet_data::sql::sqlite::SqliteConnectOptions::new()
+                .filename(&db_path)
+                .create_if_missing(false),
+        )
+        .await
+        .expect("open db");
+    livtet_data::sql::query("UPDATE pending_pairings SET origin_addr = ? WHERE token = ?")
+        .bind(format!("10.0.0.5:{port}"))
+        .bind(token.clone())
+        .execute(&pool)
+        .await
+        .expect("stamp a remote origin");
+
+    let approved = ok_result(
+        &mut client,
+        rpc::method::PAIRING_APPROVE,
+        serde_json::json!({ "token": token }),
+    )
+    .await;
+    let session_token = approved["session_token"].as_str().expect("session_token");
+    assert_eq!(
+        session_token.len(),
+        26,
+        "the session token is a ULID: {session_token}"
+    );
+    assert_eq!(
+        approved["device_id"].as_str(),
+        Some(remote_device_id),
+        "the claimed device id carries through to the pairing"
+    );
+
+    // The device is now listed, carrying the name the claim supplied.
+    let devices = ok_result(
+        &mut client,
+        rpc::method::DEVICES_LIST,
+        serde_json::json!({}),
+    )
+    .await;
+    let entries = devices.as_array().expect("devices array");
+    assert_eq!(entries.len(), 1, "exactly one device paired: {devices}");
+    assert_eq!(entries[0]["device_id"].as_str(), Some(remote_device_id));
+    assert_eq!(entries[0]["name"].as_str(), Some("Remote Phone"));
+
+    // The session token is persisted, not just returned — the remote device
+    // authenticates later requests with it.
+    let stored: String =
+        livtet_data::sql::query_scalar("SELECT session_token FROM paired_devices LIMIT 1")
+            .fetch_one(&pool)
+            .await
+            .expect("read back the session token");
+    assert_eq!(stored, session_token);
+
+    // Approving the same ticket twice must not pair a second device: the
+    // pending row is Approved now, and the upsert keys on device_id.
+    let second = ok_result(
+        &mut client,
+        rpc::method::PAIRING_APPROVE,
+        serde_json::json!({ "token": token }),
+    )
+    .await;
+    assert_eq!(second["device_id"].as_str(), Some(remote_device_id));
+    let devices = ok_result(
+        &mut client,
+        rpc::method::DEVICES_LIST,
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(
+        devices.as_array().map(Vec::len),
+        Some(1),
+        "re-approving must update the device, not add another: {devices}"
+    );
+
+    // And now revoke really removes something, which the no-op revoke test
+    // above cannot show.
+    let revoked = ok_result(
+        &mut client,
+        rpc::method::DEVICES_REVOKE,
+        serde_json::json!({ "device_id": remote_device_id }),
+    )
+    .await;
+    assert_eq!(revoked["removed"].as_u64(), Some(1));
+    let devices = ok_result(
+        &mut client,
+        rpc::method::DEVICES_LIST,
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(devices.as_array().map(Vec::len), Some(0));
+
+    pool.close().await;
+    shutdown(&mut client).await;
+    cleanup(&db_path);
+}
+
 /// `kill` is the escape hatch for a daemon that will not answer `shutdown`.
 /// It is deliberately the only test that uses it: a SIGKILLed child never
 /// flushes its coverage profile, so every other test here exits cleanly.
