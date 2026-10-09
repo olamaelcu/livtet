@@ -88,7 +88,7 @@ impl Command {
     }
 }
 
-#[derive(tabled::Tabled)]
+#[derive(Debug, tabled::Tabled)]
 struct PathRow {
     #[tabled(rename = "KIND")]
     kind: &'static str,
@@ -139,5 +139,92 @@ impl PathArgs {
                 ),
             }),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Command, PathArgs};
+
+    fn rows_for(kind: &str) -> Vec<(&'static str, String)> {
+        PathArgs {
+            kind: kind.to_string(),
+        }
+        .rows()
+        .expect("known kind")
+        .into_iter()
+        .map(|row| (row.kind, row.path))
+        .collect()
+    }
+
+    #[test]
+    fn each_kind_selects_its_own_row() {
+        assert_eq!(rows_for("bundle").len(), 1);
+        assert_eq!(rows_for("bundle")[0].0, "bundle");
+        assert_eq!(rows_for("logs").len(), 1);
+        assert_eq!(rows_for("logs")[0].0, "logs");
+        // data and config come from the platform and may be unresolvable, so
+        // they yield at most one row rather than always one.
+        assert!(rows_for("data").len() <= 1);
+        assert!(rows_for("config").len() <= 1);
+    }
+
+    #[test]
+    fn all_is_the_union_of_the_individual_kinds() {
+        let all: Vec<&str> = rows_for("all").iter().map(|(kind, _)| *kind).collect();
+        assert_eq!(all.first(), Some(&"bundle"), "bundle leads the listing");
+        assert!(all.contains(&"logs"));
+        for kind in ["data", "config"] {
+            assert_eq!(
+                all.contains(&kind),
+                !rows_for(kind).is_empty(),
+                "`all` must list {kind} exactly when asking for it alone does"
+            );
+        }
+        assert_eq!(
+            all.len(),
+            1 + rows_for("data").len() + rows_for("config").len() + 1
+        );
+    }
+
+    #[test]
+    fn kind_matching_ignores_case() {
+        assert_eq!(rows_for("BUNDLE"), rows_for("bundle"));
+        assert_eq!(rows_for("All").len(), rows_for("all").len());
+    }
+
+    #[test]
+    fn every_reported_path_is_non_empty() {
+        for (kind, path) in rows_for("all") {
+            assert!(!path.trim().is_empty(), "{kind} reported a blank path");
+        }
+    }
+
+    #[test]
+    fn an_unknown_kind_is_an_error_that_lists_the_valid_ones() {
+        let err = PathArgs {
+            kind: "elsewhere".to_string(),
+        }
+        .rows()
+        .expect_err("unknown kind must not resolve");
+        let message = err.to_string();
+        for expected in ["elsewhere", "all", "bundle", "data", "config", "logs"] {
+            assert!(
+                message.contains(expected),
+                "error should mention {expected:?}: {message}"
+            );
+        }
+    }
+
+    /// `Path` is the one command that reads no catalog, so `Command::run`
+    /// must dispatch it without first resolving a `Context` -- otherwise it
+    /// would fail on exactly the machines where it is most useful.
+    #[test]
+    fn path_command_runs_without_resolving_a_context() {
+        Command::Path(PathArgs {
+            kind: "bundle".to_string(),
+        })
+        .run()
+        .expect("path must not need a resolvable data directory");
     }
 }
