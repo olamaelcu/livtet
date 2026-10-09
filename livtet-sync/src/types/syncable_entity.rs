@@ -526,3 +526,86 @@ pub trait SyncableEntity: Clone + Serialize + for<'de> Deserialize<'de> + Send +
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{SyncableEntity, SyncableEntityKind, entity_type_to_table};
+    use livtet_data::entities::works;
+
+    /// Nothing in the workspace implements [`SyncableEntity`] -- the
+    /// `SyncableEntityKind` enum took that job -- so its default `to_payload`
+    /// / `from_payload` bodies have no other caller. This impl exercises them
+    /// and checks the trait is still usable as declared. It lives in-crate
+    /// because the orphan rule only permits implementing a local trait for a
+    /// foreign model here.
+    impl SyncableEntity for works::Model {
+        type Entity = works::Entity;
+
+        fn entity_type_name() -> &'static str {
+            "work"
+        }
+
+        fn table_name() -> &'static str {
+            "works"
+        }
+
+        fn entity_id(&self) -> String {
+            self.id.to_string()
+        }
+    }
+
+    fn a_work() -> works::Model {
+        works::Model {
+            id: livtet_types::DbId::new(),
+            title: "The Name of the Wind".to_string(),
+            description: None,
+            sort_title: None,
+            series_type: None,
+            language_id: None,
+            preferred_edition_id: None,
+            created_at: livtet_types::now_primitive(),
+            updated_at: None,
+        }
+    }
+
+    #[test]
+    fn trait_defaults_round_trip_through_the_payload() {
+        let work = a_work();
+        assert_eq!(<works::Model as SyncableEntity>::entity_type_name(), "work");
+        assert_eq!(<works::Model as SyncableEntity>::table_name(), "works");
+        assert_eq!(
+            entity_type_to_table(<works::Model as SyncableEntity>::entity_type_name()),
+            Some(<works::Model as SyncableEntity>::table_name()),
+            "the trait's own strings must agree with the registry's mapping"
+        );
+
+        let payload = SyncableEntity::to_payload(&work).expect("to_payload");
+        let back = <works::Model as SyncableEntity>::from_payload(&payload).expect("from_payload");
+        assert_eq!(
+            SyncableEntity::entity_id(&back),
+            SyncableEntity::entity_id(&work)
+        );
+    }
+
+    #[test]
+    fn trait_default_from_payload_names_the_entity_type_on_failure() {
+        let err = <works::Model as SyncableEntity>::from_payload(&serde_json::json!({"nope": 1}))
+            .expect_err("a payload of the wrong shape must not parse");
+        assert!(
+            err.to_string().contains("work"),
+            "the default must name the entity type: {err}"
+        );
+    }
+
+    /// The enum's own payload round trip, without needing a database: the
+    /// model's serde format is the one `to_payload` emits.
+    #[test]
+    fn enum_payload_round_trips_for_a_constructed_model() {
+        let work = a_work();
+        let kind = SyncableEntityKind::Work(work.clone());
+        let payload = kind.to_payload().expect("to_payload");
+        let back = SyncableEntityKind::from_payload("work", &payload).expect("from_payload");
+        assert_eq!(back.entity_id(), work.id.to_string());
+        assert_eq!(back.table_name(), "works");
+    }
+}

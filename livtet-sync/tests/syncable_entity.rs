@@ -44,6 +44,15 @@ macro_rules! check_variant {
         let kind = SyncableEntityKind::$variant(rows.into_iter().next().expect("one row"));
         assert_eq!(kind.entity_type_name(), $entity_type);
         assert_eq!(kind.table_name(), $table);
+        // `entity_type_to_table` is a second, hand-written copy of this
+        // mapping -- its own doc says it "must be kept in sync" with the
+        // macro's constants. Check it here, where both strings are in hand.
+        assert_eq!(
+            livtet_sync::types::syncable_entity::entity_type_to_table($entity_type),
+            Some($table),
+            "entity_type_to_table disagrees with the registry for {}",
+            $entity_type
+        );
         assert!(
             !kind.entity_id().is_empty(),
             "{} produced a blank entity_id",
