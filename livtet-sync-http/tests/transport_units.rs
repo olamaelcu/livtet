@@ -136,6 +136,47 @@ fn a_json_error_becomes_a_deserialize_error() {
     assert!(err.to_string().starts_with("failed to deserialize"));
 }
 
+// ─── routes: join_url ───────────────────────────────────────────────────────
+
+#[test]
+fn join_url_trims_the_boundary_slash() {
+    use livtet_sync_http::{STATUS_PATH, join_url};
+    let expected = format!("http://host{STATUS_PATH}");
+    // However the caller spells the boundary, exactly one slash survives.
+    for base in ["http://host", "http://host/", "  http://host  "] {
+        assert_eq!(
+            join_url(base, STATUS_PATH).expect(base),
+            expected,
+            "{base:?}"
+        );
+    }
+}
+
+/// The base is validated before anything is built from it, so a caller that
+/// forgot to configure a server gets a message naming the problem rather than
+/// a confusing transport failure later.
+#[test]
+fn join_url_rejects_a_base_that_is_not_an_absolute_http_url() {
+    use livtet_sync_http::{STATUS_PATH, join_url};
+
+    for blank in ["", "   "] {
+        let err = join_url(blank, STATUS_PATH).expect_err("a blank base is not a url");
+        assert!(err.to_string().contains("base url is empty"), "got {err}");
+    }
+
+    // Any other scheme, and a scheme-relative or bare host, are all refused —
+    // and the message echoes what was passed.
+    for bad in ["ftp://host", "host:3121", "//host", "https:/host"] {
+        let err = join_url(bad, STATUS_PATH).expect_err(bad);
+        let message = err.to_string();
+        assert!(
+            message.contains("must start with http:// or https://"),
+            "{bad:?} gave {message}"
+        );
+        assert!(message.contains(bad), "{bad:?} must be echoed: {message}");
+    }
+}
+
 // ─── pairing: the process-wide broadcast registry ───────────────────────────
 
 /// One test owns the whole lifecycle because the registry is a process-wide

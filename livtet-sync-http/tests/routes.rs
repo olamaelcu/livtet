@@ -11,8 +11,13 @@ use serde::de::DeserializeOwned;
 use tokio::sync::{Mutex, RwLock};
 
 fn client(device: &Device) -> TestClient<impl Endpoint> {
+    client_with_waiters(device, Arc::new(Mutex::new(HashMap::new())))
+}
+
+/// `client`, but over a caller-supplied waiter map so a test can register a
+/// pairing token before the routes are built.
+fn client_with_waiters(device: &Device, waiters: PairWaiters) -> TestClient<impl Endpoint> {
     let engine = SyncEngine::new(device.conn.clone(), device.engine.device_id().to_string());
-    let waiters: PairWaiters = Arc::new(Mutex::new(HashMap::new()));
     TestClient::new(make_sync_routes(Arc::new(RwLock::new(engine)), waiters))
 }
 
@@ -205,6 +210,20 @@ async fn resolving_with_an_unknown_resolution_is_a_bad_request() {
     assert_eq!(device.engine.list_conflicts().await.unwrap().len(), 1);
 }
 
+/// The route's `:id` segment matches any text, so a non-numeric id is caught
+/// by the `Path<i64>` extractor rather than reaching the handler.
+#[tokio::test]
+async fn resolving_a_non_numeric_conflict_id_is_a_bad_request() {
+    let device = Device::new("server").await;
+
+    client(&device)
+        .post("/sync/conflicts/not-a-number/resolve")
+        .body_json(&serde_json::json!({ "resolution": "local", "merged_payload": null }))
+        .send()
+        .await
+        .assert_status(StatusCode::BAD_REQUEST);
+}
+
 mod files {
     use super::*;
 
@@ -311,5 +330,125 @@ mod files {
             .send()
             .await
             .assert_status(StatusCode::RANGE_NOT_SATISFIABLE);
+    }
+
+    /// `If-Range` guards a resumed download: when the hash the client holds no
+    /// longer matches the stored one, the file has changed underneath it, so
+    /// the `Range` must be ignored and the whole file served at 200 rather
+    /// than splicing new bytes into an old partial download.
+    #[tokio::test]
+    async fn a_stale_if_range_serves_the_whole_file_despite_the_range() {
+        let device = Device::seeded("server").await;
+        let (id, _dir) = inventory_file(&device, "book.epub", b"0123456789").await;
+
+        let response = client(&device)
+            .get(format!("/sync/files/{id}"))
+            .header("if-range", "blake3:not-the-stored-hash")
+            .header("range", "bytes=2-5")
+            .send()
+            .await;
+        response.assert_status(StatusCode::OK);
+        response.assert_header("content-length", "10");
+        response.assert_header("accept-ranges", "bytes");
+        response.assert_bytes(b"0123456789").await;
+    }
+
+    /// A matching `If-Range` means the client's partial download is still
+    /// valid, so the `Range` is honoured as normal.
+    #[tokio::test]
+    async fn a_current_if_range_still_honours_the_range() {
+        let device = Device::seeded("server").await;
+        let (id, _dir) = inventory_file(&device, "book.epub", b"0123456789").await;
+
+        let stored: String = livtet_data::sql::query_scalar(
+            "SELECT file_hash FROM digital_inventory WHERE lower(hex(id)) = ?",
+        )
+        .bind(&id)
+        .fetch_one(device.pool())
+        .await
+        .expect("the seeder stores a file_hash");
+
+        let response = client(&device)
+            .get(format!("/sync/files/{id}"))
+            .header("if-range", stored)
+            .header("range", "bytes=2-5")
+            .send()
+            .await;
+        response.assert_status(StatusCode::PARTIAL_CONTENT);
+        response.assert_bytes(b"2345").await;
+    }
+
+    /// An inventory row with no `file_path` is a different miss from an
+    /// inventory row that does not exist, and from a path that is gone.
+    #[tokio::test]
+    async fn a_null_file_path_is_not_found() {
+        let device = Device::seeded("server").await;
+        let (id, _dir) = inventory_file(&device, "book.epub", b"0123456789").await;
+
+        livtet_data::sql::query(
+            "UPDATE digital_inventory SET file_path = NULL WHERE lower(hex(id)) = ?",
+        )
+        .bind(&id)
+        .execute(device.pool())
+        .await
+        .expect("clear the path");
+
+        client(&device)
+            .get(format!("/sync/files/{id}"))
+            .send()
+            .await
+            .assert_status(StatusCode::NOT_FOUND);
+    }
+}
+
+mod pair_status {
+    use super::*;
+
+    #[tokio::test]
+    async fn an_unregistered_token_is_not_found() {
+        let device = Device::new("server").await;
+
+        client(&device)
+            .get("/sync/pair/status/never-minted")
+            .send()
+            .await
+            .assert_status(StatusCode::NOT_FOUND);
+    }
+
+    /// A registered token opens an SSE stream.
+    ///
+    /// Only the status and content type are asserted. The stream's own body
+    /// loop waits on the broadcast channel with a 300-second idle timeout, so
+    /// reading the body here would block for that long — and the
+    /// `async_stream::stream!` body carries no coverage regions anyway, so
+    /// draining it would buy nothing.
+    #[tokio::test]
+    async fn a_registered_token_opens_an_event_stream() {
+        let device = Device::new("server").await;
+        let waiters: PairWaiters = Arc::new(Mutex::new(HashMap::new()));
+        let (tx, _rx) = tokio::sync::broadcast::channel(4);
+        waiters.lock().await.insert("pair-token".to_string(), tx);
+
+        let response = client_with_waiters(&device, waiters)
+            .get("/sync/pair/status/pair-token")
+            .send()
+            .await;
+        response.assert_status_is_ok();
+        response.assert_header("content-type", "text/event-stream");
+    }
+
+    /// The handler's `Json` extractor rejects a body it cannot parse before
+    /// the handler body runs.
+    #[tokio::test]
+    async fn a_malformed_pair_body_is_a_bad_request() {
+        let device = Device::new("server").await;
+
+        client(&device)
+            .post("/sync/pair")
+            .content_type("application/json")
+            .body("{not json")
+            .send()
+            .await
+            .assert_status(StatusCode::BAD_REQUEST);
     }
 }

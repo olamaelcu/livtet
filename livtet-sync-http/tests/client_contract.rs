@@ -231,3 +231,87 @@ async fn a_session_pairs_the_local_engine_with_the_remote_server() {
 
     server.stop().await.unwrap();
 }
+
+/// `with_http` is the bring-your-own-`reqwest::Client` constructor, for
+/// callers that need their own timeouts, proxy or TLS configuration. Its
+/// sibling `with_default_http` is covered above; this is the same contract
+/// over a caller-supplied client.
+#[tokio::test]
+async fn a_session_accepts_a_caller_supplied_http_client() {
+    let server_device = Device::seeded("server").await;
+    let phone = Device::new("phone").await;
+    let (mut server, url) = serve(&server_device).await;
+
+    let mut session = ReqwestSyncClient::with_http(&phone.conn, "phone", reqwest::Client::new());
+    assert!(session.base_url().is_none());
+    session.connect(&url).await.expect("connect");
+    assert_eq!(session.base_url(), Some(url.as_str()));
+    assert_eq!(
+        session.status().await.expect("status").latest_version,
+        server_device.engine.get_latest_version().await.unwrap()
+    );
+
+    server.stop().await.unwrap();
+}
+
+/// `start` is the `0.0.0.0:{port}` convenience over `start_on`. A port is
+/// reserved by binding and dropping a listener, the same idiom
+/// `connecting_to_nothing_fails_and_stays_disconnected` uses.
+#[tokio::test]
+async fn start_binds_every_interface_on_the_given_port() {
+    let device = Device::new("server").await;
+    let port = std::net::TcpListener::bind(SocketAddr::from(([0, 0, 0, 0], 0)))
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port();
+
+    let mut server = SyncServerInstance::new();
+    server
+        .start(
+            device.conn.clone(),
+            device.engine.device_id().to_string(),
+            port,
+        )
+        .await
+        .expect("start on a reserved port");
+    assert!(server.is_running());
+
+    // Reachable on loopback, which 0.0.0.0 covers.
+    let client = connected_client(&format!("http://127.0.0.1:{port}")).await;
+    assert_eq!(
+        client.status().await.expect("status").device_id,
+        device.engine.device_id()
+    );
+
+    server.stop().await.unwrap();
+    assert!(!server.is_running());
+}
+
+#[test]
+fn a_default_server_instance_is_not_running() {
+    assert!(!SyncServerInstance::default().is_running());
+}
+
+#[test]
+fn a_default_http_client_has_no_base_url() {
+    assert!(ReqwestHttpClient::default().base_url().is_none());
+}
+
+/// A base url that passes the `join_url` scheme check but is not a parseable
+/// URL fails as `Url`, not as `Transport` — the parse happens before any
+/// request is attempted. `http://[` starts an IPv6 literal that never closes.
+#[tokio::test]
+async fn an_unparseable_base_url_fails_before_any_request() {
+    let mut client = ReqwestHttpClient::new();
+    let err = client
+        .connect("http://[")
+        .await
+        .expect_err("an unparseable base url must not connect");
+    assert!(matches!(err, SyncHttpError::Url(_)), "{err:?}");
+    assert!(
+        !err.to_string().contains("must start with http"),
+        "this must be the parse failure, not join_url's own scheme check: {err}"
+    );
+    assert!(client.base_url().is_none());
+}
