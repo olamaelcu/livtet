@@ -316,4 +316,79 @@ mod tests {
         let listed = storage.list_cached(DbId::new(), &db).await.unwrap();
         assert!(listed.is_empty());
     }
+
+    async fn storage() -> (FileCoverStorage, camino_tempfile::Utf8TempDir) {
+        let dir = camino_tempfile::Utf8TempDir::new().unwrap();
+        let storage = FileCoverStorage::new(dir.path().join("cache"), dir.path().join("perm"))
+            .await
+            .unwrap();
+        (storage, dir)
+    }
+
+    /// `identifier_value` carries the edition id as text, so a key built from
+    /// something that is not a `DbId` has to be rejected rather than silently
+    /// writing a marker under an unparseable directory name.
+    #[tokio::test]
+    async fn storing_under_a_key_that_is_not_an_edition_id_is_an_error() {
+        let (storage, _dir) = storage().await;
+        let mut bad = key(DbId::new());
+        bad.identifier_value = "not-an-edition-id".into();
+
+        let err = storage
+            .store(&bad, b"png bytes")
+            .await
+            .expect_err("an unparseable edition id must not be stored");
+        let message = err.to_string();
+        assert!(
+            message.contains("invalid edition_id in key"),
+            "got {message}"
+        );
+        assert!(
+            message.contains("not-an-edition-id"),
+            "the error must echo the offending value: {message}"
+        );
+    }
+
+    /// Promoting an entry that was never cached is a miss, not a panic.
+    #[tokio::test]
+    async fn copying_an_uncached_entry_to_permanent_is_an_error() {
+        let (storage, _dir) = storage().await;
+        let edition_id = DbId::new();
+
+        let err = storage
+            .copy_to_permanent(&key(edition_id), edition_id, "png")
+            .await
+            .expect_err("nothing was cached, so there is nothing to promote");
+        assert!(
+            err.to_string().contains("cached entry not found"),
+            "got {err}"
+        );
+    }
+
+    /// The extension becomes a filename, so path separators and the Windows
+    /// reserved characters are stripped. An extension made only of those
+    /// sanitises to nothing, which must not yield a bare `cover.` file.
+    #[tokio::test]
+    async fn an_extension_that_sanitises_away_is_rejected() {
+        let (storage, _dir) = storage().await;
+        let edition_id = DbId::new();
+
+        for ext in [".", "", "/", "::", "?*<>|"] {
+            let err = storage
+                .permanent_path(edition_id, ext)
+                .expect_err("an empty extension must not produce a path");
+            assert!(
+                err.to_string().contains("empty extension"),
+                "{ext:?} gave {err}"
+            );
+        }
+
+        // A leading dot is optional, and the rest still names the file.
+        for ext in ["png", ".png", "/png"] {
+            let path = storage
+                .permanent_path(edition_id, ext)
+                .unwrap_or_else(|e| panic!("{ext:?}: {e}"));
+            assert_eq!(path.file_name(), Some("cover.png"), "{ext:?}");
+        }
+    }
 }

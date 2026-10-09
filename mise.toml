@@ -28,11 +28,11 @@ run = [
 ]
 
 [tasks.coverage]
-description = "Measure line/region coverage for the Rust crates (excludes livtet-ffi and livtet-ruby). HTML report: target/llvm-cov/html/index.html"
+description = "Measure line/region coverage for the Rust crates (excludes livtet-ffi, livtet-ruby, and test-data scaffolding). HTML report: target/llvm-cov/html/index.html"
 run = [
   "cargo llvm-cov --no-report --workspace --all-targets --exclude livtet-ffi --exclude livtet-ruby",
-  "cargo llvm-cov report --summary-only",
-  "cargo llvm-cov report --html",
+  "cargo llvm-cov report --summary-only --ignore-filename-regex '(/entities/|src/fake\\.rs)'",
+  "cargo llvm-cov report --html --ignore-filename-regex '(/entities/|src/fake\\.rs)'",
 ]
 
 [tasks.coverage-clean]
@@ -43,10 +43,10 @@ run = [
 ]
 
 [tasks.coverage-check]
-description = "Fail when workspace line coverage drops below 80%. The floor is workspace-wide, not per-crate: see the Coverage section in CONTRIBUTING.md for which crates sit below it deliberately."
+description = "Fail when workspace line coverage drops below 90%. The floor is workspace-wide, not per-crate: see the Coverage section in CONTRIBUTING.md for what is excluded and why."
 run = [
   "cargo llvm-cov --no-report --workspace --all-targets --exclude livtet-ffi --exclude livtet-ruby",
-  "cargo llvm-cov report --summary-only --fail-under-lines 80",
+  "cargo llvm-cov report --summary-only --fail-under-lines 90 --ignore-filename-regex '(/entities/|src/fake\\.rs)'",
 ]
 
 [tasks.mutants]

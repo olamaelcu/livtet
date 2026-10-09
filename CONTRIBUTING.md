@@ -72,18 +72,25 @@ sea-orm derive paths.
 the suite once, prints a per-file summary, and writes a browsable
 report to `target/llvm-cov/html/index.html`.
 
-**The floor is 80% workspace-wide line coverage.** `mise run
+**The floor is 90% workspace-wide line coverage.** `mise run
 coverage-check` fails below it. The floor is deliberately workspace-wide
 rather than per-crate: a handful of files are dominated by process
 lifecycle — `livtet-sync-server`'s `daemon.rs` most of all, with its
 socket binding, signal handling and shutdown — where a test that
 *executes* the lines verifies almost nothing, and the harness to reach
-them costs more than it returns. Holding every crate to 80%
+them costs more than it returns. Holding every crate to 90%
 independently would force that work; holding the workspace to it does
 not. If you drop a crate well below the floor, say why in the PR.
 
-Two things the number does not include:
+Three things the number does not include:
 
+- Test-data scaffolding: `livtet-types/src/fake.rs` and the
+  `#[cfg(feature = "fake")] impl fake::Dummy` blocks in
+  `livtet-data/src/{entities,client_entities}`. These generate fixtures
+  for *other* crates' tests, so nothing in a coverage run ever executes
+  them and no test of them would assert anything about behaviour. They
+  are filtered with `--ignore-filename-regex`; every excluded file is
+  0% covered, so nothing covered is being hidden.
 - `livtet-ffi` and `livtet-ruby`. The uniffi bindings contract test is
   slow and the Ruby crate is a `magnus` cdylib exercised from
   `livtet-ruby/test`, so neither is worth instrumenting from here.
