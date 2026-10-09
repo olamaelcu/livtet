@@ -154,6 +154,79 @@ mod tests {
         let parsed: DiskPath = s.parse().unwrap();
         assert_eq!(path, parsed);
     }
+
+    #[test]
+    fn constructors_and_accessors_agree_on_the_inner_path() {
+        assert_eq!(DiskPath::new(), DiskPath::default());
+        assert!(DiskPath::new().as_path().as_str().is_empty());
+
+        let path = camino::Utf8Path::new("/books/a.epub");
+        let dp = DiskPath::from_path(path);
+        assert_eq!(dp.as_path(), path);
+        assert_eq!(dp.clone().into_path_buf(), path.to_path_buf());
+        assert_eq!(DiskPath::from(path.to_path_buf()), dp);
+        // Deref reaches Utf8Path's own API.
+        assert_eq!(dp.extension(), Some("epub"));
+    }
+
+    #[test]
+    fn serde_uses_the_bare_path_string() {
+        let dp = DiskPath::from_path(camino::Utf8Path::new("/books/a.epub"));
+        let json = serde_json::to_string(&dp).expect("serialize");
+        assert_eq!(json, "\"/books/a.epub\"");
+        assert_eq!(
+            serde_json::from_str::<DiskPath>(&json).expect("deserialize"),
+            dp
+        );
+    }
+
+    #[test]
+    fn value_round_trips_as_text() {
+        use sea_orm::Value;
+        use sea_orm::sea_query::ValueType;
+        let dp = DiskPath::from_path(camino::Utf8Path::new("/books/a.epub"));
+        assert_eq!(
+            Value::from(dp.clone()),
+            Value::String(Some("/books/a.epub".to_string()))
+        );
+        assert_eq!(
+            <DiskPath as ValueType>::try_from(Value::from(dp.clone())).expect("round trip"),
+            dp
+        );
+    }
+
+    #[test]
+    fn value_type_rejects_non_string_variants() {
+        use sea_orm::Value;
+        use sea_orm::sea_query::ValueType;
+        for value in [
+            Value::BigInt(Some(1)),
+            Value::String(None),
+            Value::Bool(Some(true)),
+        ] {
+            assert!(
+                <DiskPath as ValueType>::try_from(value.clone()).is_err(),
+                "{value:?} must not convert"
+            );
+        }
+    }
+
+    #[test]
+    fn value_type_metadata_describes_a_text_column() {
+        use sea_orm::Value;
+        use sea_orm::sea_query::{ArrayType, ColumnType, Nullable, ValueType};
+        assert_eq!(<DiskPath as ValueType>::type_name(), "DiskPath");
+        assert_eq!(<DiskPath as ValueType>::array_type(), ArrayType::String);
+        assert_eq!(<DiskPath as ValueType>::column_type(), ColumnType::Text);
+        assert_eq!(<DiskPath as Nullable>::null(), Value::String(None));
+    }
+
+    /// A path has no integer identity; the impl exists only for sea-orm.
+    #[test]
+    fn cannot_be_built_from_a_u64() {
+        use sea_orm::TryFromU64;
+        assert!(DiskPath::try_from_u64(1).is_err());
+    }
 }
 
 #[cfg(all(test, feature = "uniffi"))]

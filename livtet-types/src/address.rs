@@ -223,4 +223,50 @@ mod tests {
             "Address should resolve through to a string primitive when inlined, got {inline_dt:?}"
         );
     }
+
+    #[test]
+    fn constructors_and_deref_agree_on_the_inner_socket_addr() {
+        let addr: SocketAddr = "127.0.0.1:3121".parse().expect("valid addr");
+        let a = Address::new(addr);
+        assert_eq!(a.0, addr);
+        // Deref reaches SocketAddr's own API.
+        assert_eq!(a.port(), 3121);
+        assert_eq!(a.clone().into_inner(), addr);
+    }
+
+    #[test]
+    fn value_type_round_trips_and_rejects_other_variants() {
+        use sea_orm::Value;
+        use sea_orm::sea_query::ValueType;
+        let a = Address::new("127.0.0.1:3121".parse().expect("valid addr"));
+        assert_eq!(
+            <Address as ValueType>::try_from(Value::from(a.clone())).expect("round trip"),
+            a
+        );
+        for value in [
+            Value::String(Some("not-an-address".to_string())),
+            Value::BigInt(Some(1)),
+            Value::String(None),
+        ] {
+            assert!(
+                <Address as ValueType>::try_from(value.clone()).is_err(),
+                "{value:?} must not convert"
+            );
+        }
+    }
+
+    #[test]
+    fn value_type_metadata_describes_a_text_column() {
+        use sea_orm::sea_query::{ArrayType, ColumnType, ValueType};
+        assert_eq!(<Address as ValueType>::type_name(), "Address");
+        assert_eq!(<Address as ValueType>::array_type(), ArrayType::String);
+        assert_eq!(<Address as ValueType>::column_type(), ColumnType::Text);
+    }
+
+    /// `host:port` has no integer identity; the impl exists only for sea-orm.
+    #[test]
+    fn cannot_be_built_from_a_u64() {
+        use sea_orm::TryFromU64;
+        assert!(Address::try_from_u64(1).is_err());
+    }
 }

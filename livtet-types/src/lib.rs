@@ -313,3 +313,160 @@ pub const PAIRING_STATUS_TIME_MS: u64 = DEVICE_TYPE_TIME_MS + 1;
 pub const KNOWN_SUBJECT_TIME_MS: u64 = PAIRING_STATUS_TIME_MS + 1;
 pub const BOOK_CONDITION_TIME_MS: u64 = KNOWN_SUBJECT_TIME_MS + 1;
 pub const KNOWN_READING_SOURCE_TIME_MS: u64 = BOOK_CONDITION_TIME_MS + 1;
+
+#[cfg(test)]
+mod tests {
+    /// Generates the contract every [`urn_enum!`] type satisfies.
+    ///
+    /// The expansions all land here at the macro definition site rather than
+    /// in the five modules that invoke it, so this is where they have to be
+    /// exercised from. As with the `Known*` enums, the assertions cross-check
+    /// independently written `match` arms -- `all()`, `as_str()`, `name()`,
+    /// `to_urn()` and `From<Ulid>` are five separate lists, and adding a
+    /// variant to some but not all of them fails here.
+    macro_rules! urn_enum_contract {
+        ($mod_name:ident, $ty:ty, $time_ms:expr, $prefix:literal, $first:expr, $count:expr) => {
+            mod $mod_name {
+                use ulid::Ulid;
+
+                #[test]
+                fn all_enumerates_a_gapless_discriminant_block() {
+                    let discriminants: Vec<u128> =
+                        <$ty>::all().iter().map(|v| *v as u128).collect();
+                    let expected: Vec<u128> = ($first..$first + $count).collect();
+                    assert_eq!(
+                        discriminants, expected,
+                        "all() must list every variant in discriminant order, with no \
+                         gaps, duplicates, or omissions"
+                    );
+                }
+
+                #[test]
+                fn snake_and_display_forms_are_present_and_unique() {
+                    for (label, forms) in [
+                        (
+                            "as_str",
+                            <$ty>::all().iter().map(|v| v.as_str()).collect::<Vec<_>>(),
+                        ),
+                        (
+                            "name",
+                            <$ty>::all().iter().map(|v| v.name()).collect::<Vec<_>>(),
+                        ),
+                    ] {
+                        for (variant, form) in <$ty>::all().iter().zip(&forms) {
+                            assert!(!form.trim().is_empty(), "{variant:?} has a blank {label}");
+                        }
+                        let mut deduped = forms.clone();
+                        deduped.sort_unstable();
+                        deduped.dedup();
+                        assert_eq!(
+                            deduped.len(),
+                            forms.len(),
+                            "{label} collides between two variants"
+                        );
+                    }
+                }
+
+                #[test]
+                fn ulid_encodes_the_enum_timestamp_and_discriminant() {
+                    for variant in <$ty>::all() {
+                        let ulid = variant.ulid();
+                        assert_eq!(
+                            ulid.timestamp_ms(),
+                            $time_ms,
+                            "{variant:?} must use this enum's own timestamp constant"
+                        );
+                        assert_eq!(ulid.random(), variant as u128, "{variant:?}");
+                    }
+                }
+
+                #[test]
+                fn ulid_round_trips_through_from() {
+                    for variant in <$ty>::all() {
+                        assert_eq!(<$ty as From<Ulid>>::from(variant.ulid()), variant);
+                    }
+                }
+
+                #[test]
+                #[should_panic(expected = "Unknown ULID")]
+                fn from_ulid_rejects_a_discriminant_past_the_block() {
+                    let past_end = Ulid::from_parts($time_ms, $first + $count);
+                    let _ = <$ty as From<Ulid>>::from(past_end);
+                }
+
+                #[test]
+                fn urn_is_the_prefix_plus_the_discriminant() {
+                    let urns: Vec<String> = <$ty>::all().iter().map(|v| v.to_urn()).collect();
+                    for (variant, urn) in <$ty>::all().iter().zip(&urns) {
+                        assert_eq!(
+                            *urn,
+                            format!("{}{}", $prefix, *variant as u16),
+                            "{variant:?}"
+                        );
+                        assert!(urn.starts_with("urn:livtet:"), "{variant:?}: {urn}");
+                    }
+                    let mut deduped = urns.clone();
+                    deduped.sort_unstable();
+                    deduped.dedup();
+                    assert_eq!(deduped.len(), urns.len(), "two variants share a urn");
+                }
+
+                #[test]
+                fn conversions_agree_with_urn_and_ulid() {
+                    for variant in <$ty>::all() {
+                        assert_eq!(String::from(variant), variant.to_urn());
+                        assert_eq!(crate::DbId::from(variant).0, variant.ulid());
+                        assert_eq!(
+                            sea_orm::Value::from(variant),
+                            sea_orm::Value::String(Some(variant.to_urn()))
+                        );
+                    }
+                }
+            }
+        };
+    }
+
+    // Timestamp constants are written out rather than read back from the
+    // source: each one is part of the on-disk ULID form, so a test that
+    // referenced the same constant would pass through any change to it.
+    urn_enum_contract!(
+        work_status,
+        crate::work_status::WorkStatus,
+        1_735_689_600_300,
+        "urn:livtet:work/status/",
+        300,
+        6
+    );
+    urn_enum_contract!(
+        book_condition,
+        crate::book_condition::BookCondition,
+        1_778_544_000_006,
+        "urn:livtet:book-cond/",
+        700,
+        4
+    );
+    urn_enum_contract!(
+        series_type,
+        crate::series_type::SeriesType,
+        1_735_689_600_200,
+        "urn:livtet:series/",
+        200,
+        3
+    );
+    urn_enum_contract!(
+        pairing_status,
+        crate::pairing_status::PairingStatus,
+        1_778_544_000_004,
+        "urn:livtet:pairing/",
+        500,
+        3
+    );
+    urn_enum_contract!(
+        contributor_role,
+        crate::contributor_role::ContributorRole,
+        1_735_689_600_600,
+        "urn:livtet:contrib/",
+        600,
+        8
+    );
+}

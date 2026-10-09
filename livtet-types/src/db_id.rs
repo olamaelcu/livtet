@@ -260,4 +260,99 @@ mod uniffi_tests {
         let buf = <String as FfiConverter<UniFfiTag>>::lower("not-a-ulid".to_string());
         assert!(<DbId as FfiConverter<UniFfiTag>>::try_lift(buf).is_err());
     }
+
+    #[test]
+    fn new_mints_distinct_ids() {
+        assert_ne!(DbId::new(), DbId::new());
+        assert_eq!(DbId::default(), DbId(Ulid::nil()));
+    }
+
+    #[test]
+    fn deref_exposes_the_inner_ulid() {
+        let id: DbId = "01ARZ3NDEKTSV4RRFFQ69G5FAV".parse().expect("valid ULID");
+        assert_eq!(id.timestamp_ms(), id.0.timestamp_ms());
+    }
+
+    #[test]
+    fn serde_uses_the_canonical_string_form() {
+        let id: DbId = "01ARZ3NDEKTSV4RRFFQ69G5FAV".parse().expect("valid ULID");
+        let json = serde_json::to_string(&id).expect("serialize");
+        assert_eq!(json, "\"01ARZ3NDEKTSV4RRFFQ69G5FAV\"");
+        assert_eq!(
+            serde_json::from_str::<DbId>(&json).expect("deserialize"),
+            id
+        );
+        assert!(
+            serde_json::from_str::<DbId>("\"nope\"").is_err(),
+            "a non-ULID string must not deserialize"
+        );
+    }
+
+    /// Stored as BINARY(16), but the column is also read back from a string
+    /// form, so `ValueType` has to accept both.
+    #[test]
+    fn value_round_trips_as_bytes_and_accepts_the_string_form() {
+        use sea_orm::Value;
+        use sea_orm::sea_query::ValueType;
+        let id: DbId = "01ARZ3NDEKTSV4RRFFQ69G5FAV".parse().expect("valid ULID");
+        assert_eq!(Value::from(id), Value::Bytes(Some(id.to_bytes().to_vec())));
+        assert_eq!(
+            <DbId as ValueType>::try_from(Value::from(id)).expect("bytes round trip"),
+            id
+        );
+        assert_eq!(
+            <DbId as ValueType>::try_from(Value::String(Some(
+                "01ARZ3NDEKTSV4RRFFQ69G5FAV".to_string()
+            )))
+            .expect("string form"),
+            id
+        );
+    }
+
+    #[test]
+    fn value_type_rejects_wrong_widths_and_wrong_variants() {
+        use sea_orm::Value;
+        use sea_orm::sea_query::ValueType;
+        for value in [
+            Value::Bytes(Some(vec![0u8; 15])),
+            Value::Bytes(Some(vec![0u8; 17])),
+            Value::String(Some("not-a-ulid".to_string())),
+            Value::BigInt(Some(1)),
+            Value::Bytes(None),
+        ] {
+            assert!(
+                <DbId as ValueType>::try_from(value.clone()).is_err(),
+                "{value:?} must not convert"
+            );
+        }
+    }
+
+    #[test]
+    fn value_type_metadata_describes_a_binary_16_column() {
+        use sea_orm::Value;
+        use sea_orm::sea_query::{ArrayType, ColumnType, Nullable, ValueType};
+        assert_eq!(<DbId as ValueType>::type_name(), "DbId");
+        assert_eq!(<DbId as ValueType>::array_type(), ArrayType::Bytes);
+        assert_eq!(<DbId as ValueType>::column_type(), ColumnType::Binary(16));
+        assert_eq!(<DbId as Nullable>::null(), Value::Bytes(None));
+    }
+
+    /// A ULID carries no integer identity, so the impl exists only to satisfy
+    /// sea-orm and must refuse.
+    #[test]
+    fn cannot_be_built_from_a_u64() {
+        use sea_orm::TryFromU64;
+        assert!(DbId::try_from_u64(1).is_err());
+    }
+
+    #[test]
+    fn specta_describes_it_as_a_string() {
+        let mut types = specta::Types::default();
+        let def = <DbId as Type>::definition(&mut types);
+        assert_eq!(
+            format!("{def:?}"),
+            format!("{:?}", <str as Type>::definition(&mut types)),
+            "serialized as a string, so it must surface as one"
+        );
+    }
 }
