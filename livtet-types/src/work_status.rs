@@ -101,7 +101,7 @@ mod tests {
         // Each arm of the parse: wrong prefix, unparseable discriminant,
         // in-range-looking but unknown discriminant, and a non-string Value.
         let cases = [
-            Value::String(Some("urn:livtet:book-cond/700".to_string())),
+            Value::String(Some("urn:livtet:bookCondition/700".to_string())),
             Value::String(Some("urn:livtet:work/status/not-a-number".to_string())),
             Value::String(Some("urn:livtet:work/status/999".to_string())),
             Value::BigInt(Some(300)),

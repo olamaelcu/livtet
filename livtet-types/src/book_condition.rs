@@ -15,7 +15,7 @@ pub enum BookCondition {
 urn_enum!(
     BookCondition,
     crate::BOOK_CONDITION_TIME_MS,
-    "urn:livtet:book-cond/";
+    "urn:livtet:bookCondition/";
     (New = 700, "new", "New"),
     (Used = 701, "used", "Used"),
     (Good = 702, "good", "Good"),

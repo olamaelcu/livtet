@@ -441,7 +441,7 @@ mod tests {
         book_condition,
         crate::book_condition::BookCondition,
         1_778_544_000_006,
-        "urn:livtet:book-cond/",
+        "urn:livtet:bookCondition/",
         700,
         4
     );
