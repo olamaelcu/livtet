@@ -142,3 +142,94 @@ impl Constraint {
         Self::iter()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::str::FromStr as _;
+
+    use super::Constraint;
+
+    #[test]
+    fn every_variant_has_a_message_about_the_thing_it_references() {
+        for constraint in Constraint::all() {
+            let message = constraint.human_readable();
+            assert!(!message.trim().is_empty(), "{constraint:?} has no message");
+            // These are all foreign keys, so every message is about a missing
+            // referent — the message is shown to a user, not logged.
+            assert!(
+                message.starts_with("Referenced "),
+                "{constraint:?}: {message:?}"
+            );
+            assert!(
+                message.ends_with(" does not exist"),
+                "{constraint:?}: {message:?}"
+            );
+        }
+    }
+
+    /// The name is what reaches the database, via `.name()` in a migration,
+    /// and what [`crate::ConstraintViolation::enhance_db_err`] searches a
+    /// driver error for. Two variants sharing one name would make that search
+    /// ambiguous.
+    #[test]
+    fn names_are_prefixed_snake_case_and_unique() {
+        let names: Vec<String> = Constraint::all().map(|c| c.to_string()).collect();
+        for name in &names {
+            assert!(name.starts_with("fk_"), "{name:?} is not fk_-prefixed");
+            assert!(
+                name.chars()
+                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_'),
+                "{name:?} is not snake_case"
+            );
+        }
+        let mut deduped = names.clone();
+        deduped.sort_unstable();
+        deduped.dedup();
+        assert_eq!(
+            deduped.len(),
+            names.len(),
+            "two constraints share a name, which would make error matching ambiguous"
+        );
+    }
+
+    /// Pins an asymmetry rather than endorsing it: strum applies
+    /// `prefix = "fk_"` to `Display` but not to `EnumString`, so a
+    /// `Constraint` does **not** parse back from the name it prints.
+    /// `FromStr` wants the unprefixed form.
+    ///
+    /// Nothing outside this module parses a `Constraint` today — the name is
+    /// only ever written out, into a migration's `.name()` and into
+    /// `enhance_db_err`'s substring scan — so this is a latent trap rather
+    /// than a live bug. Rewrite this test if the derive is ever made
+    /// symmetric; the failure will tell you it happened.
+    #[test]
+    fn from_str_wants_the_unprefixed_name_that_display_does_not_print() {
+        for constraint in Constraint::all() {
+            let printed = constraint.to_string();
+            let unprefixed = printed
+                .strip_prefix("fk_")
+                .expect("Display is fk_-prefixed");
+
+            assert_eq!(
+                Constraint::from_str(unprefixed).expect(unprefixed),
+                constraint
+            );
+            assert!(
+                Constraint::from_str(&printed).is_err(),
+                "{printed} parsed, so Display and FromStr now agree"
+            );
+        }
+        assert!(Constraint::from_str("not_a_constraint").is_err());
+    }
+
+    /// `all()` is what `enhance_db_err` scans, so a variant missing from it
+    /// would silently stop producing its message.
+    #[test]
+    fn all_yields_every_variant_once() {
+        let count = Constraint::all().count();
+        let mut seen: Vec<Constraint> = Constraint::all().collect();
+        seen.dedup();
+        assert_eq!(seen.len(), count, "all() repeats a variant");
+        assert!(count >= 50, "expected the full constraint set, got {count}");
+    }
+}

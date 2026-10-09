@@ -784,14 +784,6 @@ impl MigrationTrait for Migration {
         manager
             .drop_table(
                 Table::drop()
-                    .table(EditionGroups::Table)
-                    .if_exists()
-                    .to_owned(),
-            )
-            .await?;
-        manager
-            .drop_table(
-                Table::drop()
                     .table(WorkIdentifiers::Table)
                     .if_exists()
                     .to_owned(),
@@ -834,6 +826,19 @@ impl MigrationTrait for Migration {
             .await?;
         manager
             .drop_table(Table::drop().table(Editions::Table).if_exists().to_owned())
+            .await?;
+        // After `editions`, not before: `editions.group_id` references
+        // `edition_groups`, and SQLite refuses to drop a table whose foreign
+        // key points at one that is already gone ("no such table:
+        // main.edition_groups"). Reverse creation order puts the referencing
+        // table first.
+        manager
+            .drop_table(
+                Table::drop()
+                    .table(EditionGroups::Table)
+                    .if_exists()
+                    .to_owned(),
+            )
             .await?;
         manager
             .drop_table(Table::drop().table(Works::Table).if_exists().to_owned())

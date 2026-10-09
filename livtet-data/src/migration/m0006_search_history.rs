@@ -37,6 +37,23 @@ impl MigrationTrait for Migration {
             )
             .await
     }
+
+    /// Dropping the table takes its index with it, as in every sibling
+    /// migration. Without this, `MigrationTrait`'s default `down` errors
+    /// ("We Don't Do That Here") and the whole business schema becomes
+    /// unrollable past this point.
+    async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+        manager
+            .drop_table(
+                Table::drop()
+                    .table(SearchHistory::Table)
+                    .if_exists()
+                    .to_owned(),
+            )
+            .await?;
+
+        Ok(())
+    }
 }
 
 #[derive(DeriveIden)]
