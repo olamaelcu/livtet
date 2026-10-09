@@ -50,3 +50,67 @@ impl From<AvailabilitySearch> for UserInputAst {
         value.into_ast()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::AvailabilitySearch;
+    use tantivy_query_grammar::UserInputAst;
+
+    /// These are presence predicates, so `value: false` has to negate the
+    /// existence check rather than test for an empty value -- the module doc
+    /// is explicit that empty is its own state.
+    #[test]
+    fn each_variant_checks_existence_of_its_own_field() {
+        let cases = [
+            (AvailabilitySearch::HasCover { value: true }, "cover"),
+            (AvailabilitySearch::HasNotes { value: true }, "notes"),
+            (
+                AvailabilitySearch::HasAttachments { value: true },
+                "attachments",
+            ),
+            (AvailabilitySearch::HasFullText { value: true }, "full_text"),
+            (
+                AvailabilitySearch::HasInventory { value: true },
+                "inventory_rows",
+            ),
+        ];
+        for (filter, field) in cases {
+            assert_eq!(
+                format!("{:?}", filter.into_ast()),
+                format!("$exists({field:?})")
+            );
+            assert_eq!(
+                format!("{:?}", UserInputAst::from(filter.clone())),
+                format!("{:?}", filter.into_ast())
+            );
+        }
+    }
+
+    #[test]
+    fn a_false_value_negates_the_existence_check() {
+        for (yes, no) in [
+            (
+                AvailabilitySearch::HasCover { value: true },
+                AvailabilitySearch::HasCover { value: false },
+            ),
+            (
+                AvailabilitySearch::HasInventory { value: true },
+                AvailabilitySearch::HasInventory { value: false },
+            ),
+        ] {
+            let positive = format!("{:?}", yes.into_ast());
+            assert_eq!(format!("{:?}", no.into_ast()), format!("(-{positive})"));
+        }
+    }
+
+    #[test]
+    fn serde_tags_the_variant_and_nests_its_flag() {
+        let filter = AvailabilitySearch::HasCover { value: false };
+        let json = serde_json::to_string(&filter).expect("serialize");
+        assert_eq!(json, r#"{"type":"has_cover","value":{"value":false}}"#);
+        assert_eq!(
+            serde_json::from_str::<AvailabilitySearch>(&json).expect("deserialize"),
+            filter
+        );
+    }
+}

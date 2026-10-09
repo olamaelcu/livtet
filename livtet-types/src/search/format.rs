@@ -39,3 +39,60 @@ impl From<FormatSearch> for UserInputAst {
         value.into_ast()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::FormatSearch;
+    use tantivy_query_grammar::UserInputAst;
+
+    /// Each variant names a different indexed field, and the value is emitted
+    /// undelimited -- these are facet-ish equality checks, not phrases.
+    #[test]
+    fn each_variant_targets_its_own_field() {
+        let cases = [
+            (
+                FormatSearch::ByFormat {
+                    label: "epub".into(),
+                },
+                r#""format":epub"#,
+            ),
+            (
+                FormatSearch::ByLanguage { code: "en".into() },
+                r#""language":en"#,
+            ),
+            (
+                FormatSearch::ByItemType {
+                    kind: "audiobook".into(),
+                },
+                r#""item_type":audiobook"#,
+            ),
+            (
+                FormatSearch::ByReadStatus {
+                    status: "finished".into(),
+                },
+                r#""read_status":finished"#,
+            ),
+        ];
+        for (filter, expected) in cases {
+            assert_eq!(format!("{:?}", filter.into_ast()), expected);
+            // The From impl must delegate rather than build its own tree.
+            assert_eq!(
+                format!("{:?}", UserInputAst::from(filter.clone())),
+                format!("{:?}", filter.into_ast())
+            );
+        }
+    }
+
+    #[test]
+    fn serde_tags_the_variant_and_nests_its_value() {
+        let filter = FormatSearch::ByFormat {
+            label: "epub".into(),
+        };
+        let json = serde_json::to_string(&filter).expect("serialize");
+        assert_eq!(json, r#"{"type":"by_format","value":{"label":"epub"}}"#);
+        assert_eq!(
+            serde_json::from_str::<FormatSearch>(&json).expect("deserialize"),
+            filter
+        );
+    }
+}

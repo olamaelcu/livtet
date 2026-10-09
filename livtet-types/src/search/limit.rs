@@ -87,4 +87,77 @@ mod tests {
     fn placeholder_used_to_avoid_dead_code_warning() {
         let _ = field_exists("x");
     }
+
+    /// Every variant maps to a named field and stringifies its payload; the
+    /// expectations name the field and the rendered value rather than
+    /// re-deriving them, so a swapped field name fails here.
+    #[test]
+    fn each_variant_maps_to_its_field_and_stringified_value() {
+        use crate::search::dsl::{field_term, range_inclusive};
+        let cases: Vec<(LimitSearch, UserInputAst)> = vec![
+            (
+                LimitSearch::ByYear { year: 1989 },
+                field_term("published_year", "1989"),
+            ),
+            (
+                LimitSearch::ByYearRange {
+                    lower: 1980,
+                    upper: 1989,
+                },
+                range_inclusive("published_year", "1980", "1989"),
+            ),
+            (
+                LimitSearch::ByDateAdded {
+                    from: "2026-01-01".into(),
+                    to: "2026-12-31".into(),
+                },
+                range_inclusive("created_at", "2026-01-01", "2026-12-31"),
+            ),
+            (
+                LimitSearch::ByRating { value: 5 },
+                field_term("rating", "5"),
+            ),
+            (
+                LimitSearch::BySeriesIndex { index: 3 },
+                field_term("series_index", "3"),
+            ),
+            (
+                LimitSearch::ByFileSize { bytes: 1024 },
+                field_term("file_size", "1024"),
+            ),
+            (
+                LimitSearch::ByPageCount { pages: 662 },
+                field_term("page_count", "662"),
+            ),
+        ];
+        for (filter, expected) in cases {
+            assert_eq!(
+                format!("{:?}", filter.into_ast()),
+                format!("{expected:?}"),
+                "{filter:?}"
+            );
+            // The From impl must delegate rather than build its own tree.
+            assert_eq!(
+                format!("{:?}", UserInputAst::from(filter.clone())),
+                format!("{:?}", filter.into_ast())
+            );
+        }
+    }
+
+    #[test]
+    fn serde_tags_the_variant_and_nests_its_payload() {
+        let filter = LimitSearch::ByYearRange {
+            lower: 1980,
+            upper: 1989,
+        };
+        let json = serde_json::to_string(&filter).expect("serialize");
+        assert_eq!(
+            json,
+            r#"{"type":"by_year_range","value":{"lower":1980,"upper":1989}}"#
+        );
+        assert_eq!(
+            serde_json::from_str::<LimitSearch>(&json).expect("deserialize"),
+            filter
+        );
+    }
 }
