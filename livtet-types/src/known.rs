@@ -1562,10 +1562,22 @@ mod tests {
     #[case("es", true)]
     #[case("ja", true)]
     #[case("en-GB", true)]
+    // `az` is not a seeded CommonLanguage, so it falls through to the
+    // language->country mapping and the country_code_to_flag builder.
+    #[case("az", true)]
     #[case("zz", false)]
     #[case("", false)]
     fn flag_emoji_for_resolves_only_mapped_codes(#[case] code: &str, #[case] mapped: bool) {
         assert_eq!(flag_emoji_for(code).is_some(), mapped);
+    }
+
+    #[test]
+    fn flag_fallback_builds_a_regional_indicator_pair() {
+        // The fallback path renders a two-codepoint flag emoji from the
+        // mapped country code (e.g. Azerbaijani -> AZ -> 🇦🇿).
+        let flag = flag_emoji_for("az").expect("az maps to a country flag");
+        assert_eq!(flag.chars().count(), 2, "a flag is a regional-indicator pair");
+        assert!(flag.chars().all(|c| ('\u{1F1E6}'..='\u{1F1FF}').contains(&c)));
     }
 
     // ─── KnownReadingSources accessors ───────────────────────────────────

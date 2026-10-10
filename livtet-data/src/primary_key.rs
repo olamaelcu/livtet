@@ -124,3 +124,20 @@ impl PrimaryKey {
         Self::iter()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_primary_key_has_a_human_readable_description() {
+        // `enhance_db_err` prefixes raw DB errors with these strings, so every
+        // variant must map to a non-empty, distinct description.
+        let mut seen = std::collections::HashSet::new();
+        for pk in PrimaryKey::all() {
+            let text = pk.human_readable();
+            assert!(!text.is_empty(), "{pk:?} has an empty description");
+            assert!(seen.insert(text), "{pk:?} reuses description {text:?}");
+        }
+    }
+}
