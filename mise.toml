@@ -28,12 +28,12 @@ run = ["cargo test --doc --workspace", "cargo test --workspace --all-targets"]
 description = "Measure line/region coverage for the Rust crates (excludes livtet-ffi, livtet-ruby, and test-data scaffolding). HTML report: target/llvm-cov/html/index.html"
 run = [
   "cargo llvm-cov --no-report --workspace --all-targets --exclude livtet-ffi --exclude livtet-ruby",
-  "cargo llvm-cov report --summary-only --ignore-filename-regex '(/entities/|src/fake\\.rs|livtet-data/src/seed\\.rs)'",
+  "regex=$(grep -vE '^[[:space:]]*(#|$)' coverage-ignore.txt | paste -sd'|' -) && [ -n \"$regex\" ] && cargo llvm-cov report --summary-only --ignore-filename-regex \"($regex)\"",
 ]
 
 [tasks."coverage:html"]
 depends = ["coverage"]
-run = "cargo llvm-cov report --html --ignore-filename-regex '(/entities/|src/fake\\.rs|livtet-data/src/seed\\.rs)'"
+run = "regex=$(grep -vE '^[[:space:]]*(#|$)' coverage-ignore.txt | paste -sd'|' -) && [ -n \"$regex\" ] && cargo llvm-cov report --html --ignore-filename-regex \"($regex)\""
 
 [tasks.coverage-clean]
 description = "Coverage from a full rebuild. Use this for any number you intend to quote: orphaned objects from deleted or renamed source otherwise linger in target/llvm-cov-target and keep getting reported. `cargo llvm-cov clean` cannot remove them (that dir has no CACHEDIR.TAG, so cargo refuses), hence the rm."
@@ -43,7 +43,7 @@ run = ["rm -rf target/llvm-cov-target target/llvm-cov", "mise run coverage"]
 description = "Fail when workspace line coverage drops below 90%. The floor is workspace-wide, not per-crate: see the Coverage section in CONTRIBUTING.md for what is excluded and why."
 run = [
   "cargo llvm-cov --no-report --workspace --all-targets --exclude livtet-ffi --exclude livtet-ruby",
-  "cargo llvm-cov report --summary-only --fail-under-lines 90 --ignore-filename-regex '(/entities/|src/fake\\.rs|livtet-data/src/seed\\.rs)'",
+  "regex=$(grep -vE '^[[:space:]]*(#|$)' coverage-ignore.txt | paste -sd'|' -) && [ -n \"$regex\" ] && cargo llvm-cov report --summary-only --fail-under-lines 90 --ignore-filename-regex \"($regex)\"",
 ]
 
 [tasks.mutants]

@@ -1,0 +1,15 @@
+# Files excluded from the coverage denominator.
+#
+# Each non-blank, non-comment line is one extended-regex fragment matched
+# against a file's path by `cargo llvm-cov --ignore-filename-regex`; the
+# fragments are OR-joined. Escape a literal dot as `\.`. The `coverage`,
+# `coverage:html`, and `coverage-check` mise tasks all read this file, so
+# excluding a new file is a one-line edit here. See the Coverage section of
+# CONTRIBUTING.md for the rationale behind each entry.
+
+# Generated SeaORM entity models — no hand-written logic to test.
+/entities/
+
+# `fake`-feature dev/test scaffolding, compiled only to generate test data.
+src/fake\.rs
+livtet-data/src/seed\.rs

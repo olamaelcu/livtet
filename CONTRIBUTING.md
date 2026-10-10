@@ -84,13 +84,17 @@ not. If you drop a crate well below the floor, say why in the PR.
 
 Three things the number does not include:
 
-- Test-data scaffolding: `livtet-types/src/fake.rs` and the
-  `#[cfg(feature = "fake")] impl fake::Dummy` blocks in
-  `livtet-data/src/{entities,client_entities}`. These generate fixtures
-  for *other* crates' tests, so nothing in a coverage run ever executes
-  them and no test of them would assert anything about behaviour. They
-  are filtered with `--ignore-filename-regex`; every excluded file is
-  0% covered, so nothing covered is being hidden.
+- Test-data scaffolding: `livtet-types/src/fake.rs`,
+  `livtet-data/src/seed.rs`, and the `#[cfg(feature = "fake")] impl
+  fake::Dummy` blocks in `livtet-data/src/{entities,client_entities}`.
+  These generate fixtures for *other* crates' tests, so nothing in a
+  coverage run ever executes them and no test of them would assert
+  anything about behaviour. The exclusion patterns live in
+  `coverage-ignore.txt` (one extended-regex fragment per line; blank and
+  `#` lines ignored) and are applied via `--ignore-filename-regex` by all
+  three coverage tasks — to exclude a new file, add a line there rather
+  than editing `mise.toml`. Every excluded file is 0% covered, so nothing
+  covered is being hidden.
 - `livtet-ffi` and `livtet-ruby`. The uniffi bindings contract test is
   slow and the Ruby crate is a `magnus` cdylib exercised from
   `livtet-ruby/test`, so neither is worth instrumenting from here.
