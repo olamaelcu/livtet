@@ -14,8 +14,8 @@
 use livtet_cli_common::Context;
 use livtet_cli_common::edition::{add_file, list_files_rows, remove_file};
 use livtet_cli_common::editions::{get_detail, list_rows, search_rows};
-use livtet_data::orm::ConnectionTrait;
 use livtet_test_utils::cli::CliFixture;
+use livtet_test_utils::fault;
 
 fn context(fx: &CliFixture) -> Context {
     Context {
@@ -26,10 +26,7 @@ fn context(fx: &CliFixture) -> Context {
 
 /// Rename `table` so the next query against it fails with "no such table".
 async fn hide_table(fx: &CliFixture, table: &str) {
-    fx.conn()
-        .execute_unprepared(&format!("ALTER TABLE {table} RENAME TO {table}_hidden"))
-        .await
-        .unwrap_or_else(|e| panic!("hide {table}: {e}"));
+    fault::hide_table(fx.pool(), table).await;
 }
 
 /// Every table `editions get` reads, in the order it reads them.

@@ -252,8 +252,6 @@ pub mod work_status;
 // ── Migrations schema helpers (always included) ────────────────────
 
 pub mod iden;
-pub mod migration;
-pub use migration::{db_id as mig_db_id, timestamps as mig_timestamps};
 
 // ── Feature-gated modules ─────────────────────────────────────────
 

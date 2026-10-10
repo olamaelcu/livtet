@@ -1,0 +1,5 @@
+---
+source: livtet-test-utils/src/snapshot.rs
+expression: LINKED
+---
+  On-disk: * /books/a.epub

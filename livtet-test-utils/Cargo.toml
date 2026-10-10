@@ -19,6 +19,12 @@ cli = [
   "dep:fs-err",
   "dep:serde_json",
 ]
+# Deterministic snapshot settings: insta filters that scrub terminal escapes,
+# ULIDs, and temp paths out of rendered output (see [`snapshot`]).
+snapshot = ["dep:insta", "dep:regex"]
+# Fault injection: make a query, an open, or a bind fail on purpose, so the
+# `.map_err` arms become reachable from a test (see [`fault`]).
+fault = ["dep:livtet-data", "dep:camino", "dep:fs-err"]
 
 [dependencies]
 livtet-data = { workspace = true, features = ["fake"], optional = true }
@@ -27,4 +33,11 @@ livtet-sync = { workspace = true, optional = true }
 livtet-types = { workspace = true, optional = true }
 camino = { workspace = true, optional = true }
 fs-err = { workspace = true, optional = true }
+insta = { workspace = true, features = ["filters"], optional = true }
+regex = { workspace = true, optional = true }
 serde_json = { workspace = true, optional = true }
+
+[dev-dependencies]
+# The `fault` module's own tests reserve temp directories to make files
+# unreadable and to site a verified-absent path.
+camino-tempfile = { workspace = true }

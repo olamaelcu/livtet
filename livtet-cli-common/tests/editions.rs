@@ -5,7 +5,8 @@
 
 use livtet_cli_common::Context;
 use livtet_cli_common::editions::{
-    EditionDetail, get_detail, linkify_with, list_rows, render_detail, render_table, search_rows,
+    EditionDetail, get_detail, linkify_with, list_rows, render_detail, render_detail_with,
+    render_table, search_rows,
 };
 use livtet_test_utils::cli::CliFixture;
 
@@ -169,24 +170,64 @@ async fn rendered_list_table_is_stable() {
     insta::assert_snapshot!(render_table(&rows));
 }
 
+/// Renders paths bare, as a non-TTY would.
+///
+/// The snapshots must not go through `render_detail`: it hyperlinks the
+/// on-disk path only when stdout is a plain terminal, so the same input
+/// produces different bytes depending on how the test process's stdout is
+/// attached — a snapshot recorded in a terminal fails when output is
+/// captured, and vice versa. The hyperlinking itself is covered by the
+/// `linkify_with` tests below, which pass every suppression flag explicitly.
+fn bare(path: &str) -> String {
+    livtet_cli_common::editions::linkify_with(path, false, false, false)
+}
+
 #[test]
 fn rendered_detail_block_is_stable() {
-    insta::assert_snapshot!(render_detail(&EditionDetail {
-        title: "The Name of the Wind (Ebook)".to_string(),
-        authors: vec!["Patrick Rothfuss".to_string()],
-        format: Some("Ebook".to_string()),
-        file_path: Some("/books/the-name-of-the-wind.epub".to_string()),
-    }));
+    insta::assert_snapshot!(render_detail_with(
+        &EditionDetail {
+            title: "The Name of the Wind (Ebook)".to_string(),
+            authors: vec!["Patrick Rothfuss".to_string()],
+            format: Some("Ebook".to_string()),
+            file_path: Some("/books/the-name-of-the-wind.epub".to_string()),
+        },
+        &bare
+    ));
 }
 
 #[test]
 fn rendered_detail_block_falls_back_to_dashes() {
-    insta::assert_snapshot!(render_detail(&EditionDetail {
-        title: "Untitled".to_string(),
-        authors: Vec::new(),
-        format: None,
-        file_path: None,
-    }));
+    insta::assert_snapshot!(render_detail_with(
+        &EditionDetail {
+            title: "Untitled".to_string(),
+            authors: Vec::new(),
+            format: None,
+            file_path: None,
+        },
+        &bare
+    ));
+}
+
+/// `render_detail` is the environment-reading wrapper. Whatever stdout the
+/// test runner gives us, it must agree with one of the two renderings — this
+/// catches the wrapper being wired to something other than `linkify`.
+#[test]
+fn render_detail_delegates_to_the_environment_aware_linkifier() {
+    let detail = EditionDetail {
+        title: "The Name of the Wind (Ebook)".to_string(),
+        authors: vec!["Patrick Rothfuss".to_string()],
+        format: Some("Ebook".to_string()),
+        file_path: Some("/books/a.epub".to_string()),
+    };
+    let rendered = render_detail(&detail);
+    let plain = render_detail_with(&detail, &bare);
+    let linked = render_detail_with(&detail, &|p| {
+        livtet_cli_common::editions::linkify_with(p, true, false, false)
+    });
+    assert!(
+        rendered == plain || rendered == linked,
+        "render_detail produced a third rendering: {rendered:?}"
+    );
 }
 
 #[test]

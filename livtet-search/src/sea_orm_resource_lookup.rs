@@ -276,3 +276,12 @@ pub async fn get_edition_isbns_impl(
 
     Ok(out)
 }
+
+#[tokio::test]
+async fn get_edition_isbns_impl_fail_quick() {
+    let db_conn = DatabaseConnection::default();
+    assert_eq!(
+        get_edition_isbns_impl(&db_conn, &[]).await,
+        Ok(HashMap::default())
+    )
+}

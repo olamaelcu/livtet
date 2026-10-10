@@ -101,12 +101,8 @@ async fn calls_before_connect_fail_with_not_connected() {
 
 #[tokio::test]
 async fn connecting_to_nothing_fails_and_stays_disconnected() {
-    // Bind then drop a listener to get a port nothing is serving.
-    let port = std::net::TcpListener::bind(SocketAddr::from(LOOPBACK_ANY_PORT))
-        .unwrap()
-        .local_addr()
-        .unwrap()
-        .port();
+    // A port nothing is serving: reserved by binding and dropping a listener.
+    let port = livtet_test_utils::fault::reserve_port();
 
     let mut client = ReqwestHttpClient::new();
     let result = client.connect(&format!("http://127.0.0.1:{port}")).await;
@@ -260,11 +256,7 @@ async fn a_session_accepts_a_caller_supplied_http_client() {
 #[tokio::test]
 async fn start_binds_every_interface_on_the_given_port() {
     let device = Device::new("server").await;
-    let port = std::net::TcpListener::bind(SocketAddr::from(([0, 0, 0, 0], 0)))
-        .unwrap()
-        .local_addr()
-        .unwrap()
-        .port();
+    let port = livtet_test_utils::fault::reserve_port();
 
     let mut server = SyncServerInstance::new();
     server

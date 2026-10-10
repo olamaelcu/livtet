@@ -1,4 +1,4 @@
-use strum::{Display, EnumIter, EnumString, IntoEnumIterator};
+use strum::{Display, EnumIter, EnumString};
 
 /// Named (non-PK, non-UNIQUE-enforcement) secondary indexes in the
 /// livtet schema.

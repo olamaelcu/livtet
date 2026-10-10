@@ -303,6 +303,18 @@ pub async fn get_detail(ctx: &Context, id: &str) -> crate::Result<EditionDetail>
 /// Render a detail block exactly as `run` prints it. The on-disk path is
 /// hyperlinked only when stdout is a TTY, so this is stable under capture.
 pub fn render_detail(detail: &EditionDetail) -> String {
+    render_detail_with(detail, &linkify)
+}
+
+/// [`render_detail`] with the path renderer passed in rather than reading the
+/// environment through [`linkify`].
+///
+/// The on-disk line is hyperlinked only on a plain TTY, so rendering through
+/// `linkify` makes the output depend on how the process's stdout happens to
+/// be attached. That is fine in the binary and useless in a snapshot: the
+/// same input yields different bytes under `cargo test` than under a shell
+/// with output captured. Tests pass a renderer with the decision already made.
+pub fn render_detail_with(detail: &EditionDetail, render_path: &dyn Fn(&str) -> String) -> String {
     let mut out = String::new();
     out.push_str(&format!("  Title:   {}\n", detail.title));
     if detail.authors.is_empty() {
@@ -315,7 +327,7 @@ pub fn render_detail(detail: &EditionDetail) -> String {
         detail.format.as_deref().unwrap_or("—")
     ));
     match &detail.file_path {
-        Some(p) => out.push_str(&format!("  On-disk: * {}", linkify(p))),
+        Some(p) => out.push_str(&format!("  On-disk: * {}", render_path(p))),
         None => out.push_str("  On-disk: —"),
     }
     out

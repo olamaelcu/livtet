@@ -66,7 +66,7 @@ livtet-types = { workspace = true, optional = true }
 # `cargo test --workspace` runs (resolver 3 keeps dev features out of
 # normal builds).
 livtet-sync-http = { path = ".", features = ["poem", "reqwest"] }
-livtet-test-utils = { workspace = true, features = ["sync"] }
+livtet-test-utils = { workspace = true, features = ["sync", "fault"] }
 camino-tempfile = { workspace = true }
 fs-err = { workspace = true }
 hex = { workspace = true }

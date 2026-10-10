@@ -55,10 +55,6 @@ fn average_rgb(rgba: &[u8]) -> String {
         n += 1;
     }
 
-    if n == 0 {
-        return "#000000".to_string();
-    }
-
     format!(
         "#{:02x}{:02x}{:02x}",
         (r / n) as u8,

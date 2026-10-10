@@ -39,20 +39,29 @@ pub enum ResourceKind {
     Tag,
 }
 
-impl ResourceKind {
+impl std::fmt::Display for ResourceKind {
     /// Stable wire form used by remote adapters and persisted JSON.
     /// Matches the identifier column values stored next to each
     /// `kind = "..."` discriminator.
-    pub fn as_str(&self) -> &'static str {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            ResourceKind::Author => "author",
-            ResourceKind::Genre => "genre",
-            ResourceKind::Subject => "subject",
-            ResourceKind::Series => "series",
-            ResourceKind::Publisher => "publisher",
-            ResourceKind::Tag => "tag",
+            ResourceKind::Author => write!(f, "author"),
+            ResourceKind::Genre => write!(f, "genre"),
+            ResourceKind::Subject => write!(f, "subject"),
+            ResourceKind::Series => write!(f, "series"),
+            ResourceKind::Publisher => write!(f, "publisher"),
+            ResourceKind::Tag => write!(f, "tag"),
         }
     }
+}
+#[test]
+fn resource_kind_as_str() {
+    assert_eq!(ResourceKind::Author.to_string(), "author");
+    assert_eq!(ResourceKind::Genre.to_string(), "genre");
+    assert_eq!(ResourceKind::Subject.to_string(), "subject");
+    assert_eq!(ResourceKind::Series.to_string(), "series");
+    assert_eq!(ResourceKind::Publisher.to_string(), "publisher");
+    assert_eq!(ResourceKind::Tag.to_string(), "tag");
 }
 
 impl std::str::FromStr for ResourceKind {
@@ -69,6 +78,14 @@ impl std::str::FromStr for ResourceKind {
             _ => Err(()),
         }
     }
+}
+
+#[test]
+fn resource_kind_from_str() {
+    use std::str::FromStr;
+
+    assert_eq!(Ok(ResourceKind::Author), ResourceKind::from_str("author"));
+    assert_eq!(Ok(ResourceKind::Genre), ResourceKind::from_str("genre"));
 }
 
 /// The trait every per-axis lookup must satisfy. Implementations

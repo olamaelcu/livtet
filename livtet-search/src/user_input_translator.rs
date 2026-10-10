@@ -34,5 +34,6 @@ pub fn user_input_ast_to_query(
     index
         .get_query_parser()
         .build_query_from_user_input_ast(ast)
-        .map_err(|e| SearchError::Tantivy(tantivy::TantivyError::from(e)))
+        .map_err(tantivy::TantivyError::from)
+        .map_err(SearchError::Tantivy)
 }

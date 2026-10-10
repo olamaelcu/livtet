@@ -77,6 +77,13 @@ impl CliFixture {
         SqlxSqliteConnector::from_sqlx_sqlite_pool(self.db.pool.clone())
     }
 
+    /// The raw sqlx pool behind the fixture, for the handful of helpers --
+    /// such as `fault::hide_table` -- that take a pool rather than a SeaORM
+    /// connection.
+    pub fn pool(&self) -> &livtet_data::sql::SqlitePool {
+        &self.db.pool
+    }
+
     /// The edition whose title is `title`.
     ///
     /// Panics when the catalog has no such edition, so a test that drifts
