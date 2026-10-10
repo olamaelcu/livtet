@@ -113,9 +113,3 @@ pub enum NamedIndex {
     #[strum(to_string = "idx_edition_specific_covers_edition_id")]
     EditionSpecificCoversEditionId,
 }
-
-impl NamedIndex {
-    pub fn all() -> impl Iterator<Item = Self> {
-        Self::iter()
-    }
-}

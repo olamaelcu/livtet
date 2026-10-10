@@ -38,6 +38,14 @@ impl From<[u32; 2]> for HighlightRange {
     }
 }
 
+#[test]
+fn highlight_range_from_range() {
+    assert_eq!(
+        HighlightRange::from([2, 10]),
+        HighlightRange { start: 2, end: 10 }
+    )
+}
+
 /// A single search result.
 ///
 /// Replaces the legacy 3-field shape from before the FRBR rework.
