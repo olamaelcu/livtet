@@ -2,3 +2,7 @@ target/
 docs/superpowers
 check-dupes.json
 check-dupes.sarif
+
+# cargo-mutants run output
+mutants.out/
+mutants.out.old/

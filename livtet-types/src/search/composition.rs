@@ -778,6 +778,45 @@ mod tests {
         assert_matches!(ast, UserInputAst::Clause(_));
     }
 
+    #[tokio::test]
+    async fn depth_limit_allows_a_composition_exactly_at_the_maximum() {
+        // With StubLookup supplying a name, a single ByTag child renders to a
+        // 2-deep clause (id OR name). So max_depth = 2 is exactly at the limit
+        // and must succeed, while max_depth = 1 must fail — pinning the `>`
+        // boundary so it can't weaken to `>=`.
+        let child = SavedSearch {
+            id: DbId::new(),
+            definition: SavedSearchKind::Categorization(
+                crate::search::categorization::CategorizationSearch::ByTag(DbId::new()),
+            ),
+        };
+        let at_limit = SavedSearches {
+            children: vec![child.clone()],
+            options: CompositionOptions {
+                max_depth: 2,
+                allow_user_defined: true,
+            },
+        };
+        at_limit
+            .render(&CompositionBindings::default(), &StubLookup)
+            .await
+            .expect("a composition exactly at max_depth must render");
+
+        let over = SavedSearches {
+            children: vec![child],
+            options: CompositionOptions {
+                max_depth: 1,
+                allow_user_defined: true,
+            },
+        };
+        assert_matches!(
+            over.render(&CompositionBindings::default(), &StubLookup)
+                .await
+                .unwrap_err(),
+            CompositionError::RecursionLimitExceeded { .. }
+        );
+    }
+
     /// `AllStaleLookup` and `ErroringLookup` short-circuit `render` before name
     /// resolution, so their `names` impls are never reached through `render`.
     /// Exercise them directly to keep the test doubles fully covered.

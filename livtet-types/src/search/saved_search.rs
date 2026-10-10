@@ -370,6 +370,38 @@ mod tests {
     }
 
     #[test]
+    fn length_limit_is_inclusive_of_its_maximum() {
+        // Exactly MAX_DSL_LEN is accepted; one byte over is rejected. Pins the
+        // boundary so the `>` cannot silently weaken to `>=`.
+        parse_user_dsl(&"a".repeat(MAX_DSL_LEN)).expect("a payload of exactly MAX_DSL_LEN parses");
+        let over = parse_user_dsl(&"a".repeat(MAX_DSL_LEN + 1)).unwrap_err();
+        assert!(over.message.contains("too long"), "{}", over.message);
+    }
+
+    #[test]
+    fn depth_limit_is_inclusive_of_its_maximum() {
+        // Nesting of exactly MAX_DSL_DEPTH is accepted; one deeper is rejected.
+        let at_limit = format!("{}a{}", "(".repeat(MAX_DSL_DEPTH), ")".repeat(MAX_DSL_DEPTH));
+        parse_user_dsl(&at_limit).expect("nesting of exactly MAX_DSL_DEPTH parses");
+        let over = format!(
+            "{}a{}",
+            "(".repeat(MAX_DSL_DEPTH + 1),
+            ")".repeat(MAX_DSL_DEPTH + 1)
+        );
+        assert!(parse_user_dsl(&over).unwrap_err().message.contains("too deep"));
+    }
+
+    #[test]
+    fn closing_brackets_decrement_the_depth_counter() {
+        // Many sequential *shallow* groups stay at depth 1 only because each
+        // closing bracket decrements the counter. Without that decrement the
+        // running count would climb past the limit and this would be wrongly
+        // rejected, so a parse proving the decrement happens.
+        let sequential = "(a) ".repeat(MAX_DSL_DEPTH * 2);
+        parse_user_dsl(&sequential).expect("sequential shallow groups must parse");
+    }
+
+    #[test]
     fn references_recurse_through_not() {
         let id = DbId::new();
         let inner = SavedSearchKind::Categorization(CategorizationSearch::ByTag(id));
