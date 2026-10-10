@@ -16,6 +16,9 @@ members = [
   "livtet-ruby",
   "livtet-covers",
 ]
+# The `fuzz` crate is nightly-only (libFuzzer) and built out of band via
+# `cargo +nightly fuzz run`, so keep it out of the stable workspace build.
+exclude = ["fuzz"]
 default-members = [
   "livtet-data",
   "livtet-types",

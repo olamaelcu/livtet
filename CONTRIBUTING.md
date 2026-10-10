@@ -130,6 +130,41 @@ tests over large `match` statements, which can execute every arm while
 asserting almost nothing. Scope other crates with `cargo mutants -p
 <crate>`; annotate genuinely untestable code with `#[mutants::skip]`.
 
+Shared settings live in `.cargo/mutants.toml`: it excludes generated and
+test-support code (mirroring the coverage exclusions) and gives the slow
+DB/Tantivy tests timeout headroom. Modules behind a cargo feature (e.g.
+`livtet-types`'s `search`) don't build under a plain per-crate run and show
+as "unviable" — pass the feature through, e.g. `cargo mutants -p
+livtet-types -- --features search,uniffi`.
+
+### Fuzzing
+
+The parsers that take untrusted strings — the saved-search DSL, ISBNs,
+published dates, placeholders — are fuzzed by the `fuzz/` crate (libFuzzer
+via [cargo-fuzz](https://github.com/rust-fuzz/cargo-fuzz)). Because libFuzzer
+needs nightly, that crate is excluded
+from the stable workspace and run out of band:
+
+```sh
+cargo +nightly fuzz run parse_dsl       # saved-search DSL
+cargo +nightly fuzz run parse_scalars   # ISBN / date / placeholder
+```
+
+Harnesses are one-liners that call the real parser, so the same function is
+also covered by stable regression tests (known crashers live next to the
+parser — see the deep-nesting case in `search/saved_search.rs`) and by the
+property tests below. When fuzzing finds a new crasher, add the minimized
+input to both `fuzz/corpus/<target>/` and a stable regression test.
+
+### Property-based tests
+
+`proptest` asserts general laws over a wide input space where example tests
+only pin cases — `parse ∘ display` identity, serde round-trips, ISBN
+canonicalisation idempotence, id byte/string round-trips. The baseline is
+`livtet-types/tests/roundtrip_properties.rs`; add invariants there (or
+inline, as `reading_length.rs` does) when a type has a round-trip or
+idempotence law worth guarding.
+
 ## AI Disclosure
 
 **Important**: If you are using **any kind of AI assistance** to

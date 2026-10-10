@@ -1,0 +1,32 @@
+# cargo-mutants configuration (https://mutants.rs).
+#
+# Mutation testing injects small changes ("mutants") into the source and
+# checks the test suite notices. A *surviving* mutant is a line the tests
+# execute but whose breakage nothing asserts — the gap coverage can't see.
+#
+# Run the whole workspace:   cargo mutants
+# One crate (fast):          cargo mutants -p <crate>
+# One file:                  cargo mutants -f <path>
+# Only changed lines:        cargo mutants --in-diff <(git diff main)
+#
+# Note: some crates gate modules behind cargo features (e.g. livtet-types
+# `search`). A plain per-crate run won't build those modules, so their
+# mutants show as "unviable". Pass the features explicitly when targeting
+# them, e.g. `cargo mutants -p livtet-types -- --features search,uniffi`.
+
+# Don't mutate generated or test-support code: there is no hand-written
+# behaviour to protect, and these mirror the coverage exclusions.
+exclude_globs = [
+    "**/entities/**",
+    "**/client_entities/**",
+    "**/fake.rs",
+    "livtet-data/src/seed.rs",
+    "livtet-test-utils/**",
+    "**/main.rs",
+]
+
+# DB- and Tantivy-backed tests are slow; give a mutant's run generous
+# headroom (relative to the clean baseline) before declaring a timeout,
+# with a floor so a fast crate doesn't get an unreasonably short budget.
+timeout_multiplier = 3.0
+minimum_test_timeout = 120

@@ -1,0 +1,30 @@
+[package]
+name = "livtet-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+# libFuzzer-backed; built and run with nightly via `cargo +nightly fuzz`.
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+
+[dependencies.livtet-types]
+path = "../livtet-types"
+features = ["search"]
+
+[[bin]]
+name = "parse_dsl"
+path = "fuzz_targets/parse_dsl.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "parse_scalars"
+path = "fuzz_targets/parse_scalars.rs"
+test = false
+doc = false
+bench = false
