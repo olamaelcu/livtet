@@ -68,9 +68,50 @@ pub struct InvalidDslError {
     pub position: usize,
 }
 
+/// Maximum byte length accepted for a user-defined DSL payload.
+const MAX_DSL_LEN: usize = 8192;
+/// Maximum bracket/parenthesis nesting accepted before parsing. Tantivy's
+/// query grammar is recursive-descent and overflows the stack on deeply
+/// nested groups (observed at ~1000 parens), so bound the depth up front.
+const MAX_DSL_DEPTH: usize = 64;
+
 /// Lower a `UserDefined { query_dsl }` payload into a tantivy AST.
 /// Centralised so every caller produces a consistent error.
+///
+/// Guards against pathological input before handing it to tantivy's
+/// recursive-descent parser: an over-long payload, or one whose
+/// bracket/parenthesis nesting exceeds [`MAX_DSL_DEPTH`], is rejected rather
+/// than risking unbounded recursion (a stack-overflow DoS on untrusted
+/// saved-search strings).
 pub fn parse_user_dsl(query_dsl: &str) -> Result<UserInputAst, InvalidDslError> {
+    if query_dsl.len() > MAX_DSL_LEN {
+        return Err(InvalidDslError {
+            message: format!(
+                "query is too long ({} bytes; limit {MAX_DSL_LEN})",
+                query_dsl.len()
+            ),
+            position: 0,
+        });
+    }
+    let mut depth = 0usize;
+    let mut max_depth = 0usize;
+    for byte in query_dsl.bytes() {
+        match byte {
+            b'(' | b'[' | b'{' => {
+                depth += 1;
+                max_depth = max_depth.max(depth);
+            }
+            b')' | b']' | b'}' => depth = depth.saturating_sub(1),
+            _ => {}
+        }
+    }
+    if max_depth > MAX_DSL_DEPTH {
+        return Err(InvalidDslError {
+            message: format!("query nesting is too deep ({max_depth}; limit {MAX_DSL_DEPTH})"),
+            position: 0,
+        });
+    }
+
     let (ast, errors) = tantivy_query_grammar::parse_query_lenient(query_dsl);
     if let Some(err) = errors.into_iter().next() {
         return Err(InvalidDslError {
@@ -301,6 +342,31 @@ mod tests {
         // The exact error depends on tantivy-version specifics;
         // any `InvalidDslError` is fine here.
         assert!(!err.message.is_empty());
+    }
+
+    #[test]
+    fn deeply_nested_dsl_is_rejected_before_parsing() {
+        // Well past MAX_DSL_DEPTH but under MAX_DSL_LEN, so the depth guard
+        // (not the length guard) rejects it before tantivy's recursive-descent
+        // parser can overflow the stack.
+        let dsl = format!("{}a{}", "(".repeat(200), ")".repeat(200));
+        assert!(dsl.len() < MAX_DSL_LEN, "stay under the length guard");
+        let err = parse_user_dsl(&dsl).unwrap_err();
+        assert!(err.message.contains("nesting is too deep"), "{}", err.message);
+    }
+
+    #[test]
+    fn over_long_dsl_is_rejected() {
+        let dsl = "a ".repeat(MAX_DSL_LEN); // well over the byte limit
+        let err = parse_user_dsl(&dsl).unwrap_err();
+        assert!(err.message.contains("too long"), "{}", err.message);
+    }
+
+    #[test]
+    fn a_reasonable_dsl_still_parses() {
+        // Moderate nesting stays under the limit and parses normally.
+        parse_user_dsl("(title:wind OR title:fear) AND authors:rothfuss")
+            .expect("a normal query must still parse");
     }
 
     #[test]
