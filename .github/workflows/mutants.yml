@@ -1,0 +1,66 @@
+name: Mutation Testing
+
+# Mutation testing runs the whole test suite once per injected mutant, so
+# it is far too slow to gate every PR. It runs on a schedule (and on
+# demand), one job per crate, and goes red when a *viable* mutant survives
+# — a line the tests execute but whose breakage nothing asserts. Triage
+# survivors by tightening the test that should have caught them (see the
+# mutation-testing section of CONTRIBUTING.md).
+on:
+  schedule:
+    - cron: "0 5 * * 1" # Mondays, 05:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  mutants:
+    name: Mutants (${{ matrix.crate }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # livtet-types gates its search/FFI modules behind features, so
+          # enable them or those mutants show as "unviable".
+          - crate: livtet-types
+            features: "--features search,uniffi,fake"
+          - crate: livtet-search
+            features: ""
+          - crate: livtet-cli-common
+            features: ""
+          - crate: livtet-data
+            features: ""
+          - crate: livtet-sync
+            features: ""
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install mise
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          curl https://mise.run | sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          echo "MISE_DATA_DIR=$HOME/.mise" >> "$GITHUB_ENV"
+          mise install
+          eval "$(mise activate bash)" && echo "PATH=$PATH" >> "$GITHUB_ENV"
+
+      - uses: Swatinem/rust-cache@v2
+
+      # cargo-mutants exits non-zero when a viable mutant survives, which
+      # fails the job. Shared config (exclusions, timeouts) lives in
+      # .cargo/mutants.toml.
+      - name: Mutate ${{ matrix.crate }}
+        run: cargo mutants --no-shuffle -p ${{ matrix.crate }} -- ${{ matrix.features }}
+
+      - name: Upload mutation report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mutants-${{ matrix.crate }}
+          path: mutants.out/
+          if-no-files-found: ignore

@@ -49,3 +49,10 @@ run = [
 [tasks.mutants]
 description = "Mutation-test livtet-types: injects bugs and checks the suite notices. Coverage says a line ran; this says a test would catch it breaking. Slow. Other crates: cargo mutants -p <crate>"
 run = "cargo mutants --no-shuffle -p livtet-types"
+
+[tasks.fuzz]
+description = "Run the libFuzzer parser harnesses (fuzz/). Needs a nightly toolchain and cargo-fuzz. Bounded per target by FUZZ_TIME seconds (default 60; set FUZZ_TIME=300 for a longer campaign). Exits non-zero on a crash, which is written to fuzz/artifacts/."
+run = [
+  "cargo +nightly fuzz run parse_dsl -- -max_total_time=${FUZZ_TIME:-60} -rss_limit_mb=4096",
+  "cargo +nightly fuzz run parse_scalars -- -max_total_time=${FUZZ_TIME:-60} -rss_limit_mb=4096",
+]

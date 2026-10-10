@@ -137,6 +137,10 @@ DB/Tantivy tests timeout headroom. Modules behind a cargo feature (e.g.
 as "unviable" — pass the feature through, e.g. `cargo mutants -p
 livtet-types -- --features search,uniffi`.
 
+CI runs this on a schedule, not per-PR (it is far too slow to gate merges):
+`.github/workflows/mutants.yml` sweeps each covered crate weekly (and on
+`workflow_dispatch`), one job per crate, and goes red on a surviving mutant.
+
 ### Fuzzing
 
 The parsers that take untrusted strings — the saved-search DSL, ISBNs,
@@ -155,6 +159,10 @@ also covered by stable regression tests (known crashers live next to the
 parser — see the deep-nesting case in `search/saved_search.rs`) and by the
 property tests below. When fuzzing finds a new crasher, add the minimized
 input to both `fuzz/corpus/<target>/` and a stable regression test.
+
+CI runs a bounded campaign on a schedule: `.github/workflows/fuzz.yml`
+fuzzes each target weekly (and on `workflow_dispatch`, with a configurable
+duration), failing and uploading the reproducer if it finds a crash.
 
 ### Property-based tests
 

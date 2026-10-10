@@ -1,0 +1,54 @@
+name: Fuzz
+
+# Fuzzing is open-ended, so it runs on a schedule (and on demand) rather
+# than blocking every PR. Each target is bounded by a time budget; a crash
+# fails the job and the reproducer is uploaded as an artifact.
+on:
+  schedule:
+    - cron: "0 4 * * 1" # Mondays, 04:00 UTC
+  workflow_dispatch:
+    inputs:
+      duration:
+        description: "Seconds to fuzz each target"
+        default: "300"
+
+permissions:
+  contents: read
+
+jobs:
+  fuzz:
+    name: Fuzz ${{ matrix.target }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [parse_dsl, parse_scalars]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # libFuzzer needs nightly, so the fuzz crate is excluded from the
+      # stable workspace and built here with a nightly toolchain.
+      - uses: dtolnay/rust-toolchain@nightly
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: fuzz
+
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz --locked
+
+      - name: Fuzz ${{ matrix.target }}
+        run: >
+          cargo +nightly fuzz run ${{ matrix.target }}
+          -- -max_total_time=${{ github.event.inputs.duration || '300' }}
+          -rss_limit_mb=4096
+
+      - name: Upload reproducer on crash
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-artifacts-${{ matrix.target }}
+          path: fuzz/artifacts/
+          if-no-files-found: ignore
