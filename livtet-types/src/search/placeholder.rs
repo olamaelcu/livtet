@@ -604,6 +604,8 @@ mod tests {
         assert_eq!(eod.hour(), 23);
         assert_eq!(eod.minute(), 59);
         assert_eq!(eod.second(), 59);
+        // Stays on the same calendar day — guards the `+ 1 day` from flipping.
+        assert_eq!(eod.date(), now.date());
     }
 
     #[test]
@@ -612,6 +614,10 @@ mod tests {
         let now = time::OffsetDateTime::UNIX_EPOCH + time::Duration::days(19_731);
         let sow = start_of_week(now);
         assert_eq!(sow.weekday(), time::Weekday::Monday);
+        // The week's Monday is in the past/today, not a future one — guards
+        // the backward step from becoming a forward step.
+        assert!(sow <= now);
+        assert!(now - sow < time::Duration::days(7));
     }
 
     #[test]
@@ -619,6 +625,10 @@ mod tests {
         let now = time::OffsetDateTime::UNIX_EPOCH + time::Duration::days(19_731);
         let eow = end_of_week(now);
         assert_eq!(eow.weekday(), time::Weekday::Sunday);
+        // The week's end is after now and within the current week — guards the
+        // `+ 7 days` from flipping to `-`.
+        assert!(eow > now);
+        assert!(eow - start_of_week(now) < time::Duration::days(7));
     }
 
     #[test]
@@ -650,6 +660,77 @@ mod tests {
         let next = advance_month(dec);
         assert_eq!(next.month() as u8, 1);
         assert_eq!(next.year(), 2025);
+    }
+
+    #[test]
+    fn advance_month_increments_within_a_year() {
+        // A January date advances to February of the same year — the
+        // non-rollover `month + 1` arm (the December test covers `year + 1`).
+        let jan = time::OffsetDateTime::UNIX_EPOCH + time::Duration::days(19_731); // 2024-01-10
+        assert_ne!(jan.month() as u8, 12, "must not be December for this arm");
+        let next = advance_month(jan);
+        assert_eq!(next.year(), jan.year());
+        assert_eq!(next.month() as u8, jan.month() as u8 + 1);
+        assert_eq!(next.day(), 1);
+    }
+
+    #[test]
+    fn render_reserved_relative_anchors_are_exact() {
+        // Fixed Wednesday 2024-01-10 15:00. Assert the relative anchors against
+        // independently-built ground truth so a flipped +/- is caught.
+        let now = time::OffsetDateTime::UNIX_EPOCH
+            + time::Duration::days(19_731)
+            + time::Duration::hours(15);
+        let r = |p| render(&PlaceholderName::Reserved(p), now);
+        assert_eq!(
+            r(ReservedPlaceholder::LastWeekStart),
+            start_of_week(now) - time::Duration::weeks(1)
+        );
+        assert_eq!(
+            r(ReservedPlaceholder::LastMonthStart),
+            start_of_month(now) - time::Duration::days(1)
+        );
+        assert_eq!(
+            r(ReservedPlaceholder::LastMonthEnd),
+            end_of_month(now) - time::Duration::days(1)
+        );
+        assert_eq!(
+            r(ReservedPlaceholder::LastYearStart),
+            start_of_year(now) - time::Duration::days(1)
+        );
+    }
+
+    #[test]
+    fn render_offset_month_and_year_use_their_day_scale() {
+        let now = time::OffsetDateTime::UNIX_EPOCH + time::Duration::days(20_000);
+        let anchor = start_of_day(now);
+        let offset = |unit| {
+            render(
+                &PlaceholderName::DateOffset {
+                    unit,
+                    sign: DateOffsetSign::Minus,
+                    amount: 2,
+                },
+                now,
+            )
+        };
+        assert_eq!(offset(DateUnit::Month), anchor - time::Duration::days(2 * 30));
+        assert_eq!(offset(DateUnit::Year), anchor - time::Duration::days(2 * 365));
+    }
+
+    #[test]
+    fn placeholder_names_reject_every_kind_of_whitespace() {
+        // The guard is `space || newline || tab`; each kind alone must be
+        // rejected so none of the ORs can weaken to AND.
+        for bad in ["a b", "a\nb", "a\tb"] {
+            assert!(
+                matches!(
+                    bad.parse::<PlaceholderName>(),
+                    Err(PlaceholderParseError::WhitespaceInName)
+                ),
+                "{bad:?} must be rejected"
+            );
+        }
     }
 
     #[test]
