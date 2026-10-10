@@ -389,36 +389,33 @@ mod tests {
     #[test]
     fn placeholder_name_parses_date_offset_plus() {
         let p: PlaceholderName = "day:+7".parse().unwrap();
-        match p {
-            PlaceholderName::DateOffset { unit, sign, amount } => {
-                assert_eq!(unit, DateUnit::Day);
-                assert_eq!(sign, DateOffsetSign::Plus);
-                assert_eq!(amount, 7);
+        assert!(matches!(
+            p,
+            PlaceholderName::DateOffset {
+                unit: DateUnit::Day,
+                sign: DateOffsetSign::Plus,
+                amount: 7,
             }
-            _ => panic!("expected DateOffset"),
-        }
+        ));
     }
 
     #[test]
     fn placeholder_name_parses_date_offset_minus() {
         let p: PlaceholderName = "month:-3".parse().unwrap();
-        match p {
-            PlaceholderName::DateOffset { unit, sign, amount } => {
-                assert_eq!(unit, DateUnit::Month);
-                assert_eq!(sign, DateOffsetSign::Minus);
-                assert_eq!(amount, 3);
+        assert!(matches!(
+            p,
+            PlaceholderName::DateOffset {
+                unit: DateUnit::Month,
+                sign: DateOffsetSign::Minus,
+                amount: 3,
             }
-            _ => panic!("expected DateOffset"),
-        }
+        ));
     }
 
     #[test]
     fn placeholder_name_handles_user_namespace() {
         let p: PlaceholderName = "library:holiday".parse().unwrap();
-        match p {
-            PlaceholderName::User(s) => assert_eq!(s, "library:holiday"),
-            _ => panic!("expected User"),
-        }
+        assert!(matches!(p, PlaceholderName::User(s) if s == "library:holiday"));
     }
 
     #[test]
@@ -430,10 +427,8 @@ mod tests {
 
     #[test]
     fn zero_offset_is_rejected() {
-        assert_matches!(
-            "day:+0".parse::<PlaceholderName>().unwrap_err(),
-            PlaceholderParseError::ZeroOffset
-        );
+        let err = "day:+0".parse::<PlaceholderName>().unwrap_err();
+        assert!(matches!(err, PlaceholderParseError::ZeroOffset));
     }
 
     #[test]
@@ -550,58 +545,47 @@ mod tests {
 
     #[test]
     fn parse_placeholder_rejects_missing_delimiters() {
-        assert_matches!(
-            parse_placeholder("today").unwrap_err(),
-            PlaceholderParseError::MissingDelimiters
-        );
+        let err = parse_placeholder("today").unwrap_err();
+        assert!(matches!(err, PlaceholderParseError::MissingDelimiters));
     }
 
     #[test]
     fn parse_placeholder_rejects_empty() {
-        assert_matches!(
-            "".parse::<PlaceholderName>().unwrap_err(),
-            PlaceholderParseError::Empty
-        );
+        let err = "".parse::<PlaceholderName>().unwrap_err();
+        assert!(matches!(err, PlaceholderParseError::Empty));
     }
 
     #[test]
     fn parse_placeholder_rejects_whitespace() {
-        assert_matches!(
-            "bad name".parse::<PlaceholderName>().unwrap_err(),
-            PlaceholderParseError::WhitespaceInName
-        );
+        let err = "bad name".parse::<PlaceholderName>().unwrap_err();
+        assert!(matches!(err, PlaceholderParseError::WhitespaceInName));
     }
 
     #[test]
     fn parse_placeholder_rejects_zero_offset() {
-        assert_matches!(
-            "day:+0".parse::<PlaceholderName>().unwrap_err(),
-            PlaceholderParseError::ZeroOffset
-        );
+        let err = "day:+0".parse::<PlaceholderName>().unwrap_err();
+        assert!(matches!(err, PlaceholderParseError::ZeroOffset));
     }
 
     #[test]
     fn parse_placeholder_rejects_missing_offset_amount() {
-        assert_matches!(
-            "day:".parse::<PlaceholderName>().unwrap_err(),
-            PlaceholderParseError::MissingOffsetAmount
-        );
+        let err = "day:".parse::<PlaceholderName>().unwrap_err();
+        assert!(matches!(err, PlaceholderParseError::MissingOffsetAmount));
     }
 
     #[test]
     fn parse_placeholder_rejects_invalid_offset_amount() {
-        assert_matches!(
-            "day:+abc".parse::<PlaceholderName>().unwrap_err(),
+        let err = "day:+abc".parse::<PlaceholderName>().unwrap_err();
+        assert!(matches!(
+            err,
             PlaceholderParseError::InvalidOffsetAmount(_)
-        );
+        ));
     }
 
     #[test]
     fn parse_placeholder_rejects_unknown_offset_sign() {
-        assert_matches!(
-            "day:*5".parse::<PlaceholderName>().unwrap_err(),
-            PlaceholderParseError::UnknownOffsetSign(_)
-        );
+        let err = "day:*5".parse::<PlaceholderName>().unwrap_err();
+        assert!(matches!(err, PlaceholderParseError::UnknownOffsetSign(_)));
     }
 
     #[test]
@@ -685,5 +669,36 @@ mod tests {
         };
         let week_result = render(&week_name, now);
         assert_eq!(week_result, now - time::Duration::weeks(2));
+    }
+
+    /// Exercise every reserved arm of `render_reserved` — the week/month/year
+    /// anchors beyond today/yesterday/tomorrow/begin that the focused tests
+    /// above already pin down.
+    #[test]
+    fn every_reserved_placeholder_renders_without_panicking() {
+        use strum::IntoEnumIterator;
+        let now = time::OffsetDateTime::UNIX_EPOCH
+            + time::Duration::days(20_000)
+            + time::Duration::hours(13);
+        for r in ReservedPlaceholder::iter() {
+            // The arm is total: it always returns some instant.
+            let _ = render(&PlaceholderName::Reserved(r), now);
+        }
+    }
+
+    /// Exercise every `DateUnit` branch of `render_offset_step` (minute, hour
+    /// and the month/year day-approximations the focused tests skip).
+    #[test]
+    fn every_date_unit_offsets_from_the_anchor() {
+        use strum::IntoEnumIterator;
+        let now = time::OffsetDateTime::UNIX_EPOCH + time::Duration::days(20_000);
+        for unit in DateUnit::iter() {
+            let name = PlaceholderName::DateOffset {
+                unit,
+                sign: DateOffsetSign::Minus,
+                amount: 2,
+            };
+            let _ = render(&name, now);
+        }
     }
 }

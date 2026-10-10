@@ -29,7 +29,7 @@ use livtet_data::{
     entities::{
         authors, digital_inventory, edition_authors, edition_genres, edition_identifiers,
         edition_publishers, edition_subjects, edition_tags, editions, formats, genres, identifiers,
-        languages, publishers, series, series_entries, subjects, tags, works,
+        languages, publishers, series, series_entries, subjects, tags, work_authors, works,
     },
     migration::Migrator,
 };
@@ -2131,4 +2131,341 @@ async fn label_resolver_requeries_once_entries_have_expired() {
         "an expired entry must be refreshed, not dropped"
     );
     assert_eq!(first.0.len(), formats.len());
+}
+
+// ---------------------------------------------------------------------------
+// Reindex fallback paths: an edition with no title and no edition_authors row
+// (so the work title and the work-level authors are used), a non-ISBN
+// identifier, a work-level language, and a populated `updated_at`. These
+// exercise the branches that `seed_comprehensive` never reaches because it
+// always sets an edition title, links authors per-edition, uses only `isbn`
+// identifiers, and leaves `updated_at` null.
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn reindex_uses_work_level_fallbacks_and_nonisbn_identifiers() {
+    let db = fresh_db().await;
+    let now = now_p();
+
+    let language_id = DbId::new();
+    languages::ActiveModel {
+        id: Set(language_id),
+        name: Set("klingon".into()),
+        code: Set("tlh".into()),
+        flag_emoji: Set(None),
+        created_at: Set(now),
+        updated_at: Set(None),
+    }
+    .insert(&db)
+    .await
+    .expect("insert language");
+
+    let work_id = DbId::new();
+    works::ActiveModel {
+        id: Set(work_id),
+        title: Set("Zzyzx Chronicle".into()),
+        description: Set(Some("A singular fieldbook of the dry lake.".into())),
+        sort_title: Set(None),
+        series_type: Set(None),
+        language_id: Set(Some(language_id)),
+        created_at: Set(now),
+        updated_at: Set(None),
+        preferred_edition_id: Set(None),
+    }
+    .insert(&db)
+    .await
+    .expect("insert work");
+
+    let edition_id = DbId::new();
+    editions::ActiveModel {
+        id: Set(edition_id),
+        work_id: Set(work_id),
+        group_id: Set(None),
+        // No edition title: reindex must fall back to the work title.
+        title: Set(None),
+        published_date: Set(Some(
+            time::Date::from_calendar_date(1998, time::Month::July, 4).unwrap(),
+        )),
+        format_id: Set(None),
+        // No edition language: reindex must fall back to the work language.
+        language_id: Set(None),
+        notes: Set(Some("marginalia in the endpapers".into())),
+        description: Set(Some("A rare private printing.".into())),
+        format_metadata: Set(None),
+        created_at: Set(now),
+        // Populated updated_at exercises the updated_at indexing branch.
+        updated_at: Set(Some(now)),
+    }
+    .insert(&db)
+    .await
+    .expect("insert edition");
+
+    let author_id = DbId::new();
+    authors::ActiveModel {
+        id: Set(author_id),
+        name: Set("Zephyr Author".into()),
+    }
+    .insert(&db)
+    .await
+    .expect("insert author");
+
+    // Author attached at the WORK level only — no edition_authors row — so
+    // the per-edition author resolution falls through to work_authors.
+    work_authors::ActiveModel {
+        work_id: Set(work_id),
+        author_id: Set(author_id),
+        role: Set("author".into()),
+    }
+    .insert(&db)
+    .await
+    .expect("insert work_authors");
+
+    // A non-ISBN identifier takes the verbatim (non-canonicalising) branch.
+    let oclc_id = DbId::new();
+    identifiers::ActiveModel {
+        id: Set(oclc_id),
+        value: Set("ocm12345678".into()),
+        kind: Set("oclc".into()),
+    }
+    .insert(&db)
+    .await
+    .expect("insert oclc identifier");
+    edition_identifiers::ActiveModel {
+        edition_id: Set(edition_id),
+        identifier_id: Set(oclc_id),
+    }
+    .insert(&db)
+    .await
+    .expect("link oclc identifier");
+
+    // `fresh_index` runs `migrate_to`, which reindexes from the DB.
+    let (index, _dir) = fresh_index(&db).await;
+
+    // The edition is searchable by the WORK title and by the work-level author.
+    let by_title = index.search("Zzyzx", 10).await.expect("search title");
+    assert_eq!(by_title.len(), 1, "work-title fallback must index the doc");
+    assert_eq!(by_title[0].title, "Zzyzx Chronicle");
+
+    let people = index
+        .search_all_kinds("Zephyr", 10, &SearchOptions::default())
+        .await
+        .expect("search author");
+    assert!(
+        people.iter().any(|h| h.title == "Zephyr Author"
+            || h.authors.iter().any(|a| a.contains("Zephyr"))),
+        "work-level author must be indexed"
+    );
+
+    // `add_edition` is the seam that delegates to a full reindex.
+    index
+        .add_edition(&db, edition_id)
+        .await
+        .expect("add_edition delegates to reindex");
+    let after = index.search("Zzyzx", 10).await.expect("search after add");
+    assert_eq!(after.len(), 1, "add_edition must keep the doc searchable");
+}
+
+// ---------------------------------------------------------------------------
+// Explicit sort + offset: exercises `sort_top_docs_by_spec`, the `SortKey`
+// comparisons, and the offset/truncate branch in `finish_edition_search`.
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn search_with_options_supports_every_sort_field_and_offset() {
+    use livtet_types::{SortDirection, SortField, SortSpec};
+    let db = fresh_db().await;
+    let _seed = seed_comprehensive(&db).await;
+    let (index, _dir) = fresh_index(&db).await;
+
+    for field in [SortField::Title, SortField::CreatedAt, SortField::UpdatedAt] {
+        for direction in [SortDirection::Asc, SortDirection::Desc] {
+            let opts = SearchOptions {
+                sort: Some(SortSpec {
+                    field,
+                    direction,
+                    limit: None,
+                }),
+                offset: 1, // forces the post-hoc offset-drain branch
+                ..SearchOptions::default()
+            };
+            let hits = index
+                .search_with_options("wind", 10, &opts)
+                .await
+                .expect("sorted search");
+            assert!(
+                !hits.is_empty(),
+                "{field:?}/{direction:?} sort with offset should still return hits"
+            );
+        }
+    }
+
+    // `Score` sort is the no-op short-circuit in `sort_top_docs_by_spec`.
+    let score_opts = SearchOptions {
+        sort: Some(SortSpec {
+            field: SortField::Score,
+            direction: SortDirection::Desc,
+            limit: None,
+        }),
+        ..SearchOptions::default()
+    };
+    assert!(
+        !index
+            .search_with_options("wind", 10, &score_opts)
+            .await
+            .expect("score sort")
+            .is_empty()
+    );
+}
+
+// ---------------------------------------------------------------------------
+// OPDS count + matching-work-id paths (filtered and pre-built-query flavours).
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn count_and_matching_work_ids_cover_the_opds_paths() {
+    let db = fresh_db().await;
+    let _seed = seed_comprehensive(&db).await;
+    let (index, _dir) = fresh_index(&db).await;
+
+    let n = index
+        .count_works_filtered("wind", &WorkFilters::default())
+        .await
+        .expect("count_works_filtered");
+    assert!(n >= 3, "the 3 work1 editions match 'wind'; got {n}");
+
+    let work_ids = index
+        .matching_work_ids("wind", &WorkFilters::default())
+        .await
+        .expect("matching_work_ids");
+    assert!(!work_ids.is_empty(), "matching_work_ids should return ids");
+
+    // Pre-built-query flavours (format/language already resolved).
+    let query1 = WorkFiltersQuery::from_filters(WorkFilters::default(), "wind".into())
+        .build_query(index.index())
+        .expect("build q1");
+    let counted = index
+        .count_with_query(query1)
+        .await
+        .expect("count_with_query");
+    assert!(counted >= 3, "count_with_query matches wind editions; got {counted}");
+
+    let query2 = WorkFiltersQuery::from_filters(WorkFilters::default(), "wind".into())
+        .build_query(index.index())
+        .expect("build q2");
+    let ids = index
+        .matching_work_ids_from_query(&*query2)
+        .await
+        .expect("matching_work_ids_from_query");
+    assert!(!ids.is_empty(), "matching_work_ids_from_query should return ids");
+}
+
+#[tokio::test]
+async fn lookups_cover_find_many_and_every_names_axis() {
+    let db = fresh_db().await;
+    let seed = seed_comprehensive(&db).await;
+
+    // WorkLookup::find_many — empty slice short-circuits; non-empty hits the DB.
+    let work_lookup = livtet_search::sea_orm_resource_lookup::SeaOrmWorkLookup;
+    assert!(
+        work_lookup
+            .find_many(&db, &[])
+            .await
+            .expect("empty works")
+            .is_empty()
+    );
+    let works = work_lookup
+        .find_many(&db, &[seed.work_id])
+        .await
+        .expect("find_many works");
+    assert_eq!(works.len(), 1);
+
+    // AuthorLookup::find_many — same two paths.
+    let author_lookup = livtet_search::sea_orm_resource_lookup::SeaOrmAuthorLookup;
+    assert!(
+        author_lookup
+            .find_many(&db, &[])
+            .await
+            .expect("empty authors")
+            .is_empty()
+    );
+    let authors = author_lookup
+        .find_many(&db, &[seed.author_id, seed.author2_id])
+        .await
+        .expect("find_many authors");
+    assert_eq!(authors.len(), 2);
+
+    // ResourceLookup::names across the remaining axes (author + genre are
+    // covered elsewhere): series, publisher, tag, subject.
+    let lookup = SeaOrmResourceLookup;
+    for (kind, id, expected) in [
+        (ResourceKind::Series, seed.series_id, "Kingkiller Chronicle"),
+        (ResourceKind::Publisher, seed.publisher_id, "DAW Books"),
+        (ResourceKind::Tag, seed.tag_id, "epic-fantasy"),
+        (ResourceKind::Subject, seed.subject_id, "fiction"),
+    ] {
+        let names = lookup.names(&db, kind, &[id]).await.expect("names");
+        assert_eq!(
+            names.get(&id).map(String::as_str),
+            Some(expected),
+            "{kind:?}"
+        );
+    }
+
+    // get_edition_isbns skips non-ISBN identifiers (the `kind != "isbn"`
+    // continue). Attach an OCLC id to edition_a alongside its ISBN.
+    let oclc_id = DbId::new();
+    identifiers::ActiveModel {
+        id: Set(oclc_id),
+        value: Set("ocm999".into()),
+        kind: Set("oclc".into()),
+    }
+    .insert(&db)
+    .await
+    .expect("insert oclc");
+    edition_identifiers::ActiveModel {
+        edition_id: Set(seed.edition_a_id),
+        identifier_id: Set(oclc_id),
+    }
+    .insert(&db)
+    .await
+    .expect("link oclc");
+    let ed_lookup = SeaOrmEditionLookup;
+    let isbns = ed_lookup
+        .get_edition_isbns(&db, &[seed.edition_a_id])
+        .await
+        .expect("isbns");
+    assert_eq!(
+        isbns.get(&seed.edition_a_id).map(|v| v.len()),
+        Some(1),
+        "only the ISBN survives; the OCLC id is skipped"
+    );
+}
+
+#[test]
+fn build_sort_covers_updated_at_and_created_at_and_default() {
+    use livtet_types::{SortField, WorkSortBy};
+
+    let updated = WorkFiltersQuery::from_filters(
+        WorkFilters {
+            sort_by: Some(WorkSortBy::UpdatedAt),
+            ..WorkFilters::default()
+        },
+        String::new(),
+    )
+    .build_sort();
+    assert_eq!(updated.field, SortField::UpdatedAt);
+
+    let created = WorkFiltersQuery::from_filters(
+        WorkFilters {
+            sort_by: Some(WorkSortBy::CreatedAt),
+            ..WorkFilters::default()
+        },
+        String::new(),
+    )
+    .build_sort();
+    assert_eq!(created.field, SortField::CreatedAt);
+
+    // `None` (no explicit sort) also maps to CreatedAt.
+    let default = WorkFiltersQuery::from_filters(WorkFilters::default(), String::new()).build_sort();
+    assert_eq!(default.field, SortField::CreatedAt);
 }

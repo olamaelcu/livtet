@@ -246,15 +246,41 @@ mod tests {
         // literal leaf, because Isbn::parse normalises them.
         let v = IdentifierSearch::ByIsbn("0-306-40615-2".to_string());
         let ast: UserInputAst = v.into();
-        match ast {
-            UserInputAst::Leaf(box_leaf) => match *box_leaf {
-                UserInputLeaf::Literal(lit) => {
-                    assert_eq!(lit.field_name.as_deref(), Some("identifier_values:isbn"));
-                    assert_eq!(lit.phrase, "9780306406157");
-                }
-                _ => panic!("expected literal leaf"),
-            },
-            _ => panic!("expected leaf ast"),
+        assert!(matches!(
+            &ast,
+            UserInputAst::Leaf(box_leaf)
+                if matches!(&**box_leaf, UserInputLeaf::Literal(lit)
+                    if lit.field_name.as_deref() == Some("identifier_values:isbn")
+                        && lit.phrase == "9780306406157")
+        ));
+    }
+
+    /// Exercise every generated `kind()` name arm and both `to_ast` existence
+    /// flavours (`Has(true)` → exists, `Has(false)` → negated exists), plus the
+    /// non-ISBN `By` branch that skips canonicalisation.
+    #[test]
+    fn every_variant_resolves_kind_and_lowers_to_ast() {
+        let variants: Vec<IdentifierSearch> = vec![
+            IdentifierSearch::ByIsbn("9780061120084".into()),
+            IdentifierSearch::HasIsbn(true),
+            IdentifierSearch::HasIsbn(false),
+            IdentifierSearch::ByOclc("123".into()),
+            IdentifierSearch::HasOclc(false),
+            IdentifierSearch::ByLccn("n78".into()),
+            IdentifierSearch::HasLccn(true),
+            IdentifierSearch::ByDoi("10.1/x".into()),
+            IdentifierSearch::HasDoi(false),
+            IdentifierSearch::ByWeb("http://e.com".into()),
+            IdentifierSearch::HasWeb(false),
+            IdentifierSearch::ByOpds("urn:x".into()),
+            IdentifierSearch::HasOpds(false),
+            IdentifierSearch::ByCustom("openlibrary:OL1M".into()),
+            IdentifierSearch::HasCustom(true),
+            IdentifierSearch::HasCustom(false),
+        ];
+        for v in variants {
+            let _ = v.kind();
+            let _: UserInputAst = v.into();
         }
     }
 }

@@ -205,10 +205,91 @@ mod tests {
         let k = SavedSearchKind::And { of: vec![] };
         let ast = k.into_ast_with_names(&HashMap::new()).expect("render");
         // Marker exists-check on the synthetic `_all` field.
-        match ast {
-            UserInputAst::Leaf(_) => {}
-            _ => panic!("empty AND should collapse to a leaf exists marker"),
+        assert!(
+            matches!(ast, UserInputAst::Leaf(_)),
+            "empty AND should collapse to a leaf exists marker"
+        );
+    }
+
+    #[test]
+    fn combinators_and_every_leaf_variant_render() {
+        use crate::search::{
+            availability::AvailabilitySearch, format::FormatSearch,
+            identifier_search::IdentifierSearch, limit::LimitSearch, ordering::OrderingSearch,
+            text::TextSearch,
+        };
+        let names = HashMap::new();
+
+        // Non-empty And / Or exercise the child-collecting arms (the empty
+        // cases are covered by `empty_and_is_tautology` and below).
+        let and = SavedSearchKind::And {
+            of: vec![
+                SavedSearchKind::Text(TextSearch::ByTitle {
+                    phrase: "dune".into(),
+                }),
+                SavedSearchKind::Limit(LimitSearch::ByYear { year: 1965 }),
+            ],
+        };
+        assert!(matches!(
+            and.into_ast_with_names(&names).unwrap(),
+            UserInputAst::Clause(_)
+        ));
+
+        let or = SavedSearchKind::Or {
+            of: vec![SavedSearchKind::Format(FormatSearch::ByFormat {
+                label: "epub".into(),
+            })],
+        };
+        assert!(matches!(
+            or.into_ast_with_names(&names).unwrap(),
+            UserInputAst::Clause(_)
+        ));
+
+        // Empty Or collapses to the `_all` exists marker, like empty And.
+        let empty_or = SavedSearchKind::Or { of: vec![] };
+        assert!(matches!(
+            empty_or.into_ast_with_names(&names).unwrap(),
+            UserInputAst::Leaf(_)
+        ));
+
+        // Every topical leaf dispatches through its own `into_ast`.
+        let leaves = vec![
+            SavedSearchKind::Limit(LimitSearch::ByYear { year: 2000 }),
+            SavedSearchKind::Format(FormatSearch::ByFormat { label: "pdf".into() }),
+            SavedSearchKind::Identifier(IdentifierSearch::ByIsbn("9780061120084".into())),
+            SavedSearchKind::Availability(AvailabilitySearch::HasCover { value: true }),
+            SavedSearchKind::Ordering(OrderingSearch::MostRecentlyAdded),
+            SavedSearchKind::Text(TextSearch::ByNotes {
+                phrase: "signed".into(),
+            }),
+            SavedSearchKind::Categorization(CategorizationSearch::ByTag(DbId::new())),
+        ];
+        for leaf in leaves {
+            leaf.into_ast_with_names(&names).expect("leaf renders");
         }
+    }
+
+    #[test]
+    fn leaf_from_impls_wrap_into_saved_search_kind() {
+        use crate::search::{
+            availability::AvailabilitySearch, format::FormatSearch,
+            identifier_search::IdentifierSearch, limit::LimitSearch, ordering::OrderingSearch,
+            text::TextSearch,
+        };
+        // One invocation per `wrap_leaf!` expansion covers the generated arm.
+        let _: SavedSearchKind = TextSearch::ByTitle { phrase: "x".into() }.into();
+        let _: SavedSearchKind = LimitSearch::ByYear { year: 1 }.into();
+        let _: SavedSearchKind = FormatSearch::ByFormat { label: "x".into() }.into();
+        let _: SavedSearchKind = IdentifierSearch::ByIsbn("1".into()).into();
+        let _: SavedSearchKind = AvailabilitySearch::HasCover { value: true }.into();
+        let _: SavedSearchKind = OrderingSearch::NeverRead.into();
+        let _: SavedSearchKind = CategorizationSearch::ByTag(DbId::new()).into();
+    }
+
+    #[test]
+    #[should_panic(expected = "composer's job")]
+    fn flat_categorization_conversion_is_unimplemented() {
+        let _: SavedSearchKind = FlatCategorization.into();
     }
 
     #[test]

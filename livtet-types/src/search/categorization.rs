@@ -185,10 +185,10 @@ mod tests {
         let f = CategorizationSearch::ByAuthor(ByAuthorAxis(DbId::new()));
         let ast = f.into_ast_with_names(&HashMap::new());
         // Should serialise to `author_id:"<id>"` — exact literal.
-        match ast {
-            UserInputAst::Leaf(_) => {}
-            _ => panic!("hybrid() with no name must produce a leaf"),
-        }
+        assert!(
+            matches!(ast, UserInputAst::Leaf(_)),
+            "hybrid() with no name must produce a leaf"
+        );
         let _ = field_term_exact("x", "y"); // silence dead-code on imported helper
     }
 
@@ -198,12 +198,10 @@ mod tests {
         let mut names = HashMap::new();
         names.insert((ResourceKind::Author, id), "Ursula".to_string());
         let ast = CategorizationSearch::ByAuthor(ByAuthorAxis(id)).into_ast_with_names(&names);
-        match ast {
-            UserInputAst::Clause(parts) => {
-                assert_eq!(parts.len(), 2);
-            }
-            _ => panic!("hybrid() with a name must return a clause"),
-        }
+        assert!(
+            matches!(&ast, UserInputAst::Clause(parts) if parts.len() == 2),
+            "hybrid() with a name must return a two-arm clause"
+        );
     }
 
     #[test]
@@ -238,5 +236,50 @@ mod tests {
             assert_eq!(refs[0].0, expected_kind);
             assert_eq!(refs[0].1, id);
         }
+    }
+
+    #[test]
+    fn into_ast_with_names_covers_every_axis() {
+        let id = DbId::new();
+        let names = HashMap::new();
+        // Every axis (and InCollection) lowers to a leaf when no name is
+        // known, and the `From<CategorizationSearch>` convenience delegates
+        // to the same path.
+        let variants = [
+            CategorizationSearch::ByAuthor(ByAuthorAxis(id)),
+            CategorizationSearch::ByGenre(ByGenreAxis(id)),
+            CategorizationSearch::BySubject(BySubjectAxis(id)),
+            CategorizationSearch::BySeries(BySeriesAxis(id)),
+            CategorizationSearch::ByPublisher(ByPublisherAxis(id)),
+            CategorizationSearch::ByTag(id),
+            CategorizationSearch::InCollection(id),
+        ];
+        for v in &variants {
+            assert!(matches!(
+                v.into_ast_with_names(&names),
+                UserInputAst::Leaf(_)
+            ));
+            let _ = UserInputAst::from(v.clone());
+        }
+    }
+
+    #[test]
+    fn axis_newtypes_lower_directly_to_an_ast() {
+        // The `axis_newtype!`-generated `From<$wrapper> for UserInputAst`.
+        let id = DbId::new();
+        let _ = UserInputAst::from(ByAuthorAxis(id));
+        let _ = UserInputAst::from(ByGenreAxis(id));
+        let _ = UserInputAst::from(BySubjectAxis(id));
+        let _ = UserInputAst::from(BySeriesAxis(id));
+        let _ = UserInputAst::from(ByPublisherAxis(id));
+    }
+
+    #[test]
+    fn in_collection_references_no_ids() {
+        assert!(
+            CategorizationSearch::InCollection(DbId::new())
+                .referenced_ids()
+                .is_empty()
+        );
     }
 }

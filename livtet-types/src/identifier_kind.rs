@@ -109,8 +109,22 @@ mod tests {
     #[test]
     fn dsl_prefix_for_known_kinds() {
         assert_eq!(IdentifierKind::Isbn.dsl_prefix(), "isbn");
+        assert_eq!(IdentifierKind::Oclc.dsl_prefix(), "oclc");
+        assert_eq!(IdentifierKind::Lccn.dsl_prefix(), "lccn");
+        assert_eq!(IdentifierKind::Doi.dsl_prefix(), "doi");
         assert_eq!(IdentifierKind::Web.dsl_prefix(), "web");
         assert_eq!(IdentifierKind::Opds.dsl_prefix(), "opds");
+    }
+
+    #[test]
+    fn from_str_delegates_to_parse() {
+        use std::str::FromStr;
+        assert_eq!(IdentifierKind::from_str("isbn"), Ok(IdentifierKind::Isbn));
+        assert_eq!(
+            IdentifierKind::from_str("made-up"),
+            Ok(IdentifierKind::Custom("made-up".into()))
+        );
+        assert!(IdentifierKind::from_str("").is_err());
     }
 
     #[test]

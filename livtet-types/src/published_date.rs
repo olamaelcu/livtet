@@ -195,6 +195,32 @@ mod tests {
     use super::*;
 
     #[test]
+    fn parse_rejects_a_non_numeric_day() {
+        // A non-digit day trips the empty/non-digit guard in `parse_day`,
+        // distinct from the out-of-range guard the other tests cover.
+        assert!(matches!(
+            PublishedDate::parse("2020-01-ab"),
+            Err(PublishedDateError::BadDay(_))
+        ));
+    }
+
+    #[test]
+    fn from_str_and_try_from_delegate_to_parse() {
+        use std::str::FromStr;
+        assert_eq!(
+            PublishedDate::from_str("1989").unwrap(),
+            PublishedDate::Year(1989)
+        );
+        assert_eq!(
+            PublishedDate::try_from("2020-05".to_string()).unwrap(),
+            PublishedDate::YearMonth {
+                year: 2020,
+                month: 5
+            }
+        );
+    }
+
+    #[test]
     fn parse_year_only() {
         let d = PublishedDate::parse("1989").unwrap();
         assert_eq!(d, PublishedDate::Year(1989));

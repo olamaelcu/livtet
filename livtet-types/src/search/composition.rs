@@ -590,4 +590,212 @@ mod tests {
         assert_eq!(ss.options.max_depth, 2);
         assert!(!ss.options.allow_user_defined);
     }
+
+    /// Reports every id as missing, so `render` takes the stale-ref arm.
+    struct AllStaleLookup;
+    #[async_trait]
+    impl ResourceLookup for AllStaleLookup {
+        async fn exists(&self, _kind: ResourceKind, _id: DbId) -> Result<bool, DbErr> {
+            Ok(false)
+        }
+        async fn names(
+            &self,
+            _kind: ResourceKind,
+            _ids: &[DbId],
+        ) -> Result<HashMap<DbId, String>, DbErr> {
+            Ok(HashMap::new())
+        }
+    }
+
+    /// `exists` always errors, so `render` surfaces `CompositionError::Db`.
+    struct ErroringLookup;
+    #[async_trait]
+    impl ResourceLookup for ErroringLookup {
+        async fn exists(&self, _kind: ResourceKind, _id: DbId) -> Result<bool, DbErr> {
+            Err(DbErr::Custom("lookup boom".to_string()))
+        }
+        async fn names(
+            &self,
+            _kind: ResourceKind,
+            _ids: &[DbId],
+        ) -> Result<HashMap<DbId, String>, DbErr> {
+            Ok(HashMap::new())
+        }
+    }
+
+    /// A single `UserDefined` child wrapping `query_dsl`, with default options.
+    fn user_defined(query_dsl: &str) -> SavedSearches {
+        SavedSearches {
+            children: vec![SavedSearch {
+                id: DbId::new(),
+                definition: SavedSearchKind::UserDefined {
+                    query_dsl: query_dsl.to_string(),
+                },
+            }],
+            options: CompositionOptions::default(),
+        }
+    }
+
+    #[tokio::test]
+    async fn zero_max_depth_is_rejected_before_any_work() {
+        let ss = SavedSearches {
+            children: vec![],
+            options: CompositionOptions {
+                max_depth: 0,
+                allow_user_defined: true,
+            },
+        };
+        let err = ss
+            .render(&CompositionBindings::default(), &StubLookup)
+            .await
+            .unwrap_err();
+        assert_matches!(err, CompositionError::RecursionLimitExceeded { depth: 0 });
+    }
+
+    #[tokio::test]
+    async fn stale_references_fail_fast() {
+        let tag = DbId::new();
+        let ss = SavedSearches {
+            children: vec![SavedSearch {
+                id: DbId::new(),
+                definition: SavedSearchKind::Categorization(
+                    crate::search::categorization::CategorizationSearch::ByTag(tag),
+                ),
+            }],
+            options: CompositionOptions::default(),
+        };
+        let err = ss
+            .render(&CompositionBindings::default(), &AllStaleLookup)
+            .await
+            .unwrap_err();
+        assert_matches!(&err, CompositionError::StaleReferences(refs) if refs.len() == 1);
+    }
+
+    #[tokio::test]
+    async fn db_errors_during_existence_checks_propagate() {
+        let ss = SavedSearches {
+            children: vec![SavedSearch {
+                id: DbId::new(),
+                definition: SavedSearchKind::Categorization(
+                    crate::search::categorization::CategorizationSearch::ByTag(DbId::new()),
+                ),
+            }],
+            options: CompositionOptions::default(),
+        };
+        let err = ss
+            .render(&CompositionBindings::default(), &ErroringLookup)
+            .await
+            .unwrap_err();
+        assert_matches!(err, CompositionError::Db(_));
+    }
+
+    #[tokio::test]
+    async fn invalid_user_dsl_is_mapped_to_a_composition_error() {
+        let err = user_defined("title:\"") // unbalanced quote
+            .render(&CompositionBindings::default(), &StubLookup)
+            .await
+            .unwrap_err();
+        assert_matches!(err, CompositionError::InvalidUserDsl { .. });
+    }
+
+    #[tokio::test]
+    async fn user_placeholder_is_substituted_from_bindings() {
+        let bindings = CompositionBindings::default().with_user("shelf", "scifi");
+        let ast = user_defined("\"$$shelf$$\"")
+            .render(&bindings, &StubLookup)
+            .await
+            .unwrap();
+        let rendered = format!("{ast:?}");
+        assert!(rendered.contains("scifi"), "{rendered}");
+        assert!(
+            !rendered.contains("$$"),
+            "placeholder must be consumed: {rendered}"
+        );
+    }
+
+    #[tokio::test]
+    async fn unbound_user_placeholder_fails_closed_to_an_error_marker() {
+        // No binding for `missing`, so `resolve_token` errors and the phrase
+        // substitution falls back to the recoverable `_ERR_` leaf.
+        let ast = user_defined("\"$$missing$$\"")
+            .render(&CompositionBindings::default(), &StubLookup)
+            .await
+            .unwrap();
+        assert!(format!("{ast:?}").contains("_ERR_"));
+    }
+
+    #[tokio::test]
+    async fn malformed_placeholder_syntax_fails_closed() {
+        // A whitespace-bearing token is rejected by the placeholder grammar,
+        // exercising the `InvalidPlaceholderSyntax` arm of `resolve_token`.
+        let ast = user_defined("\"$$bad name$$\"")
+            .render(&CompositionBindings::default(), &StubLookup)
+            .await
+            .unwrap();
+        assert!(format!("{ast:?}").contains("_ERR_"));
+    }
+
+    #[tokio::test]
+    async fn reserved_placeholder_renders_a_timestamp() {
+        let ast = user_defined("\"$$today$$\"")
+            .render(&CompositionBindings::default(), &StubLookup)
+            .await
+            .unwrap();
+        let rendered = format!("{ast:?}");
+        assert!(!rendered.contains("$$"), "{rendered}");
+        assert!(!rendered.contains("today"), "{rendered}");
+    }
+
+    #[tokio::test]
+    async fn date_offset_placeholder_renders_a_timestamp() {
+        let ast = user_defined("\"$$day:-3$$\"")
+            .render(&CompositionBindings::default(), &StubLookup)
+            .await
+            .unwrap();
+        assert!(!format!("{ast:?}").contains("$$"));
+    }
+
+    #[tokio::test]
+    async fn boosts_and_non_literal_leaves_pass_through_substitution() {
+        // `foo^2` lowers to a Boost node and `year:[..]` to a Range leaf, so
+        // both non-Literal arms of `substitute_placeholders` run.
+        let ss = SavedSearches {
+            children: vec![SavedSearch {
+                id: DbId::new(),
+                definition: SavedSearchKind::UserDefined {
+                    query_dsl: "title:foo^2 year:[1990 TO 2000]".to_string(),
+                },
+            }],
+            options: CompositionOptions {
+                max_depth: 8,
+                allow_user_defined: true,
+            },
+        };
+        let ast = ss
+            .render(&CompositionBindings::default(), &StubLookup)
+            .await
+            .unwrap();
+        assert_matches!(ast, UserInputAst::Clause(_));
+    }
+
+    /// `AllStaleLookup` and `ErroringLookup` short-circuit `render` before name
+    /// resolution, so their `names` impls are never reached through `render`.
+    /// Exercise them directly to keep the test doubles fully covered.
+    #[tokio::test]
+    async fn stub_lookup_name_resolution_is_exercised() {
+        assert!(
+            AllStaleLookup
+                .names(ResourceKind::Tag, &[])
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            ErroringLookup
+                .names(ResourceKind::Tag, &[])
+                .await
+                .unwrap()
+                .is_empty()
+        );
+    }
 }

@@ -216,66 +216,49 @@ mod tests {
     #[test]
     fn field_term_produces_literal() {
         let ast = field_term("title", "hello");
-        match ast {
-            UserInputAst::Leaf(leaf) => match *leaf {
-                UserInputLeaf::Literal(lit) => {
-                    assert_eq!(lit.field_name, Some("title".to_string()));
-                    assert_eq!(lit.phrase, "hello");
-                    assert_eq!(lit.delimiter, Delimiter::None);
-                }
-                _ => panic!("expected Literal"),
-            },
-            _ => panic!("expected Leaf"),
-        }
+        assert!(matches!(
+            &ast,
+            UserInputAst::Leaf(leaf)
+                if matches!(&**leaf, UserInputLeaf::Literal(lit)
+                    if lit.field_name.as_deref() == Some("title")
+                        && lit.phrase == "hello"
+                        && lit.delimiter == Delimiter::None)
+        ));
     }
 
     #[test]
     fn field_term_exact_uses_double_quotes() {
         let ast = field_term_exact("title", "hello world");
-        match ast {
-            UserInputAst::Leaf(leaf) => match *leaf {
-                UserInputLeaf::Literal(lit) => {
-                    assert_eq!(lit.delimiter, Delimiter::DoubleQuotes);
-                    assert_eq!(lit.phrase, "hello world");
-                }
-                _ => panic!("expected Literal"),
-            },
-            _ => panic!("expected Leaf"),
-        }
+        assert!(matches!(
+            &ast,
+            UserInputAst::Leaf(leaf)
+                if matches!(&**leaf, UserInputLeaf::Literal(lit)
+                    if lit.delimiter == Delimiter::DoubleQuotes
+                        && lit.phrase == "hello world")
+        ));
     }
 
     #[test]
     fn field_exists_produces_exists_leaf() {
         let ast = field_exists("cover");
-        match ast {
-            UserInputAst::Leaf(leaf) => match *leaf {
-                UserInputLeaf::Exists { field } => {
-                    assert_eq!(field, "cover");
-                }
-                _ => panic!("expected Exists"),
-            },
-            _ => panic!("expected Leaf"),
-        }
+        assert!(matches!(
+            &ast,
+            UserInputAst::Leaf(leaf)
+                if matches!(&**leaf, UserInputLeaf::Exists { field } if field == "cover")
+        ));
     }
 
     #[test]
     fn range_inclusive_produces_range() {
         let ast = range_inclusive("date", "2020", "2024");
-        match ast {
-            UserInputAst::Leaf(leaf) => match *leaf {
-                UserInputLeaf::Range {
-                    field,
-                    lower,
-                    upper,
-                } => {
-                    assert_eq!(field, Some("date".to_string()));
-                    assert_eq!(lower, UserInputBound::Inclusive("2020".to_string()));
-                    assert_eq!(upper, UserInputBound::Inclusive("2024".to_string()));
-                }
-                _ => panic!("expected Range"),
-            },
-            _ => panic!("expected Leaf"),
-        }
+        assert!(matches!(
+            &ast,
+            UserInputAst::Leaf(leaf)
+                if matches!(&**leaf, UserInputLeaf::Range { field, lower, upper }
+                    if field.as_deref() == Some("date")
+                        && *lower == UserInputBound::Inclusive("2020".to_string())
+                        && *upper == UserInputBound::Inclusive("2024".to_string()))
+        ));
     }
 
     #[test]
@@ -283,15 +266,12 @@ mod tests {
         let a = field_term("a", "1");
         let b = field_term("b", "2");
         let ast = and_clause(vec![a, b]);
-        match ast {
-            UserInputAst::Clause(children) => {
-                assert_eq!(children.len(), 2);
-                for (occur, _) in &children {
-                    assert_eq!(*occur, Some(Occur::Must));
-                }
-            }
-            _ => panic!("expected Clause"),
-        }
+        assert!(matches!(
+            &ast,
+            UserInputAst::Clause(children)
+                if children.len() == 2
+                    && children.iter().all(|(occur, _)| *occur == Some(Occur::Must))
+        ));
     }
 
     #[test]
@@ -299,42 +279,36 @@ mod tests {
         let a = field_term("a", "1");
         let b = field_term("b", "2");
         let ast = or_clause(vec![a, b]);
-        match ast {
-            UserInputAst::Clause(children) => {
-                assert_eq!(children.len(), 2);
-                for (occur, _) in &children {
-                    assert_eq!(*occur, Some(Occur::Should));
-                }
-            }
-            _ => panic!("expected Clause"),
-        }
+        assert!(matches!(
+            &ast,
+            UserInputAst::Clause(children)
+                if children.len() == 2
+                    && children.iter().all(|(occur, _)| *occur == Some(Occur::Should))
+        ));
     }
 
     #[test]
     fn must_not_clause_uses_must_not_occur() {
         let child = field_term("a", "1");
         let ast = must_not_clause(child);
-        match ast {
-            UserInputAst::Clause(children) => {
-                assert_eq!(children.len(), 1);
-                assert_eq!(children[0].0, Some(Occur::MustNot));
-            }
-            _ => panic!("expected Clause"),
-        }
+        assert!(matches!(
+            &ast,
+            UserInputAst::Clause(children)
+                if children.len() == 1 && children[0].0 == Some(Occur::MustNot)
+        ));
     }
 
     #[test]
     fn field_term_exact_set_produces_set() {
         let ast = field_term_exact_set("format", vec!["epub".to_string(), "pdf".to_string()]);
-        match ast {
-            UserInputAst::Leaf(leaf) => match *leaf {
-                UserInputLeaf::Set { field, elements } => {
-                    assert_eq!(field, Some("format".to_string()));
-                    assert_eq!(elements, vec!["epub", "pdf"]);
-                }
-                _ => panic!("expected Set"),
-            },
-            _ => panic!("expected Leaf"),
-        }
+        assert!(matches!(
+            &ast,
+            UserInputAst::Leaf(leaf)
+                if matches!(&**leaf, UserInputLeaf::Set { field, elements }
+                    if field.as_deref() == Some("format")
+                        && elements.len() == 2
+                        && elements[0] == "epub"
+                        && elements[1] == "pdf")
+        ));
     }
 }

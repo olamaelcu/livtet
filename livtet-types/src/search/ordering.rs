@@ -94,15 +94,25 @@ mod tests {
     #[test]
     fn into_ast_produces_ordering_marker() {
         let ast = OrderingSearch::MostRecentlyAdded.into_ast();
-        match ast {
-            UserInputAst::Leaf(leaf) => match *leaf {
-                UserInputLeaf::Literal(lit) => {
-                    assert_eq!(lit.field_name, Some("ordering".to_string()));
-                    assert_eq!(lit.phrase, "ordering:most_recently_added");
-                }
-                _ => panic!("expected Literal"),
-            },
-            _ => panic!("expected Leaf"),
+        assert!(matches!(
+            &ast,
+            UserInputAst::Leaf(leaf)
+                if matches!(&**leaf, UserInputLeaf::Literal(lit)
+                    if lit.field_name.as_deref() == Some("ordering")
+                        && lit.phrase == "ordering:most_recently_added")
+        ));
+    }
+
+    #[test]
+    fn every_variant_lowers_to_an_ordering_marker_leaf() {
+        for v in [
+            OrderingSearch::MostRecentlyAdded,
+            OrderingSearch::MostRecentlyUpdated,
+            OrderingSearch::RecentlyRead,
+            OrderingSearch::RecentlyImported,
+            OrderingSearch::NeverRead,
+        ] {
+            assert!(matches!(v.into_ast(), UserInputAst::Leaf(_)));
         }
     }
 

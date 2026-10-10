@@ -64,10 +64,7 @@ mod tests {
     #[test]
     fn by_year_emits_field_term() {
         let ast = LimitSearch::ByYear { year: 1999 }.into_ast();
-        match ast {
-            UserInputAst::Leaf(_) => {}
-            _ => panic!("expected leaf"),
-        }
+        assert!(matches!(ast, UserInputAst::Leaf(_)));
     }
 
     #[test]
@@ -77,10 +74,7 @@ mod tests {
             upper: 1999,
         }
         .into_ast();
-        match ast {
-            UserInputAst::Leaf(_) => {}
-            _ => panic!("expected leaf"),
-        }
+        assert!(matches!(ast, UserInputAst::Leaf(_)));
     }
 
     #[test]

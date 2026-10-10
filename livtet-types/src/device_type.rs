@@ -252,4 +252,12 @@ mod tests {
         assert!(DeviceType::Ereader(CANONICAL_EREADER.into()).is_canonical());
         assert!(!DeviceType::Ereader("KOReader".into()).is_canonical());
     }
+
+    #[test]
+    fn tag_is_a_stable_machine_string_per_category() {
+        assert_eq!(DeviceType::Desktop("x".into()).tag(), tag::DESKTOP);
+        assert_eq!(DeviceType::Mobile("x".into()).tag(), tag::MOBILE);
+        assert_eq!(DeviceType::Web("x".into()).tag(), tag::WEB);
+        assert_eq!(DeviceType::Ereader("x".into()).tag(), tag::EREADER);
+    }
 }

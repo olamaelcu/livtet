@@ -94,6 +94,52 @@ async fn upsert_edition_idempotent() {
 }
 
 #[tokio::test]
+async fn upsert_edition_writes_every_populated_field() {
+    let (idx, _dir) = fresh_index();
+    // Every optional field populated and every multi-valued field non-empty,
+    // so `upsert_edition` runs each `if let Some(..)` / facet-adding branch
+    // rather than the empty fast-paths the other tests take.
+    let doc = EditionDoc {
+        edition_id: "rich-1".into(),
+        work_id: "work-1".into(),
+        title: "The Left Hand of Darkness".into(),
+        edition_title: Some("The Left Hand of Darkness (50th Anniversary)".into()),
+        work_description: Some("A genethlic winter world".into()),
+        edition_description: Some("Deckle-edged anniversary printing".into()),
+        authors: vec!["Ursula K. Le Guin".into()],
+        authors_ids: vec!["author-1".into()],
+        tags: vec!["sci-fi".into(), "classic".into()],
+        genres: vec!["Science Fiction".into()],
+        subjects: vec!["Gender".into(), "Anthropology".into()],
+        publishers: vec!["Ace Books".into()],
+        identifier_kinds: vec!["isbn".into()],
+        identifier_values: vec!["9780441478125".into()],
+        notes: Some("signed first printing".into()),
+        format: Some("hardcover".into()),
+        language: Some("English".into()),
+        pub_date: Some(1_600_000_000),
+        published_year: Some(1969),
+        title_sort: "left hand of darkness".into(),
+        primary_author_sort: Some("le guin, ursula k.".into()),
+        created_at: 1_500_000_000,
+        updated_at: Some(1_600_000_500),
+        popularity: 42,
+    };
+    idx.upsert_edition(doc).await.expect("upsert rich doc");
+
+    let hits = idx.search("Darkness", 10).await.expect("search");
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0].title, "The Left Hand of Darkness");
+}
+
+#[test]
+fn reindex_event_is_terminal_distinguishes_loading_from_indexing() {
+    use livtet_search::ReindexEvent;
+    assert!(!ReindexEvent::Loading.is_terminal());
+    assert!(ReindexEvent::Indexing { done: 1, total: 2 }.is_terminal());
+}
+
+#[tokio::test]
 async fn upsert_author_writes_searchable_doc() {
     let (idx, _dir) = fresh_index();
     let author = AuthorDoc {

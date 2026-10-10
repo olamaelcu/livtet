@@ -86,6 +86,14 @@ fn resource_kind_from_str() {
 
     assert_eq!(Ok(ResourceKind::Author), ResourceKind::from_str("author"));
     assert_eq!(Ok(ResourceKind::Genre), ResourceKind::from_str("genre"));
+    assert_eq!(Ok(ResourceKind::Subject), ResourceKind::from_str("subject"));
+    assert_eq!(Ok(ResourceKind::Series), ResourceKind::from_str("series"));
+    assert_eq!(
+        Ok(ResourceKind::Publisher),
+        ResourceKind::from_str("publisher")
+    );
+    assert_eq!(Ok(ResourceKind::Tag), ResourceKind::from_str("tag"));
+    assert_eq!(Err(()), ResourceKind::from_str("not-an-axis"));
 }
 
 /// The trait every per-axis lookup must satisfy. Implementations

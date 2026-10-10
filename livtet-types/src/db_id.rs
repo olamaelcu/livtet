@@ -230,36 +230,6 @@ mod tests {
         let bad = "zz".repeat(16);
         assert!(DbId::from_hex(&bad).is_err());
     }
-}
-
-#[cfg(all(test, feature = "uniffi"))]
-mod uniffi_tests {
-    use super::*;
-    use crate::UniFfiTag;
-    use uniffi::FfiConverter;
-
-    #[test]
-    fn string_round_trip() {
-        let id = DbId::new();
-        let buf = <DbId as FfiConverter<UniFfiTag>>::lower(id);
-        let lifted =
-            <DbId as FfiConverter<UniFfiTag>>::try_lift(buf).expect("lowering is always valid");
-        assert_eq!(lifted, id);
-    }
-
-    #[test]
-    fn wire_format_is_the_ulid_string() {
-        let ulid = Ulid::from_string("01ARZ3NDEKTSV4RRFFQ69G5FAV").unwrap();
-        let buf = <DbId as FfiConverter<UniFfiTag>>::lower(DbId(ulid));
-        let s = <String as FfiConverter<UniFfiTag>>::try_lift(buf).unwrap();
-        assert_eq!(s, "01ARZ3NDEKTSV4RRFFQ69G5FAV");
-    }
-
-    #[test]
-    fn lift_rejects_garbage() {
-        let buf = <String as FfiConverter<UniFfiTag>>::lower("not-a-ulid".to_string());
-        assert!(<DbId as FfiConverter<UniFfiTag>>::try_lift(buf).is_err());
-    }
 
     #[test]
     fn new_mints_distinct_ids() {
@@ -354,5 +324,38 @@ mod uniffi_tests {
             format!("{:?}", <str as Type>::definition(&mut types)),
             "serialized as a string, so it must surface as one"
         );
+    }
+}
+
+/// The `FfiConverter` wiring only exists under the `uniffi` feature, so its
+/// tests stay gated; everything else moved up into the plain `tests` module
+/// so a default build still exercises it.
+#[cfg(all(test, feature = "uniffi"))]
+mod uniffi_tests {
+    use super::*;
+    use crate::UniFfiTag;
+    use uniffi::FfiConverter;
+
+    #[test]
+    fn string_round_trip() {
+        let id = DbId::new();
+        let buf = <DbId as FfiConverter<UniFfiTag>>::lower(id);
+        let lifted =
+            <DbId as FfiConverter<UniFfiTag>>::try_lift(buf).expect("lowering is always valid");
+        assert_eq!(lifted, id);
+    }
+
+    #[test]
+    fn wire_format_is_the_ulid_string() {
+        let ulid = Ulid::from_string("01ARZ3NDEKTSV4RRFFQ69G5FAV").unwrap();
+        let buf = <DbId as FfiConverter<UniFfiTag>>::lower(DbId(ulid));
+        let s = <String as FfiConverter<UniFfiTag>>::try_lift(buf).unwrap();
+        assert_eq!(s, "01ARZ3NDEKTSV4RRFFQ69G5FAV");
+    }
+
+    #[test]
+    fn lift_rejects_garbage() {
+        let buf = <String as FfiConverter<UniFfiTag>>::lower("not-a-ulid".to_string());
+        assert!(<DbId as FfiConverter<UniFfiTag>>::try_lift(buf).is_err());
     }
 }

@@ -207,6 +207,25 @@ mod tests {
     use super::*;
 
     #[test]
+    fn isbn10_with_x_outside_the_check_digit_is_rejected() {
+        // `X` is only legal as the ISBN-10 check digit; one in the first nine
+        // positions trips the "first nine must be digits" guard.
+        assert!(matches!(
+            Isbn::parse("X123456789"),
+            Err(IsbnError::InvalidChecksum10)
+        ));
+    }
+
+    #[test]
+    fn isbn13_with_a_non_digit_is_rejected() {
+        // ISBN-13 has no `X` check digit, so any non-digit fails validation.
+        assert!(matches!(
+            Isbn::parse("123456789012X"),
+            Err(IsbnError::InvalidChecksum13)
+        ));
+    }
+
+    #[test]
     fn parse_isbn13_with_hyphens() {
         let isbn = Isbn::parse("978-0-06-112008-4").unwrap();
         assert_eq!(isbn.as_str(), "9780061120084");
