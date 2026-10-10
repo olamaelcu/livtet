@@ -13,3 +13,12 @@
 # `fake`-feature dev/test scaffolding, compiled only to generate test data.
 src/fake\.rs
 livtet-data/src/seed\.rs
+
+# Binary entrypoints — runtime glue (arg parsing, daemon bootstrap, process
+# exit); the logic they wire up is tested in the libraries they call.
+/src/main\.rs
+
+# Test-support crate: fixtures, fault injection, snapshot and sync doubles
+# that exist to serve OTHER crates' tests — same class as the fake/seed
+# scaffolding above, not product code with its own behaviour to assert.
+livtet-test-utils/src/

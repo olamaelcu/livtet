@@ -82,8 +82,14 @@ them costs more than it returns. Holding every crate to 90%
 independently would force that work; holding the workspace to it does
 not. If you drop a crate well below the floor, say why in the PR.
 
-Three things the number does not include:
+Some things the number does not include:
 
+- Binary entrypoints (`*/src/main.rs`) and the `livtet-test-utils`
+  crate. The `main.rs` wrappers are runtime glue — arg parsing, daemon
+  bootstrap, process exit — whose logic is tested in the libraries they
+  call; `livtet-test-utils` is fixtures, fault injection, and snapshot /
+  sync doubles that serve *other* crates' tests, the same class as the
+  scaffolding below. Both are listed in `coverage-ignore.txt`.
 - Test-data scaffolding: `livtet-types/src/fake.rs`,
   `livtet-data/src/seed.rs`, and the `#[cfg(feature = "fake")] impl
   fake::Dummy` blocks in `livtet-data/src/{entities,client_entities}`.
