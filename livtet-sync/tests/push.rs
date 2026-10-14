@@ -85,8 +85,20 @@ async fn insert_delete_and_unknown_ops_apply_without_conflict() {
     // DELETE by id, and the ignored-unknown-operation arm.
     let device = Device::new("a").await;
     let changes = vec![
-        change("work", "00112233445566778899aabbccddeeff", "INSERT", 1, "{}"),
-        change("work", "ffeeddccbbaa99887766554433221100", "DELETE", 1, "{}"),
+        change(
+            "work",
+            "00112233445566778899aabbccddeeff",
+            "INSERT",
+            1,
+            "{}",
+        ),
+        change(
+            "work",
+            "ffeeddccbbaa99887766554433221100",
+            "DELETE",
+            1,
+            "{}",
+        ),
         change("work", "0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f", "WEIRD", 1, "{}"),
     ];
     let response = device.engine.push_changes(changes).await.unwrap();

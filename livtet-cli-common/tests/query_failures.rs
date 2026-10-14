@@ -21,6 +21,7 @@ fn context(fx: &CliFixture) -> Context {
     Context {
         db_path: fx.db_path.clone(),
         index_dir: fx.index_dir.clone(),
+        profile_id: None,
     }
 }
 

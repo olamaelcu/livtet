@@ -6,7 +6,12 @@ use crate::context::Context;
 #[derive(Parser, Debug)]
 #[command(name = "livtet", about = "Livtet CLI", version)]
 pub struct Cli {
-    #[command(subcommand)]
+    /// Profile identifier for scoped database paths.
+    /// When set, database and search index live under {data_dir}/{profile_id}/.
+    #[arg(long, short = 'p', value_name = "PROFILE", global = true)]
+    pub profile: Option<String>,
+
+    #[command(subcommand, next_help_heading = "Commands")]
     pub command: Command,
 }
 
@@ -40,16 +45,23 @@ pub struct PathArgs {
 }
 
 impl Command {
+    /// Run without a [`Context`]. Only [`Command::Path`] is supported; every
+    /// other variant needs a resolved context and returns an error.
     pub fn run(self) -> Result<()> {
-        // `Path` is the one command that reads no catalog, so it must not
-        // fail when the data directory cannot be resolved -- printing where
-        // livtet *would* look is exactly what it is for.
-        if let Command::Path(args) = self {
-            return args.run();
+        match self {
+            Command::Path(args) => args.run(),
+            #[cfg(feature = "fake")]
+            Command::Seed(_) => Err(crate::CliError::Operation {
+                message: "seed requires a context".to_string(),
+            }),
+            Command::Reindex(_) | Command::Editions(_) | Command::Edition(_) => {
+                Err(crate::CliError::Operation {
+                    message: "this command requires a context".to_string(),
+                })
+            }
         }
-        let ctx = Context::from_defaults()?;
-        self.run_with(&ctx)
     }
+
 
     /// Run against an explicit [`Context`] rather than the platform defaults.
     pub fn run_with(self, ctx: &Context) -> Result<()> {
@@ -144,7 +156,7 @@ impl PathArgs {
 
 #[cfg(test)]
 mod tests {
-    use super::{Command, PathArgs};
+    use super::{Command, Context, PathArgs};
 
     fn rows_for(kind: &str) -> Vec<(&'static str, String)> {
         PathArgs {
@@ -216,15 +228,16 @@ mod tests {
         }
     }
 
-    /// `Path` is the one command that reads no catalog, so `Command::run`
+    /// `Path` is the one command that reads no catalog, so `Command::run_with`
     /// must dispatch it without first resolving a `Context` -- otherwise it
     /// would fail on exactly the machines where it is most useful.
     #[test]
     fn path_command_runs_without_resolving_a_context() {
+        let ctx = Context::in_dir("/tmp/livtet-test");
         Command::Path(PathArgs {
             kind: "bundle".to_string(),
         })
-        .run()
+        .run_with(&ctx)
         .expect("path must not need a resolvable data directory");
     }
 }

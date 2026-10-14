@@ -11,6 +11,7 @@ fn context(fx: &CliFixture) -> Context {
     Context {
         db_path: fx.db_path.clone(),
         index_dir: fx.index_dir.clone(),
+        profile_id: None,
     }
 }
 
@@ -47,8 +48,5 @@ async fn reindex_force_wipes_and_rebuilds_a_current_index() {
 
     // With the schema already current, --force takes the explicit
     // clear-directory + reopen + rebuild branch.
-    args(true)
-        .run(&context(&fx))
-        .await
-        .expect("forced reindex");
+    args(true).run(&context(&fx)).await.expect("forced reindex");
 }

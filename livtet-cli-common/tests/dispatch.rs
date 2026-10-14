@@ -24,6 +24,7 @@ fn fixture() -> (tokio::runtime::Runtime, CliFixture, Context) {
     let ctx = Context {
         db_path: fx.db_path.clone(),
         index_dir: fx.index_dir.clone(),
+        profile_id: None,
     };
     (rt, fx, ctx)
 }
@@ -154,6 +155,7 @@ fn listing_against_an_index_path_that_is_a_file_names_it() {
     let ctx = Context {
         db_path: fx.db_path.clone(),
         index_dir: not_a_directory.clone(),
+        profile_id: None,
     };
 
     let err = Command::Editions(EditionsArgs {
@@ -183,6 +185,7 @@ fn listing_against_an_unbuilt_index_directory_is_empty() {
             .parent()
             .expect("parent")
             .join("never-built-index"),
+        profile_id: None,
     };
 
     Command::Editions(EditionsArgs {
@@ -207,6 +210,7 @@ fn getting_against_a_missing_database_fails_to_connect() {
             .expect("parent")
             .join("no-such-database.db"),
         index_dir: fx.index_dir.clone(),
+        profile_id: None,
     };
 
     let err = Command::Editions(EditionsArgs {

@@ -9,7 +9,7 @@
 use camino::Utf8PathBuf;
 
 use crate::Result;
-use crate::path::{default_db_path, default_index_dir};
+use crate::path::{default_db_path, default_index_dir, profile_db_path, profile_index_dir};
 
 /// The database file and search index a command operates on.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -18,15 +18,22 @@ pub struct Context {
     pub db_path: Utf8PathBuf,
     /// Directory holding the Tantivy index.
     pub index_dir: Utf8PathBuf,
+    /// Profile identifier for scoped paths (optional).
+    pub profile_id: Option<String>,
 }
 
 impl Context {
     /// Resolve from the platform's data directory — what every binary front
     /// end uses.
-    pub fn from_defaults() -> Result<Self> {
+    pub fn from_defaults(profile_id: Option<&str>) -> Result<Self> {
+        let (db_path, index_dir) = match profile_id {
+            Some(profile_id) => (profile_db_path(profile_id)?, profile_index_dir(profile_id)?),
+            None => (default_db_path()?, default_index_dir()?),
+        };
         Ok(Self {
-            db_path: default_db_path()?,
-            index_dir: default_index_dir()?,
+            db_path,
+            index_dir,
+            profile_id: profile_id.map(|s| s.to_string()),
         })
     }
 
@@ -38,6 +45,7 @@ impl Context {
         Self {
             db_path: dir.join("livtet.db"),
             index_dir: dir.join("search-index"),
+            profile_id: None,
         }
     }
 

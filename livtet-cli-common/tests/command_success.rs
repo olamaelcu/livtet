@@ -3,16 +3,17 @@
 //! a populated search result, a detail lookup that resolves a format and
 //! authors, and file add/update/remove against the inventory.
 
+use livtet_cli_common::Context;
 use livtet_cli_common::edition::{add_file, remove_file};
 use livtet_cli_common::editions::{get_detail, search_rows};
 use livtet_cli_common::reindex::ReindexArgs;
-use livtet_cli_common::Context;
 use livtet_test_utils::cli::CliFixture;
 
 fn context(fx: &CliFixture) -> Context {
     Context {
         db_path: fx.db_path.clone(),
         index_dir: fx.index_dir.clone(),
+        profile_id: None,
     }
 }
 

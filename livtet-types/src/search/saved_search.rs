@@ -296,7 +296,9 @@ mod tests {
         // Every topical leaf dispatches through its own `into_ast`.
         let leaves = vec![
             SavedSearchKind::Limit(LimitSearch::ByYear { year: 2000 }),
-            SavedSearchKind::Format(FormatSearch::ByFormat { label: "pdf".into() }),
+            SavedSearchKind::Format(FormatSearch::ByFormat {
+                label: "pdf".into(),
+            }),
             SavedSearchKind::Identifier(IdentifierSearch::ByIsbn("9780061120084".into())),
             SavedSearchKind::Availability(AvailabilitySearch::HasCover { value: true }),
             SavedSearchKind::Ordering(OrderingSearch::MostRecentlyAdded),
@@ -352,7 +354,11 @@ mod tests {
         let dsl = format!("{}a{}", "(".repeat(200), ")".repeat(200));
         assert!(dsl.len() < MAX_DSL_LEN, "stay under the length guard");
         let err = parse_user_dsl(&dsl).unwrap_err();
-        assert!(err.message.contains("nesting is too deep"), "{}", err.message);
+        assert!(
+            err.message.contains("nesting is too deep"),
+            "{}",
+            err.message
+        );
     }
 
     #[test]
@@ -381,14 +387,23 @@ mod tests {
     #[test]
     fn depth_limit_is_inclusive_of_its_maximum() {
         // Nesting of exactly MAX_DSL_DEPTH is accepted; one deeper is rejected.
-        let at_limit = format!("{}a{}", "(".repeat(MAX_DSL_DEPTH), ")".repeat(MAX_DSL_DEPTH));
+        let at_limit = format!(
+            "{}a{}",
+            "(".repeat(MAX_DSL_DEPTH),
+            ")".repeat(MAX_DSL_DEPTH)
+        );
         parse_user_dsl(&at_limit).expect("nesting of exactly MAX_DSL_DEPTH parses");
         let over = format!(
             "{}a{}",
             "(".repeat(MAX_DSL_DEPTH + 1),
             ")".repeat(MAX_DSL_DEPTH + 1)
         );
-        assert!(parse_user_dsl(&over).unwrap_err().message.contains("too deep"));
+        assert!(
+            parse_user_dsl(&over)
+                .unwrap_err()
+                .message
+                .contains("too deep")
+        );
     }
 
     #[test]

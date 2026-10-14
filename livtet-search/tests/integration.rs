@@ -2251,8 +2251,9 @@ async fn reindex_uses_work_level_fallbacks_and_nonisbn_identifiers() {
         .await
         .expect("search author");
     assert!(
-        people.iter().any(|h| h.title == "Zephyr Author"
-            || h.authors.iter().any(|a| a.contains("Zephyr"))),
+        people
+            .iter()
+            .any(|h| h.title == "Zephyr Author" || h.authors.iter().any(|a| a.contains("Zephyr"))),
         "work-level author must be indexed"
     );
 
@@ -2347,7 +2348,10 @@ async fn count_and_matching_work_ids_cover_the_opds_paths() {
         .count_with_query(query1)
         .await
         .expect("count_with_query");
-    assert!(counted >= 3, "count_with_query matches wind editions; got {counted}");
+    assert!(
+        counted >= 3,
+        "count_with_query matches wind editions; got {counted}"
+    );
 
     let query2 = WorkFiltersQuery::from_filters(WorkFilters::default(), "wind".into())
         .build_query(index.index())
@@ -2356,7 +2360,10 @@ async fn count_and_matching_work_ids_cover_the_opds_paths() {
         .matching_work_ids_from_query(&*query2)
         .await
         .expect("matching_work_ids_from_query");
-    assert!(!ids.is_empty(), "matching_work_ids_from_query should return ids");
+    assert!(
+        !ids.is_empty(),
+        "matching_work_ids_from_query should return ids"
+    );
 }
 
 #[tokio::test]
@@ -2466,6 +2473,7 @@ fn build_sort_covers_updated_at_and_created_at_and_default() {
     assert_eq!(created.field, SortField::CreatedAt);
 
     // `None` (no explicit sort) also maps to CreatedAt.
-    let default = WorkFiltersQuery::from_filters(WorkFilters::default(), String::new()).build_sort();
+    let default =
+        WorkFiltersQuery::from_filters(WorkFilters::default(), String::new()).build_sort();
     assert_eq!(default.field, SortField::CreatedAt);
 }

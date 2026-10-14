@@ -1576,8 +1576,15 @@ mod tests {
         // The fallback path renders a two-codepoint flag emoji from the
         // mapped country code (e.g. Azerbaijani -> AZ -> 🇦🇿).
         let flag = flag_emoji_for("az").expect("az maps to a country flag");
-        assert_eq!(flag.chars().count(), 2, "a flag is a regional-indicator pair");
-        assert!(flag.chars().all(|c| ('\u{1F1E6}'..='\u{1F1FF}').contains(&c)));
+        assert_eq!(
+            flag.chars().count(),
+            2,
+            "a flag is a regional-indicator pair"
+        );
+        assert!(
+            flag.chars()
+                .all(|c| ('\u{1F1E6}'..='\u{1F1FF}').contains(&c))
+        );
     }
 
     // ─── KnownReadingSources accessors ───────────────────────────────────

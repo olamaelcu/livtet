@@ -24,8 +24,7 @@ use regex::Regex;
 /// An OSC 8 hyperlink wrapper: `ESC ] 8 ; ; <uri> ESC \ <text> ESC ] 8 ; ; ESC \`.
 /// Replaced by the text it wrapped, so the path still shows.
 static OSC8: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"\x1b\]8;;[^\x1b]*\x1b\\(?<text>[^\x1b]*)\x1b\]8;;\x1b\\")
-        .expect("OSC 8 pattern")
+    Regex::new(r"\x1b\]8;;[^\x1b]*\x1b\\(?<text>[^\x1b]*)\x1b\]8;;\x1b\\").expect("OSC 8 pattern")
 });
 
 /// A CSI sequence: colour, cursor movement, erase.
@@ -87,7 +86,11 @@ mod tests {
     #[test]
     fn stripping_removes_colour_without_touching_the_text() {
         assert_eq!(strip_ansi("\x1b[31mred\x1b[0m text"), "red text");
-        assert_eq!(strip_ansi("plain"), "plain", "undecorated text is untouched");
+        assert_eq!(
+            strip_ansi("plain"),
+            "plain",
+            "undecorated text is untouched"
+        );
     }
 
     /// The whole point: decorated and bare renderings of the same content

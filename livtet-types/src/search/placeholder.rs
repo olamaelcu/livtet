@@ -576,10 +576,7 @@ mod tests {
     #[test]
     fn parse_placeholder_rejects_invalid_offset_amount() {
         let err = "day:+abc".parse::<PlaceholderName>().unwrap_err();
-        assert!(matches!(
-            err,
-            PlaceholderParseError::InvalidOffsetAmount(_)
-        ));
+        assert!(matches!(err, PlaceholderParseError::InvalidOffsetAmount(_)));
     }
 
     #[test]
@@ -714,8 +711,14 @@ mod tests {
                 now,
             )
         };
-        assert_eq!(offset(DateUnit::Month), anchor - time::Duration::days(2 * 30));
-        assert_eq!(offset(DateUnit::Year), anchor - time::Duration::days(2 * 365));
+        assert_eq!(
+            offset(DateUnit::Month),
+            anchor - time::Duration::days(2 * 30)
+        );
+        assert_eq!(
+            offset(DateUnit::Year),
+            anchor - time::Duration::days(2 * 365)
+        );
     }
 
     #[test]

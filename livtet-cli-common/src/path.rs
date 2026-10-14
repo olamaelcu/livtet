@@ -20,6 +20,24 @@ pub fn default_index_dir() -> Result<Utf8PathBuf> {
     Ok(dir.join("search-index"))
 }
 
+/// Resolve the per-profile data directory: `{data_dir}/{profile_id}`.
+pub fn profile_data_dir(profile_id: &str) -> Result<Utf8PathBuf> {
+    let base = livtet_core::paths::data_dir().ok_or_else(|| CliError::Operation {
+        message: "Could not resolve the livtet data directory".to_string(),
+    })?;
+    Ok(base.join(profile_id))
+}
+
+/// Resolve the per-profile database file: `{data_dir}/{profile_id}/livtet.db`.
+pub fn profile_db_path(profile_id: &str) -> Result<Utf8PathBuf> {
+    Ok(profile_data_dir(profile_id)?.join("livtet.db"))
+}
+
+/// Resolve the per-profile search index directory: `{data_dir}/{profile_id}/search-index`.
+pub fn profile_index_dir(profile_id: &str) -> Result<Utf8PathBuf> {
+    Ok(profile_data_dir(profile_id)?.join("search-index"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::{default_db_path, default_index_dir};
