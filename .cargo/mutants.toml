@@ -25,6 +25,14 @@ exclude_globs = [
     "**/main.rs",
 ]
 
+# The `sea_orm::TryGetable` impls read a value back out of a SQL row; they
+# only run against a real/mock `QueryResult`, which needs a sea-orm `mock`
+# dev-dependency the workspace deliberately doesn't carry. Skip mutating them
+# rather than report permanent, un-killable survivors.
+exclude_re = [
+    "impl sea_orm::TryGetable",
+]
+
 # DB- and Tantivy-backed tests are slow; give a mutant's run generous
 # headroom (relative to the clean baseline) before declaring a timeout,
 # with a floor so a fast crate doesn't get an unreasonably short budget.

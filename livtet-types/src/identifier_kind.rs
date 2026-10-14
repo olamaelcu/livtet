@@ -88,7 +88,8 @@ impl IdentifierKind {
             "doi" => Some(IdentifierKind::Doi),
             "http" | "https" => Some(IdentifierKind::Web),
             "opds" => Some(IdentifierKind::Opds),
-            "custom" => Some(IdentifierKind::Custom("custom".to_string())),
+            // "custom" needs no arm of its own: it falls through to the
+            // catch-all below as Custom("custom"), identically.
             s if !s.is_empty() => Some(IdentifierKind::Custom(s.to_string())),
             _ => None,
         }

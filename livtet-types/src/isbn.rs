@@ -340,9 +340,19 @@ mod tests {
     }
 
     #[test]
-    fn is_13_returns_true_for_13_digit() {
-        let isbn = Isbn::parse("9780061120084").unwrap();
-        assert!(isbn.is_13());
+    fn is_13_distinguishes_by_length() {
+        // `parse` always canonicalises to 13 digits, so also check a
+        // non-canonical value to prove `is_13` reads the length rather than
+        // always returning true.
+        assert!(Isbn::parse("9780061120084").unwrap().is_13());
+        assert!(!Isbn::new_unchecked("123").is_13());
+    }
+
+    #[test]
+    fn checksum_13_weights_odd_positions_by_three() {
+        // 9780201616224 passes the weighted (×1/×3) ISBN-13 checksum but not a
+        // degenerate variant, so accepting it proves the ×3 weighting is live.
+        Isbn::parse("9780201616224").expect("a valid ISBN-13 must parse");
     }
 
     #[test]
