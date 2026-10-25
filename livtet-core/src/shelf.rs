@@ -95,6 +95,28 @@ pub async fn list_shelves_for_did(
         .await
 }
 
+/// Create the shelf row when it is missing, returning it either way.
+pub async fn ensure_shelf(
+    conn: &DatabaseConnection,
+    shelf_uri: &str,
+    name: &str,
+) -> Result<Shelf, DbErr> {
+    if let Some(existing) = query_shelf(conn, shelf_uri).await? {
+        return Ok(existing);
+    }
+    insert_shelf(
+        conn,
+        shelf::ActiveModel {
+            uri: Set(shelf_uri.to_string()),
+            name: Set(name.to_string()),
+            description: NotSet,
+            created_at: Set(now()),
+            updated_at: NotSet,
+        },
+    )
+    .await
+}
+
 pub async fn insert_shelf(
     conn: &DatabaseConnection,
     shelf: shelf::ActiveModel,
