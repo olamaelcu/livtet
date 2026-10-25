@@ -1,8 +1,8 @@
 //! Shelf entity and mutation/query helpers.
-use crate::data::sql::{SqlitePool as DatabaseConnection};
 use crate::data::orm::{
-    prelude::*, DbErr, EntityTrait, QueryFilter, QueryOrder,
+    prelude::*, DbErr, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder,
 };
+use crate::data::orm::sea_query::ExprTrait;
 
 use crate::data::{shelf, shelf::Entity as ShelfEntity};
 use crate::data::{book_shelf, book_shelf::Entity as BookShelfEntity};
