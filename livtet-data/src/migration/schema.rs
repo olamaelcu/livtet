@@ -702,3 +702,28 @@ pub enum SavedSearches {
     BindingsJson,
     OptionsJson,
 }
+
+// Shelf tables (m0013)
+
+#[derive(DeriveIden)]
+#[sea_orm(iden = "shelf")]
+pub enum Shelf {
+    Table,
+    Uri,
+    Name,
+    Description,
+}
+
+#[derive(DeriveIden)]
+#[sea_orm(iden = "book_shelf")]
+pub enum BookShelf {
+    Table,
+    Uri,
+    ShelfUri,
+    BookUri,
+    Status,
+    Position,
+    Notes,
+    Emoji,
+    Did,
+}

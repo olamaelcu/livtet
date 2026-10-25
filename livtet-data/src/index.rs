@@ -112,4 +112,10 @@ pub enum NamedIndex {
     // ── m0009_edition_specific_covers (covering index for the view) ─
     #[strum(to_string = "idx_edition_specific_covers_edition_id")]
     EditionSpecificCoversEditionId,
+
+    // ── m0013_shelf_tables ─────────────────────────────────────────
+    #[strum(to_string = "idx_book_shelf_shelf_uri")]
+    BookShelfShelfUri,
+    #[strum(to_string = "idx_book_shelf_status")]
+    BookShelfStatus,
 }

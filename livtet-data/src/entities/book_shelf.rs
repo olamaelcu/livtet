@@ -1,22 +1,29 @@
+//! One book placed on one shelf, for one account.
 use sea_orm::entity::prelude::*;
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel, Serialize, Deserialize)]
+#[cfg_attr(feature = "fake", derive(fake::Dummy))]
+#[derive(Clone, Debug, Serialize, Deserialize, DeriveEntityModel)]
 #[sea_orm(table_name = "book_shelf")]
 pub struct Model {
+    /// Shelving record URI (e.g. `at://did:plc:…/net.olamaelcu.livtet.biblio.bookShelving/ol.OL997340M`).
     #[sea_orm(primary_key, auto_increment = false)]
     pub uri: String,
     pub shelf_uri: String,
+    /// Edition record URI this row shelves.
     pub book_uri: String,
+    /// `to-read`, `reading`, `read`, or `dnf` — the shelf record's rkey.
     pub status: String,
     pub position: Option<i32>,
     pub notes: Option<String>,
     pub emoji: Option<String>,
+    /// Account DID that owns the row.
+    pub did: String,
     pub created_at: time::PrimitiveDateTime,
     pub updated_at: Option<time::PrimitiveDateTime>,
-    pub did: String,
 }
 
+#[cfg_attr(feature = "fake", derive(fake::Dummy))]
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
 pub enum Relation {
     #[sea_orm(
@@ -25,6 +32,12 @@ pub enum Relation {
         to = "super::shelf::Column::Uri"
     )]
     Shelf,
+}
+
+impl Related<super::shelf::Entity> for Entity {
+    fn to() -> RelationDef {
+        Relation::Shelf.def()
+    }
 }
 
 impl ActiveModelBehavior for ActiveModel {}

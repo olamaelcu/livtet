@@ -67,6 +67,9 @@ pub enum Constraint {
     PairedDevicesType,
     PendingPairingsDeviceType,
     PendingPairingsStatus,
+
+    // ── m0013_shelf_tables ─────────────────────────────────────────
+    BookShelfShelf,
 }
 
 impl Constraint {
@@ -131,6 +134,7 @@ impl Constraint {
             Self::PairedDevicesType => "Referenced device type does not exist",
             Self::PendingPairingsDeviceType => "Referenced device type does not exist",
             Self::PendingPairingsStatus => "Referenced pairing status does not exist",
+            Self::BookShelfShelf => "Referenced shelf does not exist",
         }
     }
 
