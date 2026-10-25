@@ -15,9 +15,7 @@
 //!
 //! ## Features
 //!
-//! All DB modules compile unconditionally. The `server` / `client` / `core` /
-//! `backup` / `plugin` features are empty compatibility no-ops so existing
-//! consumer `features = [...]` lists keep resolving. The `fake` feature enables
+//! All DB modules compile unconditionally. The `fake` feature enables
 //! [`seed`].
 
 pub mod constraint;

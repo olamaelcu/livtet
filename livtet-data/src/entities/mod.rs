@@ -38,3 +38,5 @@ pub mod work_publishers;
 pub mod work_subjects;
 pub mod work_tags;
 pub mod works;
+pub mod shelf;
+pub mod book_shelf;

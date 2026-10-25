@@ -53,3 +53,4 @@ impl Migrator {
         Ok(())
     }
 }
+pub mod m0012_shelf_tables;

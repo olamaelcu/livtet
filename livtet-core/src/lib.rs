@@ -16,6 +16,7 @@ pub mod paths;
 #[cfg(feature = "fake")]
 pub mod seed;
 pub mod user_agent;
+pub mod shelf;
 
 pub use livtet_search as search;
 pub use livtet_temporal_quotes as temporal_quotes;
