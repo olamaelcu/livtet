@@ -10,7 +10,6 @@ use std::str::FromStr;
 
 use livtet_data::sql::{SqlitePool, sqlite::SqliteConnectOptions};
 use livtet_data::{migration, sqlite_pool_options};
-use sea_orm_migration::MigratorTrait;
 
 const DID: &str = "did:plc:e2ctbutx6kya6si4if5ngjmm";
 const BOOK_A: &str =
