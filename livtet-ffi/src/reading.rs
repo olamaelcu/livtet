@@ -107,6 +107,7 @@ impl LivtetStore {
                     progress_unit: Set(unit.map(|u| u.as_str().to_string())),
                     last_location: Set(last_location),
                     total_reading_time_secs: Set(additional_seconds.max(0)),
+                    annotations: Set(None),
                     created_at: Set(now_primitive()),
                 };
                 reading_progress::Entity::insert(active)

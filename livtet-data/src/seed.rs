@@ -822,6 +822,7 @@ async fn assign_reading_statuses(
             progress_unit: Set(Some("ratio".to_string())),
             last_location: Set(Some(format!("page_{}", rand::random_range(50u64..500u64)))),
             total_reading_time_secs: Set(rand::random_range(600i64..7200i64)),
+            annotations: Set(None),
             created_at: Set(timestamp),
         };
         ReadingProgressEntity::insert(progress_model)
@@ -866,6 +867,7 @@ async fn assign_reading_statuses(
             progress_unit: Set(Some("ratio".to_string())),
             last_location: Set(Some(format!("page_{}", rand::random_range(10u64..300u64)))),
             total_reading_time_secs: Set(rand::random_range(0i64..3600i64)),
+            annotations: Set(None),
             created_at: Set(timestamp),
         };
         ReadingProgressEntity::insert(progress_model)
@@ -913,6 +915,7 @@ async fn assign_reading_statuses(
             progress_unit: Set(Some("ratio".to_string())),
             last_location: Set(Some("end".to_string())),
             total_reading_time_secs: Set(rand::random_range(3600i64..14400i64)),
+            annotations: Set(None),
             created_at: Set(timestamp),
         };
         ReadingProgressEntity::insert(progress_model)
