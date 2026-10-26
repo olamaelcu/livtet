@@ -14,6 +14,7 @@ pub struct Model {
     pub progress_unit: Option<String>,
     pub last_location: Option<String>,
     pub total_reading_time_secs: i64,
+    pub annotations: Option<String>,
     pub created_at: time::PrimitiveDateTime,
 }
 

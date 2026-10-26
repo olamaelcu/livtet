@@ -640,6 +640,7 @@ pub enum ReadingProgress {
     ProgressUnit,
     LastLocation,
     TotalReadingTimeSecs,
+    Annotations,
     CreatedAt,
 }
 
