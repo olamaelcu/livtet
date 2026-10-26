@@ -10,7 +10,9 @@ pub struct Model {
     #[sea_orm(primary_key, auto_increment = false)]
     pub uri: String,
     pub shelf_uri: String,
-    /// Edition record URI this row shelves.
+    /// The edition this row shelves: the local `editions.id` as text. The
+    /// record's `book.ref` is the edition's AT Protocol rkey, resolved from
+    /// the book index when the shelving record is published.
     pub book_uri: String,
     /// `to-read`, `reading`, `read`, or `dnf` — the shelf record's rkey.
     pub status: String,
