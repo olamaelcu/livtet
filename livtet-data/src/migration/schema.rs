@@ -645,6 +645,17 @@ pub enum ReadingProgress {
 }
 
 #[derive(DeriveIden)]
+pub enum ReadingBookmarks {
+    Table,
+    Id,
+    EditionId,
+    Progress,
+    ProgressUnit,
+    LastLocation,
+    CreatedAt,
+}
+
+#[derive(DeriveIden)]
 pub enum WorkStatus {
     Table,
     WorkId,

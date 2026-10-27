@@ -21,6 +21,7 @@ pub mod loan_entity;
 pub mod loan_entity_identifier;
 pub mod owned_edition;
 pub mod publishers;
+pub mod reading_bookmarks;
 pub mod reading_list_book;
 pub mod reading_lists;
 pub mod reading_progress;

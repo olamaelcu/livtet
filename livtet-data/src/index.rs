@@ -118,4 +118,8 @@ pub enum NamedIndex {
     BookShelfShelfUri,
     #[strum(to_string = "idx_book_shelf_status")]
     BookShelfStatus,
+
+    // ── m0015_reading_bookmarks ────────────────────────────────────
+    #[strum(to_string = "idx_reading_bookmarks_edition_id")]
+    ReadingBookmarksEditionId,
 }
