@@ -11,7 +11,7 @@ use livtet_data::orm::{
 };
 use livtet_iroh::{DiscoveryService, NodeId, PeerIdentity};
 use livtet_sync::SyncEngine;
-use livtet_sync_http::routes::{CHANGES_PATH, PAIR_PATH, PULL_FULL_PATH, PUSH_PATH};
+use livtet_sync_http::routes::{CHANGES_PATH, PAIR_PATH, PULL_FULL_PATH, PUSH_PATH, SyncIdentity};
 use livtet_sync_http::{PairWaiters, make_sync_routes, set_pair_waiters};
 use livtet_types::{DbId, PairingStatus};
 use poem::{Endpoint, EndpointExt, Server};
@@ -20,6 +20,7 @@ use tokio::sync::{Mutex, RwLock, mpsc, watch};
 
 use crate::config::ServerConfig;
 use crate::error::ServerError;
+use crate::mdns::{Advertiser, NearbyPeer, browse_nearby};
 use crate::requests::{
     self, Notifier, REQUEST_LOG_CAP, RequestLog, RequestRecord, new_request_log,
 };
@@ -50,8 +51,10 @@ pub struct DaemonState {
     pub last_request_at: Arc<std::sync::Mutex<Option<String>>>,
     /// Broadcast registry shared with `livtet-sync-http`'s pairing routes.
     pub pair_waiters: PairWaiters,
-    /// The `iroh` discovery endpoint, bound on first use.
+    /// The `iroh` discovery endpoint, bound at startup when the network allows.
     pub discovery: Mutex<Option<Arc<DiscoveryService>>>,
+    /// The mDNS advertisement of the HTTP pairing surface, while the server runs.
+    pub advertiser: Mutex<Option<Advertiser>>,
     /// The running HTTP server handle, if any.
     pub server: Mutex<Option<ServerHandle>>,
     /// The address the HTTP server is actually bound to.
@@ -92,6 +95,17 @@ pub async fn run_async(config: ServerConfig) -> Result<(), ServerError> {
         })
     };
 
+    // Bind discovery once, up front: the node id is needed both for the
+    // identity route and for the mDNS TXT record. Losing the network is not
+    // fatal — the daemon falls back to the device id and pairing by address.
+    let discovery = match DiscoveryService::bind().await {
+        Ok(service) => Some(Arc::new(service)),
+        Err(error) => {
+            tracing::warn!(%error, "peer discovery unavailable; using the device id");
+            None
+        }
+    };
+
     let state = Arc::new(DaemonState {
         config,
         pool,
@@ -103,7 +117,8 @@ pub async fn run_async(config: ServerConfig) -> Result<(), ServerError> {
         requests_served: Arc::new(AtomicU64::new(0)),
         last_request_at: Arc::new(std::sync::Mutex::new(None)),
         pair_waiters,
-        discovery: Mutex::new(None),
+        discovery: Mutex::new(discovery),
+        advertiser: Mutex::new(None),
         server: Mutex::new(None),
         bound: Mutex::new(None),
     });
@@ -111,6 +126,7 @@ pub async fn run_async(config: ServerConfig) -> Result<(), ServerError> {
     let writer = tokio::spawn(writer_task(out_rx));
 
     start_server(&state).await?;
+    advertise(&state).await;
     let _ = cleanup_old_pairings(&state).await;
 
     let loop_result = read_loop(&state, &out_tx).await;
@@ -183,7 +199,12 @@ pub async fn start_server(state: &Arc<DaemonState>) -> Result<(), ServerError> {
     let served = state.requests_served.clone();
     let last = state.last_request_at.clone();
 
-    let app = make_sync_routes(engine, pair_waiters)
+    let identity = SyncIdentity {
+        node_id: discovery_node_id(state).await,
+        device_id: state.device_id.clone(),
+    };
+
+    let app = make_sync_routes(engine, pair_waiters, identity)
         .around(move |endpoint, req| {
             let log = log.clone();
             let notifier = notifier.clone();
@@ -302,6 +323,7 @@ pub async fn stop_server(state: &Arc<DaemonState>) -> Result<(), ServerError> {
         );
         tracing::info!("embedded sync http server stopped");
     }
+    stop_advertiser(state).await;
     Ok(())
 }
 
@@ -451,6 +473,7 @@ async fn dispatch(
         }
         rpc::method::PAIRING_BEGIN => finish(&request, handle_pairing_begin(&request, state).await),
         rpc::method::PAIRING_LIST => finish(&request, handle_pairing_list(state).await),
+        rpc::method::DISCOVERY_NEARBY => finish(&request, handle_discovery_nearby(state).await),
         rpc::method::PAIRING_APPROVE => {
             finish(&request, handle_pairing_approve(&request, state).await)
         }
@@ -609,6 +632,32 @@ async fn handle_pairing_list(state: &Arc<DaemonState>) -> Result<serde_json::Val
         .collect();
 
     Ok(serde_json::Value::Array(list))
+}
+
+async fn handle_discovery_nearby(
+    state: &Arc<DaemonState>,
+) -> Result<serde_json::Value, RpcFailure> {
+    let own_node_id = discovery_node_id(state).await;
+    let own_device_id = state.device_id.clone();
+
+    // `mdns-sd`'s receiver is blocking, so the window runs off the async
+    // runtime. The daemon is stopped inside the browse before it returns.
+    let peers = tokio::task::spawn_blocking(browse_nearby)
+        .await
+        .map_err(|error| RpcFailure {
+            code: rpc::error_code::INTERNAL_ERROR,
+            message: format!("mDNS browse task failed: {error}"),
+        })??;
+
+    // Our own advertisement can surface through the multicast socket. Exclude
+    // by both identities: the node id is iroh's endpoint id once discovery is
+    // bound, while the device id is the ULID fallback.
+    let nearby: Vec<NearbyPeer> = peers
+        .into_iter()
+        .filter(|peer| peer.node_id != own_node_id && peer.device_id != own_device_id)
+        .collect();
+
+    Ok(serde_json::to_value(nearby)?)
 }
 
 async fn handle_pairing_approve(
@@ -887,6 +936,41 @@ async fn discovery_identity(state: &Arc<DaemonState>, device_type: &str) -> Opti
 async fn shutdown_discovery(state: &Arc<DaemonState>) {
     if let Some(service) = state.discovery.lock().await.take() {
         service.shutdown().await;
+    }
+}
+
+/// The node id to publish: the bound endpoint's, else the device id.
+async fn discovery_node_id(state: &Arc<DaemonState>) -> String {
+    state
+        .discovery
+        .lock()
+        .await
+        .as_ref()
+        .map(|service| service.node_id().0.clone())
+        .unwrap_or_else(|| state.device_id.clone())
+}
+
+/// Announce the HTTP pairing surface once the server has a bound port.
+///
+/// The record carries the node id the client will use as the pairing key, so a
+/// device that finds us over mDNS can confirm it with `GET /sync/identity`
+/// before posting a claim.
+async fn advertise(state: &Arc<DaemonState>) {
+    let (host, port) = current_host_port(state).await;
+    let Ok(ip) = host.parse::<std::net::IpAddr>() else {
+        tracing::warn!(%host, "mDNS advertising skipped: unparseable bind address");
+        return;
+    };
+    let node_id = discovery_node_id(state).await;
+    match Advertiser::start(&node_id, &state.device_id, ip, port) {
+        Ok(advertiser) => *state.advertiser.lock().await = Some(advertiser),
+        Err(error) => tracing::warn!(%error, "mDNS advertising failed"),
+    }
+}
+
+async fn stop_advertiser(state: &Arc<DaemonState>) {
+    if let Some(advertiser) = state.advertiser.lock().await.take() {
+        advertiser.shutdown();
     }
 }
 

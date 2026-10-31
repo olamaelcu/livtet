@@ -4,6 +4,7 @@
 use std::{collections::HashMap, sync::Arc};
 
 use livtet_sync::{Conflict, FullDump, PullResponse, PushResponse, SyncEngine, SyncStatus};
+use livtet_sync_http::routes::SyncIdentity;
 use livtet_sync_http::{PairWaiters, make_sync_routes};
 use livtet_test_utils::sync::{Device, change};
 use poem::{Endpoint, http::StatusCode, test::TestClient};
@@ -18,7 +19,16 @@ fn client(device: &Device) -> TestClient<impl Endpoint> {
 /// pairing identity before the routes are built.
 fn client_with_waiters(device: &Device, waiters: PairWaiters) -> TestClient<impl Endpoint> {
     let engine = SyncEngine::new(device.conn.clone(), device.engine.device_id().to_string());
-    TestClient::new(make_sync_routes(Arc::new(RwLock::new(engine)), waiters))
+    let device_id = device.engine.device_id().to_string();
+    let identity = SyncIdentity {
+        node_id: format!("node-{device_id}"),
+        device_id,
+    };
+    TestClient::new(make_sync_routes(
+        Arc::new(RwLock::new(engine)),
+        waiters,
+        identity,
+    ))
 }
 
 async fn json<T: DeserializeOwned>(response: poem::test::TestResponse) -> T {
@@ -49,6 +59,17 @@ async fn make_conflict(device: &Device) -> Conflict {
         .await
         .unwrap();
     response.conflicts.into_iter().next().expect("conflict")
+}
+
+/// A discovered peer confirms the node id it saw in the mDNS TXT record before
+/// posting a pairing claim.
+#[tokio::test]
+async fn identity_reports_the_node_and_device_ids() {
+    let device = Device::new("peer").await;
+    let identity: SyncIdentity = json(client(&device).get("/sync/identity").send().await).await;
+
+    assert_eq!(identity.device_id, "peer");
+    assert_eq!(identity.node_id, "node-peer");
 }
 
 #[tokio::test]

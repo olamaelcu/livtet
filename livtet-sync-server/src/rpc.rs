@@ -31,6 +31,8 @@ pub mod method {
     pub const PAIRING_BEGIN: &str = "pairing.begin";
     /// List outstanding pending pairings.
     pub const PAIRING_LIST: &str = "pairing.list";
+    /// Peers currently advertising `_livtet-sync._tcp` on the local network.
+    pub const DISCOVERY_NEARBY: &str = "discovery.nearby";
     /// Approve a pending pairing.
     pub const PAIRING_APPROVE: &str = "pairing.approve";
     /// Reject a pending pairing.

@@ -2,11 +2,12 @@
 //! an `iroh` endpoint whose node id is the peer's address on the network.
 //!
 //! Binding an endpoint registers the relay/pkarr/DNS lookup that `iroh`'s `N0`
-//! preset configures, so a peer that learns this node id can resolve a current
-//! address and connect regardless of NAT or address churn. LAN mDNS is a
-//! separate address-lookup crate and is not enabled yet.
+//! preset configures, plus an mDNS address lookup, so a peer that learns this
+//! node id resolves a current address on the LAN or, failing that, through the
+//! relay without any manual address entry.
 
 use iroh::{Endpoint, endpoint::presets};
+use iroh_mdns_address_lookup::MdnsAddressLookup;
 
 use crate::identity::{NodeId, PeerIdentity};
 
@@ -25,6 +26,19 @@ impl DiscoveryService {
         let endpoint = Endpoint::bind(presets::N0)
             .await
             .map_err(|error| DiscoveryError::Bind(error.to_string()))?;
+
+        // LAN resolution: iroh publishes each endpoint's node id and direct
+        // addresses over mDNS, so a node id learned out of band (QR, manual
+        // entry, the `_livtet-sync._tcp` TXT record) resolves without a relay.
+        // A failure here degrades discovery to the N0 relay/pkarr path only.
+        match MdnsAddressLookup::builder().build(endpoint.id()) {
+            Ok(mdns) => match endpoint.address_lookup() {
+                Ok(services) => services.add(mdns),
+                Err(error) => tracing::warn!(%error, "iroh address lookup unavailable"),
+            },
+            Err(error) => tracing::warn!(%error, "iroh mDNS lookup unavailable"),
+        }
+
         Ok(Self { endpoint })
     }
 

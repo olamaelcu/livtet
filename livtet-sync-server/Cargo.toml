@@ -43,6 +43,7 @@ thiserror = { workspace = true }
 ulid = { workspace = true }
 time = { workspace = true }
 camino = { workspace = true }
+mdns-sd = "0.21"
 
 [dev-dependencies]
 tokio = { workspace = true, features = [

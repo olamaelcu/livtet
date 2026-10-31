@@ -12,3 +12,4 @@ tracing = { workspace = true }
 
 # Shared library primitives
 livtet-types = { workspace = true }
+iroh-mdns-address-lookup = "0.6"

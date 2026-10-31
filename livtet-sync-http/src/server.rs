@@ -31,8 +31,9 @@ use tokio::sync::{Mutex, RwLock, watch};
 use crate::{
     pairing::{PairWaiters, PairingDecision},
     routes::{
-        CHANGES_PATH, CONFLICTS_PATH, FILE_PATH, PAIR_PATH, PAIR_STATUS_PATH, PULL_FULL_PATH,
-        PUSH_PATH, PairRequest, PullQuery, RESOLVE_CONFLICT_PATH, ResolveRequest, STATUS_PATH,
+        CHANGES_PATH, CONFLICTS_PATH, FILE_PATH, IDENTITY_PATH, PAIR_PATH, PAIR_STATUS_PATH,
+        PULL_FULL_PATH, PUSH_PATH, PairRequest, PullQuery, RESOLVE_CONFLICT_PATH, ResolveRequest,
+        STATUS_PATH, SyncIdentity,
     },
 };
 
@@ -52,6 +53,13 @@ async fn get_status(engine: Data<&Arc<RwLock<SyncEngine>>>) -> Result<Json<SyncS
         latest_version,
         device_id: inner.device_id().to_string(),
     }))
+}
+
+/// The peer identity, so a device that found this server over mDNS can confirm
+/// the node id it saw in the TXT record before asking to pair.
+#[handler]
+async fn get_identity(identity: Data<&SyncIdentity>) -> Json<SyncIdentity> {
+    Json(identity.clone())
 }
 
 #[handler]
@@ -414,9 +422,11 @@ async fn get_file(
 pub fn make_sync_routes(
     engine: Arc<RwLock<SyncEngine>>,
     pair_waiters: PairWaiters,
+    identity: SyncIdentity,
 ) -> impl poem::Endpoint<Output = poem::Response> {
     Route::new()
         .at(STATUS_PATH, get(get_status))
+        .at(IDENTITY_PATH, get(get_identity))
         .at(CHANGES_PATH, get(get_changes))
         .at(PULL_FULL_PATH, get(get_pull_full))
         .at(PUSH_PATH, post(post_push))
@@ -427,6 +437,7 @@ pub fn make_sync_routes(
         .at(FILE_PATH, get(get_file))
         .with(AddData::new(engine))
         .with(AddData::new(pair_waiters))
+        .with(AddData::new(identity))
         .with(Cors::new())
 }
 
@@ -482,10 +493,16 @@ impl SyncServerInstance {
             return Err("sync server already running".into());
         }
 
-        let engine = Arc::new(RwLock::new(SyncEngine::new(db, device_id)));
+        let engine = Arc::new(RwLock::new(SyncEngine::new(db, device_id.clone())));
         let pair_waiters: PairWaiters = Arc::new(Mutex::new(HashMap::new()));
         crate::pairing::set_pair_waiters(pair_waiters.clone());
-        let app = make_sync_routes(engine, pair_waiters);
+        // Without a bound endpoint the node id falls back to the device id; the
+        // daemon passes the real iroh id through `make_sync_routes` itself.
+        let identity = SyncIdentity {
+            node_id: device_id.clone(),
+            device_id,
+        };
+        let app = make_sync_routes(engine, pair_waiters, identity);
         let listener = TcpListener::bind(addr);
 
         let acceptor = listener
@@ -558,12 +575,16 @@ pub async fn start_sync_server(
 ) -> Result<(), DynError> {
     use std::collections::HashMap;
 
-    let engine = Arc::new(RwLock::new(SyncEngine::new(db, device_id)));
+    let engine = Arc::new(RwLock::new(SyncEngine::new(db, device_id.clone())));
     let pair_waiters: PairWaiters = Arc::new(Mutex::new(HashMap::new()));
     // Register the broadcast registry so the Tauri app can fan out pairing
     // decisions via apply_pairing_decision() without going through HTTP.
     crate::pairing::set_pair_waiters(pair_waiters.clone());
-    let app = make_sync_routes(engine, pair_waiters);
+    let identity = SyncIdentity {
+        node_id: device_id.clone(),
+        device_id,
+    };
+    let app = make_sync_routes(engine, pair_waiters, identity);
     let listener = TcpListener::bind(format!("0.0.0.0:{}", port));
     tracing::info!("sync server started on 0.0.0.0:{}", port);
     Server::new(listener).run(app).await?;

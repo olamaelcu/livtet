@@ -10,6 +10,7 @@
 pub mod config;
 pub mod daemon;
 pub mod error;
+pub mod mdns;
 pub mod requests;
 pub mod rpc;
 

@@ -11,6 +11,8 @@ use crate::error::SyncHttpError;
 
 /// `GET` the server's sync status.
 pub const STATUS_PATH: &str = "/sync/status";
+/// `GET` this peer's identity (node id + device id) for discovery confirmation.
+pub const IDENTITY_PATH: &str = "/sync/identity";
 /// `GET` incremental changes since a version.
 pub const CHANGES_PATH: &str = "/sync/changes";
 /// `GET` a full dump of all syncable tables.
@@ -33,6 +35,17 @@ pub const FILE_PATH: &str = "/sync/files/:inventory_id";
 pub struct PullQuery {
     pub since_version: i64,
     pub limit: Option<i64>,
+}
+
+/// The identity a discovered peer can confirm over HTTP.
+///
+/// `node_id` is the iroh endpoint id advertised in the `_livtet-sync._tcp` TXT
+/// record and used as the pairing key; `device_id` is the local ULID the sync
+/// rows are written against.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SyncIdentity {
+    pub node_id: String,
+    pub device_id: String,
 }
 
 /// Body for [`PAIR_PATH`].
