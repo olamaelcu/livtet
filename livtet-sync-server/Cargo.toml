@@ -44,6 +44,8 @@ ulid = { workspace = true }
 time = { workspace = true }
 camino = { workspace = true }
 mdns-sd = "0.21"
+reqwest = { workspace = true, features = ["json", "stream", "rustls"] }
+futures-util = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = [

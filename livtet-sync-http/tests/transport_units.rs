@@ -417,3 +417,35 @@ async fn session_local_methods_bypass_the_client() {
         "local operations must not touch the transport"
     );
 }
+
+// ─── pairing claims: the per-source budget ──────────────────────────────────
+
+/// A source gets its own window, and the window closes on schedule.
+#[test]
+fn the_claim_limiter_caps_each_source_and_rolls_over() {
+    use livtet_sync_http::rate_limit::ClaimRateLimiter;
+    use std::net::IpAddr;
+    use std::time::{Duration, Instant};
+
+    let limiter = ClaimRateLimiter::new(Duration::from_secs(60), 2);
+    let source = IpAddr::from([10, 0, 0, 1]);
+    let start = Instant::now();
+
+    assert!(limiter.allow_at(source, start));
+    assert!(limiter.allow_at(source, start + Duration::from_secs(1)));
+    assert!(
+        !limiter.allow_at(source, start + Duration::from_secs(2)),
+        "the third claim in the window is refused"
+    );
+    assert!(
+        limiter.allow_at(
+            IpAddr::from([10, 0, 0, 2]),
+            start + Duration::from_secs(2)
+        ),
+        "another source has its own budget"
+    );
+    assert!(
+        limiter.allow_at(source, start + Duration::from_secs(61)),
+        "the budget resets once the window closes"
+    );
+}

@@ -12,6 +12,9 @@ pub struct Model {
     pub device_type_id: Option<DbId>,
     pub paired_at: time::PrimitiveDateTime,
     pub last_sync_at: Option<time::PrimitiveDateTime>,
+    /// Whether this desktop claimed the peer (and may pull from it) rather
+    /// than approving the peer's claim.
+    pub outbound: bool,
 }
 
 #[cfg_attr(feature = "fake", derive(fake::Dummy))]

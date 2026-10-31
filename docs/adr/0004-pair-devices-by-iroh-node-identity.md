@@ -81,9 +81,11 @@ discovery, and make pairing key on that identity over **HTTP**:
    the SRV record pointing at the bound HTTP port. The name comes from the
    daemon's `--device-name` flag; without one (or when it is blank) the name
    is generated stably from the device id, so a peer never has to show a ULID.
-   The record is withdrawn when the server stops. A bound `0.0.0.0` publishes
-   every interface address; an explicit address (including loopback) is
-   published as-is.
+   The desktop persists the chosen name in its settings, passes it at spawn,
+   and applies later edits live with `discovery.rename`, which re-registers
+   the record. The record is withdrawn when the server stops. A bound `0.0.0.0`
+   publishes every interface address; an explicit address (including loopback)
+   is published as-is.
 7. **LAN is opt-in, not a hardcoded flag.** The daemon binds `127.0.0.1` by
    default and `--lan` (or `--host 0.0.0.0`) opts into a LAN-reachable bind;
    the desktop passes that flag from its own setting. With an unspecified bind
@@ -118,8 +120,9 @@ and any future Rust consumer reach the same primitives from one dependency.
   machine (or an iOS simulator sharing its stack).
 * **`POST /sync/pair` is unauthenticated by design.** Any device that can
   reach the port and knows a node id may file a claim; approval on this device
-  is the gate. Rate limiting is not implemented yet, so a LAN bind exposes that
-  endpoint to the local network.
+  is the gate. Claims are budgeted per source (ten a minute, `429` beyond
+  that), which bounds table growth and approval spam without blocking a
+  household behind one NAT.
 * **Two mDNS records.** `_livtet-sync._tcp` (app discovery, HTTP port) and
   iroh's own address-lookup records (node id → QUIC address) are separate
   protocols with separate lifetimes. They must both come down on shutdown.
@@ -130,19 +133,19 @@ and any future Rust consumer reach the same primitives from one dependency.
   `reqwest`, so any `reqwest::Client` built in a process that links iroh panics
   unless a provider is selected. `livtet-sync-http` enables `reqwest`'s
   `rustls` feature to select one for the whole workspace.
-* **Mobile clients still speak the old claim.** iOS posts `token` and polls by
-  token; both must move to `node_id` before pairing works end to end, and the
-  data routes now need the session header on every request.
+* **Mobile clients are mid-migration.** iOS now claims by `node_id` and keeps
+  the session token; sending `x-livtet-session` on data routes and Android's
+  pairing UI remain. Until an app sends the header, the data routes answer
+  `401` to it.
 
 ### Follow-ups
 
 * Desktop LAN switch: pass `--lan` to the sidecar when the user enables it, and
   restart the daemon when the setting flips.
-* Rate-limit `POST /sync/pair` before advertising on untrusted networks.
 * Migrate the iOS `NetworkClient` claim/SSE to `node_id` and send the session
   header on data routes; add a claim client to Android (today it only browses).
 * Discovered peers are surfaced in the desktop pairing panel: it polls
   `discovery.nearby` while open and lists peers by friendly name, device
   flavor, and address, with the node id one copy away. Push-based update
   events remain future work; polling keeps the daemon lifecycle unchanged.
-* File and cover transfer over the sync channel; `get_file` is unauthenticated.
+* File and cover transfer over the sync channel; `get_file` is session-gated, but the transfer UX is pending.

@@ -3623,6 +3623,7 @@ version = "0.1.0"
 dependencies = [
  "camino",
  "fs-err",
+ "futures-util",
  "livtet-data",
  "livtet-iroh",
  "livtet-sync",

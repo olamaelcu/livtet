@@ -3,7 +3,14 @@
 //! and the FFI — the desktop uses it for the HTTP layer's local
 //! queries, and the FFI uses it for the same on the mobile device.
 
-use livtet_data::orm::{ConnectionTrait, TransactionTrait};
+use std::collections::HashMap;
+
+use livtet_data::orm::sea_query::Value as SqlValue;
+use livtet_data::orm::{
+    ActiveModelTrait, ConnectionTrait, DatabaseBackend, Statement, TransactionTrait,
+};
+use livtet_types::DbId;
+use serde_json::Value;
 
 use crate::types::{Conflict, FullDump, PullResponse, PushResponse, SyncChange, SyncError};
 
@@ -396,7 +403,407 @@ impl SyncEngine {
             latest_version,
         })
     }
+}
 
+/// Filesystem paths the receiver assigned to one inventory row.
+///
+/// The sender's payload carries its own absolute paths; applying those
+/// verbatim would point the receiver at another machine's disk.
+#[derive(Debug, Clone, Default)]
+pub struct InventoryPaths {
+    pub file_path: Option<String>,
+    pub cover_path: Option<String>,
+}
+
+/// Inputs for [`SyncEngine::apply_changes`].
+#[derive(Debug, Clone, Default)]
+pub struct ApplyOptions {
+    /// Inventory entity id (hex or ULID) → the receiver's local paths.
+    pub inventory_paths: HashMap<String, InventoryPaths>,
+}
+
+/// What an apply pass did.
+#[derive(Debug, Default)]
+pub struct ApplyOutcome {
+    /// Changes written into the local tables.
+    pub applied: usize,
+    /// Rows ignored (offers, unknown entity types, unknown operations).
+    pub skipped: usize,
+    /// Version conflicts recorded instead of overwriting local state.
+    pub conflicts: Vec<Conflict>,
+}
+
+impl SyncEngine {
+    /// Apply changes pulled from a peer to the local database.
+    ///
+    /// The wire payloads are written by SQLite audit triggers, so ids arrive
+    /// as 32-char hex while [`DbId`]'s serde form is a ULID; [`normalize_ids`]
+    /// reconciles the two before deserialising each model. Applying a row
+    /// fires the local triggers, which would echo the change back to the peer:
+    /// rows written above the pre-apply version are deleted before the remote
+    /// change row is recorded.
+    pub async fn apply_changes(
+        &self,
+        changes: Vec<SyncChange>,
+        options: ApplyOptions,
+    ) -> Result<ApplyOutcome, SyncError> {
+        let txn = self.db.begin().await?;
+        let mut outcome = ApplyOutcome::default();
+
+        // Parent rows before children; SQLite may enforce foreign keys.
+        let mut ordered = changes;
+        ordered.sort_by_key(|change| apply_rank(&change.entity_type));
+
+        for change in &ordered {
+            if change.entity_type == "file_offer" {
+                outcome.skipped += 1;
+                continue;
+            }
+            let Some(table) = entity_type_to_table(&change.entity_type) else {
+                tracing::debug!(
+                    entity_type = %change.entity_type,
+                    "unknown sync entity ignored during apply"
+                );
+                outcome.skipped += 1;
+                continue;
+            };
+
+            let local = latest_change(&txn, &change.entity_type, &change.entity_id).await?;
+            if let Some((local_version, local_payload)) = local {
+                if local_version > change.version {
+                    record_conflict(&txn, change, &local_payload).await?;
+                    let conflict = fetch_latest_conflict(&txn, change).await?;
+                    if let Some(conflict) = conflict {
+                        outcome.conflicts.push(conflict);
+                    }
+                    continue;
+                }
+            }
+
+            if !matches!(change.operation.as_str(), "INSERT" | "UPDATE" | "DELETE") {
+                outcome.skipped += 1;
+                continue;
+            }
+
+            let baseline = latest_version_in(&txn).await?;
+            if change.operation == "DELETE" {
+                delete_entity(&txn, table, &change.entity_id).await?;
+            } else {
+                let mut payload: Value =
+                    serde_json::from_str(&change.payload).map_err(|error| {
+                        SyncError::Deserialization {
+                            entity_type: change.entity_type.clone(),
+                            message: error.to_string(),
+                        }
+                    })?;
+                if change.entity_type == "digital_inventory" {
+                    apply_inventory_paths(&mut payload, change, &options);
+                }
+                upsert_payload(&txn, table, &payload).await?;
+            }
+
+            // Remove this entity's trigger echoes, then record the remote row.
+            discard_echoes(&txn, change, baseline).await?;
+            insert_change_row(&txn, change).await?;
+            outcome.applied += 1;
+        }
+
+        txn.commit().await?;
+        Ok(outcome)
+    }
+}
+
+/// Parent-first ordering for entities that carry foreign keys.
+fn apply_rank(entity_type: &str) -> u8 {
+    match entity_type {
+        "work" | "edition_group" | "reading_list" => 0,
+        "edition" => 1,
+        "digital_inventory" | "owned_edition" | "work_author" | "work_genre" | "work_subject"
+        | "work_publisher" | "work_tag" | "edition_author" | "edition_genre"
+        | "edition_subject" | "edition_publisher" | "edition_tag" | "series_entry"
+        | "reading_list_book" => 2,
+        "edition_loan" | "annotation" => 3,
+        "reading_progress" => 4,
+        _ => 5,
+    }
+}
+
+fn apply_inventory_paths(payload: &mut Value, change: &SyncChange, options: &ApplyOptions) {
+    let normalized_id = payload.get("id").and_then(Value::as_str);
+    let paths = options
+        .inventory_paths
+        .get(&change.entity_id)
+        .or_else(|| normalized_id.and_then(|id| options.inventory_paths.get(id)));
+    let Some(paths) = paths else {
+        return;
+    };
+    let Some(object) = payload.as_object_mut() else {
+        return;
+    };
+    object.insert("file_path".to_string(), optional_string(&paths.file_path));
+    object.insert("cover_path".to_string(), optional_string(&paths.cover_path));
+}
+
+fn optional_string(value: &Option<String>) -> Value {
+    value
+        .as_deref()
+        .map_or(Value::Null, |text| Value::String(text.to_string()))
+}
+
+async fn latest_version_in(db: &impl ConnectionTrait) -> Result<i64, SyncError> {
+    let statement = Statement::from_string(
+        DatabaseBackend::Sqlite,
+        "SELECT COALESCE(MAX(version), 0) AS max_ver FROM change_log",
+    );
+    let row = db.query_one_raw(statement).await?;
+    Ok(row
+        .and_then(|row| row.try_get::<i64>("", "max_ver").ok())
+        .unwrap_or(0))
+}
+
+async fn latest_change(
+    db: &impl ConnectionTrait,
+    entity_type: &str,
+    entity_id: &str,
+) -> Result<Option<(i64, String)>, SyncError> {
+    let statement = Statement::from_sql_and_values(
+        DatabaseBackend::Sqlite,
+        "SELECT version, payload FROM change_log WHERE entity_type = ? AND entity_id = ? \
+         ORDER BY version DESC LIMIT 1",
+        [entity_type.into(), entity_id.into()],
+    );
+    let row = db.query_one_raw(statement).await?;
+    Ok(row.and_then(|row| {
+        Some((
+            row.try_get::<i64>("", "version").ok()?,
+            row.try_get::<String>("", "payload").ok()?,
+        ))
+    }))
+}
+
+async fn record_conflict(
+    db: &impl ConnectionTrait,
+    change: &SyncChange,
+    local_payload: &str,
+) -> Result<(), SyncError> {
+    let statement = Statement::from_sql_and_values(
+        DatabaseBackend::Sqlite,
+        "INSERT INTO conflicts (entity_type, entity_id, local_payload, remote_payload, detected_at) \
+         VALUES (?, ?, ?, ?, datetime('now'))",
+        [
+            change.entity_type.clone().into(),
+            change.entity_id.clone().into(),
+            local_payload.to_string().into(),
+            change.payload.clone().into(),
+        ],
+    );
+    db.execute_raw(statement).await?;
+    Ok(())
+}
+
+async fn fetch_latest_conflict(
+    db: &impl ConnectionTrait,
+    change: &SyncChange,
+) -> Result<Option<Conflict>, SyncError> {
+    let statement = Statement::from_sql_and_values(
+        DatabaseBackend::Sqlite,
+        "SELECT id, entity_type, entity_id, local_payload, remote_payload, resolved, resolution, \
+                merged_payload, detected_at FROM conflicts \
+         WHERE entity_type = ? AND entity_id = ? AND resolved = 0 ORDER BY id DESC LIMIT 1",
+        [
+            change.entity_type.clone().into(),
+            change.entity_id.clone().into(),
+        ],
+    );
+    let row = db.query_one_raw(statement).await?;
+    Ok(row.map(|row| Conflict {
+        id: row.try_get("", "id").unwrap_or_default(),
+        entity_type: row.try_get("", "entity_type").unwrap_or_default(),
+        entity_id: row.try_get("", "entity_id").unwrap_or_default(),
+        local_payload: row.try_get("", "local_payload").unwrap_or_default(),
+        remote_payload: row.try_get("", "remote_payload").unwrap_or_default(),
+        resolved: row.try_get("", "resolved").unwrap_or(false),
+        resolution: row.try_get("", "resolution").ok(),
+        merged_payload: row.try_get("", "merged_payload").ok(),
+        detected_at: row.try_get("", "detected_at").unwrap_or_default(),
+    }))
+}
+
+async fn discard_echoes(
+    db: &impl ConnectionTrait,
+    change: &SyncChange,
+    baseline: i64,
+) -> Result<(), SyncError> {
+    let statement = Statement::from_sql_and_values(
+        DatabaseBackend::Sqlite,
+        "DELETE FROM change_log WHERE entity_type = ? AND entity_id = ? AND version > ?",
+        [
+            change.entity_type.clone().into(),
+            change.entity_id.clone().into(),
+            baseline.into(),
+        ],
+    );
+    db.execute_raw(statement).await?;
+    Ok(())
+}
+
+async fn insert_change_row(
+    db: &impl ConnectionTrait,
+    change: &SyncChange,
+) -> Result<(), SyncError> {
+    use livtet_data::client_entities::change_log;
+    use livtet_data::orm::Set;
+
+    let now = time::format_description::parse_borrowed::<2>(
+        "[year]-[month]-[day] [hour]:[minute]:[second]",
+    )
+    .ok()
+    .and_then(|format| time::OffsetDateTime::now_utc().format(&format).ok())
+    .unwrap_or_default();
+
+    let entry = change_log::ActiveModel {
+        entity_type: Set(change.entity_type.clone()),
+        entity_id: Set(change.entity_id.clone()),
+        operation: Set(change.operation.clone()),
+        version: Set(change.version),
+        payload: Set(change.payload.clone()),
+        changed_at: Set(now),
+        device_id: Set(change.device_id.clone()),
+        ..Default::default()
+    };
+    entry.insert(db).await?;
+    Ok(())
+}
+
+async fn delete_entity(
+    db: &impl ConnectionTrait,
+    table: &'static str,
+    entity_id: &str,
+) -> Result<(), SyncError> {
+    if let Ok(Value::Object(key)) = serde_json::from_str::<Value>(entity_id) {
+        let mut conditions = Vec::new();
+        let mut values: Vec<SqlValue> = Vec::new();
+        for (column, value) in key {
+            if !is_identifier(&column) {
+                return Err(SyncError::Deserialization {
+                    entity_type: table.to_string(),
+                    message: format!("unsafe key column in entity id: {column}"),
+                });
+            }
+            conditions.push(format!("{column} = ?"));
+            values.push(sql_value(&value));
+        }
+        if conditions.is_empty() {
+            return Err(SyncError::Deserialization {
+                entity_type: table.to_string(),
+                message: "empty compound entity id".to_string(),
+            });
+        }
+        let statement = Statement::from_sql_and_values(
+            DatabaseBackend::Sqlite,
+            format!("DELETE FROM {table} WHERE {}", conditions.join(" AND ")),
+            values,
+        );
+        db.execute_raw(statement).await?;
+        return Ok(());
+    }
+
+    let id = DbId::from_hex(entity_id).map_err(|error| SyncError::Deserialization {
+        entity_type: table.to_string(),
+        message: format!("invalid entity id {entity_id}: {error}"),
+    })?;
+    let statement = Statement::from_sql_and_values(
+        DatabaseBackend::Sqlite,
+        format!("DELETE FROM {table} WHERE id = ?"),
+        [SqlValue::Bytes(Some(id.to_bytes().to_vec()))],
+    );
+    db.execute_raw(statement).await?;
+    Ok(())
+}
+
+fn is_identifier(value: &str) -> bool {
+    !value.is_empty()
+        && value
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || character == '_')
+}
+
+fn sql_value(value: &Value) -> SqlValue {
+    match value {
+        Value::String(text)
+            if text.len() == 32 && text.bytes().all(|byte| byte.is_ascii_hexdigit()) =>
+        {
+            match DbId::from_hex(text) {
+                Ok(id) => SqlValue::Bytes(Some(id.to_bytes().to_vec())),
+                Err(_) => SqlValue::String(Some(text.clone())),
+            }
+        }
+        Value::String(text) => SqlValue::String(Some(text.clone())),
+        Value::Bool(flag) => SqlValue::Bool(Some(*flag)),
+        Value::Number(number) => number.as_i64().map_or_else(
+            || SqlValue::Double(number.as_f64()),
+            |value| SqlValue::BigInt(Some(value)),
+        ),
+        Value::Null => SqlValue::String(None),
+        other => SqlValue::String(Some(other.to_string())),
+    }
+}
+
+/// Upsert one entity from its change payload.
+///
+/// The payload is the canonical trigger output: column names and values, with
+/// ids as hex. Writing it straight into the table avoids re-encoding temporal
+/// columns and leaves columns the trigger does not emit untouched on conflict.
+async fn upsert_payload(
+    db: &impl ConnectionTrait,
+    table: &'static str,
+    payload: &Value,
+) -> Result<(), SyncError> {
+    let Some(object) = payload.as_object() else {
+        return Err(SyncError::Deserialization {
+            entity_type: table.to_string(),
+            message: "sync payload is not an object".to_string(),
+        });
+    };
+
+    let mut columns = Vec::new();
+    let mut placeholders = Vec::new();
+    let mut updates = Vec::new();
+    let mut values: Vec<SqlValue> = Vec::new();
+    for (column, value) in object {
+        if !is_identifier(column) {
+            return Err(SyncError::Deserialization {
+                entity_type: table.to_string(),
+                message: format!("unsafe column name in payload: {column}"),
+            });
+        }
+        columns.push(format!("\"{column}\""));
+        placeholders.push("?".to_string());
+        updates.push(format!("\"{column}\" = excluded.\"{column}\""));
+        values.push(sql_value(value));
+    }
+    if columns.is_empty() {
+        return Err(SyncError::Deserialization {
+            entity_type: table.to_string(),
+            message: "empty sync payload".to_string(),
+        });
+    }
+
+    let statement = Statement::from_sql_and_values(
+        DatabaseBackend::Sqlite,
+        format!(
+            "INSERT INTO {table} ({}) VALUES ({}) ON CONFLICT DO UPDATE SET {}",
+            columns.join(", "),
+            placeholders.join(", "),
+            updates.join(", ")
+        ),
+        values,
+    );
+    db.execute_raw(statement).await?;
+    Ok(())
+}
+
+impl SyncEngine {
     pub async fn list_conflicts(&self) -> Result<Vec<Conflict>, SyncError> {
         let stmt = livtet_data::orm::Statement::from_string(
             livtet_data::orm::DatabaseBackend::Sqlite,

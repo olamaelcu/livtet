@@ -32,6 +32,8 @@ pub const CONFLICTS_PATH: &str = "/sync/conflicts";
 pub const RESOLVE_CONFLICT_PATH: &str = "/sync/conflicts/:id/resolve";
 /// `GET` a file by inventory id.
 pub const FILE_PATH: &str = "/sync/files/:inventory_id";
+/// `GET` the extracted cover for an inventory id.
+pub const COVER_PATH: &str = "/sync/covers/:inventory_id";
 
 /// Query parameters for [`CHANGES_PATH`].
 #[derive(Debug, Clone, Serialize, Deserialize)]

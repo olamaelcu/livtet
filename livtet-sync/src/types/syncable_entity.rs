@@ -527,32 +527,61 @@ pub trait SyncableEntity: Clone + Serialize + for<'de> Deserialize<'de> + Send +
     }
 }
 
+/// Implement [`SyncableEntity`] for every model registered in
+/// [`SyncableEntityKind`], so the apply path can upsert typed models.
+///
+/// `entity_id` is delegated to the enum, which already owns the
+/// primary-key-shape differences (single `DbId` versus compound keys).
+macro_rules! impl_syncable_entities {
+    ($($model:ty => $entity:ty, $variant:ident, $type_name:literal, $table:literal;)+) => {
+        $(
+            impl SyncableEntity for $model {
+                type Entity = $entity;
+
+                fn entity_type_name() -> &'static str {
+                    $type_name
+                }
+
+                fn table_name() -> &'static str {
+                    $table
+                }
+
+                fn entity_id(&self) -> String {
+                    SyncableEntityKind::$variant(self.clone()).entity_id()
+                }
+            }
+        )+
+    };
+}
+
+impl_syncable_entities! {
+    works::Model => works::Entity, Work, "work", "works";
+    editions::Model => editions::Entity, Edition, "edition", "editions";
+    series_entries::Model => series_entries::Entity, SeriesEntry, "series_entry", "series_entries";
+    digital_inventory::Model => digital_inventory::Entity, DigitalInventory, "digital_inventory", "digital_inventory";
+    owned_edition::Model => owned_edition::Entity, OwnedEdition, "owned_edition", "owned_editions";
+    editions_loans::Model => editions_loans::Entity, EditionLoan, "edition_loan", "editions_loans";
+    annotations::Model => annotations::Entity, Annotation, "annotation", "annotations";
+    reading_lists::Model => reading_lists::Entity, ReadingList, "reading_list", "reading_lists";
+    reading_list_book::Model => reading_list_book::Entity, ReadingListBook, "reading_list_book", "reading_list_book";
+    reading_progress::Model => reading_progress::Entity, ReadingProgress, "reading_progress", "reading_progress";
+    work_authors::Model => work_authors::Entity, WorkAuthor, "work_author", "work_authors";
+    work_tags::Model => work_tags::Entity, WorkTag, "work_tag", "work_tags";
+    work_genres::Model => work_genres::Entity, WorkGenre, "work_genre", "work_genres";
+    work_subjects::Model => work_subjects::Entity, WorkSubject, "work_subject", "work_subjects";
+    work_publishers::Model => work_publishers::Entity, WorkPublisher, "work_publisher", "work_publishers";
+    edition_authors::Model => edition_authors::Entity, EditionAuthor, "edition_author", "edition_authors";
+    edition_tags::Model => edition_tags::Entity, EditionTag, "edition_tag", "edition_tags";
+    edition_genres::Model => edition_genres::Entity, EditionGenre, "edition_genre", "edition_genres";
+    edition_subjects::Model => edition_subjects::Entity, EditionSubject, "edition_subject", "edition_subjects";
+    edition_publishers::Model => edition_publishers::Entity, EditionPublisher, "edition_publisher", "edition_publishers";
+    edition_groups::Model => edition_groups::Entity, EditionGroup, "edition_group", "edition_groups";
+}
+
 #[cfg(test)]
 mod tests {
     use super::{SyncableEntity, SyncableEntityKind, entity_type_to_table};
     use livtet_data::entities::works;
-
-    /// Nothing in the workspace implements [`SyncableEntity`] -- the
-    /// `SyncableEntityKind` enum took that job -- so its default `to_payload`
-    /// / `from_payload` bodies have no other caller. This impl exercises them
-    /// and checks the trait is still usable as declared. It lives in-crate
-    /// because the orphan rule only permits implementing a local trait for a
-    /// foreign model here.
-    impl SyncableEntity for works::Model {
-        type Entity = works::Entity;
-
-        fn entity_type_name() -> &'static str {
-            "work"
-        }
-
-        fn table_name() -> &'static str {
-            "works"
-        }
-
-        fn entity_id(&self) -> String {
-            self.id.to_string()
-        }
-    }
 
     fn a_work() -> works::Model {
         works::Model {

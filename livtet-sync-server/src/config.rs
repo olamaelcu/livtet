@@ -19,6 +19,10 @@ pub struct ServerConfig {
     /// Name advertised to nearby peers; when `None` (or blank) the daemon
     /// generates one from the device id.
     pub device_name: Option<String>,
+    /// Where received book files are written; required before pulling offers.
+    pub books_dir: Option<Utf8PathBuf>,
+    /// Where received covers are written; required before pulling offers.
+    pub covers_dir: Option<Utf8PathBuf>,
 }
 
 impl Default for ServerConfig {
@@ -29,14 +33,16 @@ impl Default for ServerConfig {
             port: 0,
             device_id: None,
             device_name: None,
+            books_dir: None,
+            covers_dir: None,
         }
     }
 }
 
 impl ServerConfig {
     /// Parse `--db <path> --host <h> --lan --port <n> --device-id <id>
-    /// --device-name <name>` from an argument iterator (typically
-    /// `std::env::args().skip(1)`).
+    /// --device-name <name> --books-dir <path> --covers-dir <path>` from an
+    /// argument iterator (typically `std::env::args().skip(1)`).
     pub fn from_args(args: impl Iterator<Item = String>) -> Result<Self, ServerError> {
         let mut config = Self::default();
         let mut args = args.peekable();
@@ -79,6 +85,18 @@ impl ServerConfig {
                         ServerError::Config("--device-name requires a value".to_string())
                     })?;
                     config.device_name = Some(value);
+                }
+                "--books-dir" => {
+                    let value = args.next().ok_or_else(|| {
+                        ServerError::Config("--books-dir requires a path".to_string())
+                    })?;
+                    config.books_dir = Some(Utf8PathBuf::from(value));
+                }
+                "--covers-dir" => {
+                    let value = args.next().ok_or_else(|| {
+                        ServerError::Config("--covers-dir requires a path".to_string())
+                    })?;
+                    config.covers_dir = Some(Utf8PathBuf::from(value));
                 }
                 other => {
                     return Err(ServerError::Config(format!("unknown argument: {other}")));

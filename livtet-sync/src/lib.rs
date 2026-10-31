@@ -12,7 +12,7 @@ pub mod engine;
 pub mod types;
 
 // Re-export types for convenience
-pub use engine::SyncEngine;
+pub use engine::{ApplyOptions, ApplyOutcome, InventoryPaths, SyncEngine};
 pub use types::{
     ChangeLogEntity, Conflict, ENTITY_DUMP_TYPES, EntityDump, FullDump, PullResponse, PushResponse,
     Result, SyncChange, SyncError, SyncStatus, SyncableEntity, SyncableEntityKind, SyncedEntity,

@@ -21,6 +21,8 @@ pub mod session;
 
 #[cfg(feature = "poem")]
 pub mod pairing;
+#[cfg(feature = "poem")]
+pub mod rate_limit;
 #[cfg(feature = "reqwest")]
 pub mod reqwest_client;
 #[cfg(feature = "poem")]

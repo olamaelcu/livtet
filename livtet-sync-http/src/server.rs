@@ -30,10 +30,11 @@ use tokio::sync::{Mutex, RwLock, watch};
 
 use crate::{
     pairing::{PairWaiters, PairingDecision, PairingWaiter},
+    rate_limit::ClaimRateLimiter,
     routes::{
-        CHANGES_PATH, CONFLICTS_PATH, FILE_PATH, IDENTITY_PATH, PAIR_PATH, PAIR_STATUS_PATH,
-        PULL_FULL_PATH, PUSH_PATH, PairRequest, PullQuery, RESOLVE_CONFLICT_PATH, ResolveRequest,
-        SESSION_HEADER, STATUS_PATH, SyncIdentity,
+        CHANGES_PATH, CONFLICTS_PATH, COVER_PATH, FILE_PATH, IDENTITY_PATH, PAIR_PATH,
+        PAIR_STATUS_PATH, PULL_FULL_PATH, PUSH_PATH, PairRequest, PullQuery, RESOLVE_CONFLICT_PATH,
+        ResolveRequest, SESSION_HEADER, STATUS_PATH, SyncIdentity,
     },
 };
 
@@ -41,6 +42,13 @@ type DynError = Box<dyn std::error::Error + Send + Sync>;
 
 /// How long a `/sync/pair` request stays approvable, in seconds.
 const PAIR_TICKET_TTL_SECS: i64 = 300;
+
+/// One limiter per process; state is per source address.
+fn claim_limiter() -> &'static ClaimRateLimiter {
+    static LIMITER: std::sync::LazyLock<ClaimRateLimiter> =
+        std::sync::LazyLock::new(ClaimRateLimiter::default);
+    &LIMITER
+}
 
 /// Pull the session token out of `Authorization: Bearer …` or the dedicated
 /// header. Returns `None` when neither carries a non-empty value.
@@ -73,19 +81,47 @@ fn session_token(req: &poem::Request) -> Option<String> {
 /// `paired_devices.session_token` is created by a later client migration and is
 /// not on the SeaORM entity, so this is a targeted statement rather than a
 /// model query. Unknown and absent tokens are both `401` — the response must
-/// not distinguish "no header" from "not paired".
-async fn authorize(engine: &SyncEngine, req: &poem::Request) -> Result<(), Error> {
+/// not distinguish "no header" from "not paired". Returns the caller's device
+/// id so routes can scope rows, such as file offers, to their target.
+async fn authorize(engine: &SyncEngine, req: &poem::Request) -> Result<String, Error> {
     let token = session_token(req).ok_or_else(|| Error::from_status(StatusCode::UNAUTHORIZED))?;
     let statement = Statement::from_sql_and_values(
         DbBackend::Sqlite,
-        "SELECT 1 FROM paired_devices WHERE session_token = ? LIMIT 1",
+        "SELECT device_id FROM paired_devices WHERE session_token = ? LIMIT 1",
         [token.into()],
     );
     match engine.db().query_one_raw(statement).await {
-        Ok(Some(_)) => Ok(()),
+        Ok(Some(row)) => {
+            let bytes: Vec<u8> = row
+                .try_get("", "device_id")
+                .map_err(|_| Error::from_status(StatusCode::INTERNAL_SERVER_ERROR))?;
+            let arr: [u8; 16] = bytes
+                .try_into()
+                .map_err(|_| Error::from_status(StatusCode::INTERNAL_SERVER_ERROR))?;
+            Ok(livtet_types::DbId::from_bytes(arr).to_string())
+        }
         Ok(None) => Err(Error::from_status(StatusCode::UNAUTHORIZED)),
         Err(_) => Err(Error::from_status(StatusCode::INTERNAL_SERVER_ERROR)),
     }
+}
+
+/// Whether a change row is visible to the authenticated device.
+///
+/// `file_offer` rows name a target device; every other change is library-wide.
+/// A legacy offer without a target stays visible rather than being lost.
+fn change_is_for(change: &SyncChange, device_id: &str) -> bool {
+    if change.entity_type != "file_offer" {
+        return true;
+    }
+    serde_json::from_str::<serde_json::Value>(&change.payload)
+        .ok()
+        .and_then(|payload| {
+            payload
+                .get("to_device_id")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string)
+        })
+        .is_none_or(|target| target == device_id)
 }
 
 #[handler]
@@ -120,11 +156,15 @@ async fn get_changes(
 ) -> Result<Json<PullResponse>, Error> {
     let limit = query.limit.unwrap_or(100);
     let inner = engine.read().await;
-    authorize(&inner, req).await?;
-    let response = inner
+    let device_id = authorize(&inner, req).await?;
+    let mut response = inner
         .pull_changes(query.since_version, limit)
         .await
         .map_err(|_e| Error::from_status(StatusCode::INTERNAL_SERVER_ERROR))?;
+    // Offers name their target; other devices must not see or act on them.
+    response
+        .changes
+        .retain(|change| change_is_for(change, &device_id));
     Ok(Json(response))
 }
 
@@ -150,6 +190,15 @@ async fn post_pair(
     local: &poem::web::LocalAddr,
     Json(body): Json<PairRequest>,
 ) -> Result<Json<serde_json::Value>, Error> {
+    // A claim is unauthenticated by design; cap how fast one source can file
+    // them so the pending table and the approval UI stay usable. Peers behind
+    // one NAT share a budget, which is why the window is generous.
+    if let Some(peer) = remote.0.as_socket_addr()
+        && !claim_limiter().allow(peer.ip())
+    {
+        return Err(Error::from_status(StatusCode::TOO_MANY_REQUESTS));
+    }
+
     let inner = engine.read().await;
 
     use livtet_data::client_entities::pending_pairings;
@@ -388,6 +437,20 @@ async fn get_conflicts(
     Ok(Json(conflicts))
 }
 
+/// Decode the 32-char hex inventory id used by the file and cover routes.
+fn parse_inventory_id(raw: &str) -> Result<livtet_types::DbId, Error> {
+    use livtet_types::DbId;
+
+    match hex::decode(raw) {
+        Ok(bytes) if bytes.len() == 16 => {
+            let mut arr = [0u8; 16];
+            arr.copy_from_slice(&bytes);
+            Ok(DbId::from_bytes(arr))
+        }
+        _ => Err(Error::from_status(StatusCode::BAD_REQUEST)),
+    }
+}
+
 #[allow(clippy::disallowed_types, clippy::disallowed_methods)]
 #[handler]
 async fn get_file(
@@ -395,17 +458,9 @@ async fn get_file(
     Data(engine): Data<&Arc<RwLock<SyncEngine>>>,
     req: &poem::Request,
 ) -> Result<poem::Response, Error> {
-    use livtet_types::DbId;
     use tokio::io::{AsyncReadExt, AsyncSeekExt};
 
-    let inv_id = match hex::decode(&inventory_id) {
-        Ok(b) if b.len() == 16 => {
-            let mut arr = [0u8; 16];
-            arr.copy_from_slice(&b);
-            DbId::from_bytes(arr)
-        }
-        _ => return Err(Error::from_status(StatusCode::BAD_REQUEST)),
-    };
+    let inv_id = parse_inventory_id(&inventory_id)?;
 
     let engine = engine.read().await;
     authorize(&engine, req).await?;
@@ -505,6 +560,53 @@ async fn get_file(
         .body(body))
 }
 
+/// Serve the extracted cover for an inventory row.
+///
+/// Covers are small and immutable once extracted, so there is no range
+/// handling here; the receiver fetches the whole image after the file.
+#[allow(clippy::disallowed_types, clippy::disallowed_methods)]
+#[handler]
+async fn get_cover(
+    Path(inventory_id): Path<String>,
+    Data(engine): Data<&Arc<RwLock<SyncEngine>>>,
+    req: &poem::Request,
+) -> Result<poem::Response, Error> {
+    let inv_id = parse_inventory_id(&inventory_id)?;
+
+    let engine = engine.read().await;
+    authorize(&engine, req).await?;
+
+    let row = livtet_data::entities::digital_inventory::Entity::find_by_id(inv_id)
+        .one(engine.db())
+        .await
+        .map_err(|_| Error::from_status(StatusCode::INTERNAL_SERVER_ERROR))?
+        .ok_or_else(|| Error::from_status(StatusCode::NOT_FOUND))?;
+
+    let Some(cover_path) = row.cover_path else {
+        return Err(Error::from_status(StatusCode::NOT_FOUND));
+    };
+    let bytes = tokio::fs::read(&cover_path)
+        .await
+        .map_err(|_| Error::from_status(StatusCode::NOT_FOUND))?;
+    let content_type = match std::path::Path::new(&cover_path)
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .map(str::to_ascii_lowercase)
+        .as_deref()
+    {
+        Some("png") => "image/png",
+        Some("jpg" | "jpeg") => "image/jpeg",
+        Some("webp") => "image/webp",
+        _ => "application/octet-stream",
+    };
+
+    Ok(poem::Response::builder()
+        .status(StatusCode::OK)
+        .header("Content-Type", content_type)
+        .header("Content-Length", bytes.len().to_string())
+        .body(bytes))
+}
+
 pub fn make_sync_routes(
     engine: Arc<RwLock<SyncEngine>>,
     pair_waiters: PairWaiters,
@@ -521,6 +623,7 @@ pub fn make_sync_routes(
         .at(CONFLICTS_PATH, get(get_conflicts))
         .at(RESOLVE_CONFLICT_PATH, post(post_resolve_conflict))
         .at(FILE_PATH, get(get_file))
+        .at(COVER_PATH, get(get_cover))
         .with(AddData::new(engine))
         .with(AddData::new(pair_waiters))
         .with(AddData::new(identity))

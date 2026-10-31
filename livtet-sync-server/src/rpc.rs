@@ -39,8 +39,14 @@ pub mod method {
     pub const PAIRING_APPROVE: &str = "pairing.approve";
     /// Reject a pending pairing.
     pub const PAIRING_REJECT: &str = "pairing.reject";
+    /// Claim a peer's pairing surface and wait for its approval.
+    pub const PAIRING_CLAIM: &str = "pairing.claim";
     /// List paired devices.
     pub const DEVICES_LIST: &str = "devices.list";
+    /// Offer a local book file to one paired device.
+    pub const DEVICES_OFFER_BOOK: &str = "devices.offer_book";
+    /// Pull changes and offered files from one outbound paired device.
+    pub const DEVICES_PULL: &str = "devices.pull";
     /// Revoke a paired device.
     pub const DEVICES_REVOKE: &str = "devices.revoke";
     /// List unresolved sync conflicts.
@@ -56,6 +62,8 @@ pub mod method {
 
     /// Notification: a remote device requested pairing (`POST /sync/pair`).
     pub const NOTIFY_PAIRING_REQUESTED: &str = "pairing.requested";
+    /// Notification: this device's own claim was approved and stored.
+    pub const NOTIFY_PAIRING_CLAIMED: &str = "pairing.claimed";
     /// Notification: the server served an HTTP request.
     pub const NOTIFY_REQUEST_RECEIVED: &str = "request.received";
     /// Notification: a sync push/pull completed.
@@ -184,6 +192,27 @@ pub struct DeviceNameParams {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DeviceParams {
     pub device_id: String,
+}
+
+/// Parameters for [`method::DEVICES_OFFER_BOOK`].
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OfferBookParams {
+    /// Edition whose file is being offered.
+    pub edition_id: String,
+    /// Paired device that should pull it.
+    pub device_id: String,
+}
+
+/// Parameters for [`method::PAIRING_CLAIM`].
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PairingClaimParams {
+    /// Peer's advertised HTTP endpoint, `host:port`.
+    pub listen_on: String,
+    /// Peer node id from discovery, used as the pairing key.
+    pub node_id: String,
+    /// Friendly name the peer showed in discovery.
+    #[serde(default)]
+    pub device_name: Option<String>,
 }
 
 /// Parameters for [`method::CONFLICTS_RESOLVE`].
