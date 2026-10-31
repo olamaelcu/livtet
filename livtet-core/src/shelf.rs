@@ -175,7 +175,9 @@ pub async fn insert_book_shelf(
     conn: &DatabaseConnection,
     entry: book_shelf::ActiveModel,
 ) -> Result<BookShelf, DbErr> {
-    BookShelfEntity::insert(entry).exec_with_returning(conn).await
+    BookShelfEntity::insert(entry)
+        .exec_with_returning(conn)
+        .await
 }
 
 pub async fn update_book_shelf(

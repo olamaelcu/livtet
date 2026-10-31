@@ -12,7 +12,8 @@
 
 use livtet_data::entities::{editions, reading_bookmarks, works};
 use livtet_data::orm::{
-    ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, PaginatorTrait, QueryFilter, Set,
+    ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, PaginatorTrait, QueryFilter,
+    Set,
 };
 use livtet_data::{Kind, TestDb};
 use livtet_types::DbId;

@@ -62,7 +62,6 @@ impl Command {
         }
     }
 
-
     /// Run against an explicit [`Context`] rather than the platform defaults.
     pub fn run_with(self, ctx: &Context) -> Result<()> {
         match self {
