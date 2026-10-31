@@ -19,7 +19,7 @@ pub const PULL_FULL_PATH: &str = "/sync/pull-full";
 pub const PUSH_PATH: &str = "/sync/push";
 /// `POST` a pairing request.
 pub const PAIR_PATH: &str = "/sync/pair";
-/// `GET` (SSE) the pairing decision for a token.
+/// `GET` (SSE) the pairing decision for an identity (node_id).
 pub const PAIR_STATUS_PATH: &str = "/sync/pair/status/:token";
 /// `GET` unresolved conflicts.
 pub const CONFLICTS_PATH: &str = "/sync/conflicts";
@@ -41,7 +41,7 @@ pub struct PairRequest {
     pub device_id: String,
     pub name: String,
     pub device_type: String,
-    pub token: String,
+    pub node_id: String,
 }
 
 /// Body for [`RESOLVE_CONFLICT_PATH`].

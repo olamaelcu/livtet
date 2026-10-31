@@ -38,8 +38,8 @@ pub struct PairingDecision {
     pub session_token: String,
 }
 
-/// Process-wide map of pairing token → broadcast sender.  Created in
-/// `start_sync_server` and registered via `set_pair_waiters`; consumed
+/// Process-wide map of node identity (`node_id` / `NodeId`) → broadcast sender.
+/// Created in `start_sync_server` and registered via `set_pair_waiters`; consumed
 /// by `apply_pairing_decision` (called from Tauri commands).
 pub type PairWaiters = Arc<tokio::sync::Mutex<HashMap<String, broadcast::Sender<PairingDecision>>>>;
 
@@ -72,8 +72,8 @@ pub fn get_pair_waiters() -> Option<PairWaiters> {
     guard.clone()
 }
 
-/// Fires a `PairingDecision` on the broadcast channel for the given token, then
-/// removes the entry from the registry. This is what wakes the mobile SSE
+/// Fires a `PairingDecision` on the broadcast channel for the given node identity,
+/// then removes the entry from the registry. This is what wakes the mobile SSE
 /// stream subscribed via `get_pair_status`.
 ///
 /// The decision value (e.g. "approved" or "rejected") is the same string the
@@ -85,7 +85,7 @@ pub fn get_pair_waiters() -> Option<PairWaiters> {
 /// the mobile client only uses session tokens on approval.
 ///
 /// Returns `true` if a waiter was found and signaled, `false` otherwise.
-pub async fn apply_pairing_decision(token: &str, decision: &str, session_token: &str) -> bool {
+pub async fn apply_pairing_decision(node_id: &str, decision: &str, session_token: &str) -> bool {
     let Some(waiters) = get_pair_waiters() else {
         return false;
     };
@@ -97,7 +97,7 @@ pub async fn apply_pairing_decision(token: &str, decision: &str, session_token: 
     };
 
     let mut map = waiters.lock().await;
-    let signaled = if let Some(tx) = map.get(token) {
+    let signaled = if let Some(tx) = map.get(node_id) {
         // `send` only fails if there are no active receivers, which can happen
         // if the mobile disconnected between `post_pair` and our fan-out.
         // We don't treat that as an error — the pairing still completed.
@@ -106,6 +106,6 @@ pub async fn apply_pairing_decision(token: &str, decision: &str, session_token: 
     } else {
         false
     };
-    map.remove(token);
+    map.remove(node_id);
     signaled
 }

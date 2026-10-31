@@ -9,10 +9,11 @@ use livtet_data::orm::{
     ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, PaginatorTrait, QueryFilter,
     Set,
 };
+use livtet_iroh::{DiscoveryService, NodeId, PeerIdentity};
 use livtet_sync::SyncEngine;
 use livtet_sync_http::routes::{CHANGES_PATH, PAIR_PATH, PULL_FULL_PATH, PUSH_PATH};
 use livtet_sync_http::{PairWaiters, make_sync_routes, set_pair_waiters};
-use livtet_types::{Address, DbId, PairingStatus};
+use livtet_types::{DbId, PairingStatus};
 use poem::{Endpoint, EndpointExt, Server};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::{Mutex, RwLock, mpsc, watch};
@@ -49,6 +50,8 @@ pub struct DaemonState {
     pub last_request_at: Arc<std::sync::Mutex<Option<String>>>,
     /// Broadcast registry shared with `livtet-sync-http`'s pairing routes.
     pub pair_waiters: PairWaiters,
+    /// The `iroh` discovery endpoint, bound on first use.
+    pub discovery: Mutex<Option<Arc<DiscoveryService>>>,
     /// The running HTTP server handle, if any.
     pub server: Mutex<Option<ServerHandle>>,
     /// The address the HTTP server is actually bound to.
@@ -100,6 +103,7 @@ pub async fn run_async(config: ServerConfig) -> Result<(), ServerError> {
         requests_served: Arc::new(AtomicU64::new(0)),
         last_request_at: Arc::new(std::sync::Mutex::new(None)),
         pair_waiters,
+        discovery: Mutex::new(None),
         server: Mutex::new(None),
         bound: Mutex::new(None),
     });
@@ -107,9 +111,11 @@ pub async fn run_async(config: ServerConfig) -> Result<(), ServerError> {
     let writer = tokio::spawn(writer_task(out_rx));
 
     start_server(&state).await?;
+    let _ = cleanup_old_pairings(&state).await;
 
     let loop_result = read_loop(&state, &out_tx).await;
     let _ = stop_server(&state).await;
+    shutdown_discovery(&state).await;
 
     // The notifier holds a clone of the sender, so closing our handle closes
     // the channel for every clone, letting the writer drain and exit.
@@ -535,45 +541,38 @@ async fn handle_pairing_begin(
     request: &rpc::RpcRequest,
     state: &Arc<DaemonState>,
 ) -> Result<serde_json::Value, RpcFailure> {
-    use livtet_data::client_entities::pending_pairings;
-
     let params: PairingBeginParams = parse_params(request)?;
     let ttl = params.ttl_secs.unwrap_or(300).min(i64::MAX as u64) as i64;
     let now = time::OffsetDateTime::now_utc();
     let expires = now + time::Duration::seconds(ttl);
 
-    let token = ulid::Ulid::generate().to_string();
-    let desktop_id = state
-        .device_id
-        .parse::<DbId>()
-        .map_err(|_| invalid_params(format!("device id is not a ULID: {}", state.device_id)))?;
+    // The ticket is this device's own node identity: discovery advertisements
+    // carry it, and remote peers send it back on `/sync/pair`. No token is
+    // minted and no `pending_pairings` row is created here — rows only exist
+    // for requests that actually arrived from another device.
+    let device_type = params.device_type.unwrap_or_else(|| "unknown".to_string());
+    let identity = match discovery_identity(state, &device_type).await {
+        Some(identity) => identity,
+        // Without a bound endpoint there is nothing for peers to discover;
+        // pairing still works for callers that were given the address and
+        // device id directly, so publish the device id rather than failing.
+        None => PeerIdentity {
+            node_id: NodeId(state.device_id.clone()),
+            name: state.device_id.clone(),
+            device_type,
+        },
+    };
 
     let (host, port) = current_host_port(state).await;
-    let listen_on = format!("{host}:{port}")
-        .parse::<Address>()
-        .map_err(|e| RpcFailure {
-            code: rpc::error_code::INTERNAL_ERROR,
-            message: format!("invalid listen address: {e}"),
-        })?;
 
-    let model = pending_pairings::ActiveModel {
-        token: Set(token.clone()),
-        desktop_id: Set(desktop_id),
-        listen_on: Set(Some(listen_on)),
-        status_id: Set(Some(DbId::from(PairingStatus::Pending))),
-        device_name: Set(None),
-        device_type_id: Set(None),
-        device_id: Set(None),
-        origin_addr: Set(None),
-        created_at: Set(primitive_now()),
-        expires_at: Set(time::PrimitiveDateTime::new(expires.date(), expires.time())),
-    };
-    model.insert(state.engine.db()).await?;
-
-    let uri = format!("livtet://sync?host={host}&port={port}&token={token}");
     Ok(serde_json::json!({
-        "token": token,
-        "uri": uri,
+        "node_id": identity.node_id.0,
+        "identity": {
+            "node_id": identity.node_id.0,
+            "name": identity.name,
+            "device_type": identity.device_type,
+        },
+        "listen_on": format!("{host}:{port}"),
         "expires_at": format_offset(expires),
     }))
 }
@@ -596,7 +595,7 @@ async fn handle_pairing_list(state: &Arc<DaemonState>) -> Result<serde_json::Val
         .iter()
         .map(|row| {
             serde_json::json!({
-                "token": row.token,
+                "node_id": row.token,
                 "desktop_id": row.desktop_id.to_string(),
                 "listen_on": row.listen_on.as_ref().map(|addr| addr.to_string()),
                 "status_id": row.status_id.map(|id| id.to_string()),
@@ -625,20 +624,21 @@ async fn handle_pairing_approve(
     let pending = pending_pairings::Entity::find_by_id(params.token.clone())
         .one(db)
         .await?
-        .ok_or_else(|| invalid_params(format!("unknown pairing token: {}", params.token)))?;
+        .ok_or_else(|| invalid_params(format!("unknown pairing node id: {}", params.token)))?;
 
     // Fail closed: only a request that originated elsewhere is a pairing.
-    // A ticket this daemon minted has no origin, and a request from the
-    // daemon's own address is itself, not a remote device.
+    // `pending.token` holds the remote node identity; a request carrying our
+    // own identity, or one recorded without an origin, is not a peer.
     let self_addr = self_address(state).await;
-    if pending
-        .origin_addr
-        .as_ref()
-        .is_none_or(|addr| addr.to_string() == self_addr)
+    let pending_node_id = pending.token.clone();
+    if pending_node_id == state.device_id
+        || pending
+            .origin_addr
+            .as_ref()
+            .is_none_or(|addr| addr.to_string() == self_addr)
     {
         return Err(invalid_params(format!(
-            "pairing token did not originate from a remote device: {}",
-            params.token
+            "pairing node id did not originate from a remote device: {pending_node_id}"
         )));
     }
 
@@ -680,8 +680,8 @@ async fn handle_pairing_approve(
     pending_model.status_id = Set(Some(DbId::from(PairingStatus::Approved)));
     pending_model.update(db).await?;
 
-    let _ =
-        livtet_sync_http::apply_pairing_decision(&params.token, "approved", &session_token).await;
+    let _ = livtet_sync_http::apply_pairing_decision(&pending_node_id, "approved", &session_token)
+        .await;
 
     Ok(serde_json::json!({
         "device_id": device_id.to_string(),
@@ -701,13 +701,29 @@ async fn handle_pairing_reject(
     let pending = pending_pairings::Entity::find_by_id(params.token.clone())
         .one(db)
         .await?
-        .ok_or_else(|| invalid_params(format!("unknown pairing token: {}", params.token)))?;
+        .ok_or_else(|| invalid_params(format!("unknown pairing node id: {}", params.token)))?;
+
+    // Fail closed: `pending.token` holds the remote node identity. Rejecting a
+    // request that carries our own identity, or one with no recorded origin,
+    // would be acting on something this device did not receive from a peer.
+    let self_addr = self_address(state).await;
+    let pending_node_id = pending.token.clone();
+    if pending_node_id == state.device_id
+        || pending
+            .origin_addr
+            .as_ref()
+            .is_none_or(|addr| addr.to_string() == self_addr)
+    {
+        return Err(invalid_params(format!(
+            "pairing node id did not originate from a remote device: {pending_node_id}"
+        )));
+    }
 
     let mut model: pending_pairings::ActiveModel = pending.into();
     model.status_id = Set(Some(DbId::from(PairingStatus::Rejected)));
     model.update(db).await?;
 
-    let _ = livtet_sync_http::apply_pairing_decision(&params.token, "rejected", "").await;
+    let _ = livtet_sync_http::apply_pairing_decision(&pending_node_id, "rejected", "").await;
 
     Ok(serde_json::json!({ "ok": true }))
 }
@@ -800,6 +816,7 @@ async fn handle_server_stop(state: &Arc<DaemonState>) -> Result<serde_json::Valu
 
 async fn handle_shutdown(state: &Arc<DaemonState>) -> Result<serde_json::Value, RpcFailure> {
     stop_server(state).await?;
+    shutdown_discovery(state).await;
     Ok(serde_json::json!({ "ok": true }))
 }
 
@@ -847,4 +864,46 @@ fn format_primitive(dt: time::PrimitiveDateTime) -> String {
         .ok()
         .and_then(|fmt| dt.format(&fmt).ok())
         .unwrap_or_default()
+}
+/// Bind the discovery endpoint on first use and return the identity to
+/// advertise. A failed bind is not fatal: the daemon logs it and pairing falls
+/// back to explicit addresses.
+async fn discovery_identity(state: &Arc<DaemonState>, device_type: &str) -> Option<PeerIdentity> {
+    let mut slot = state.discovery.lock().await;
+    if slot.is_none() {
+        match DiscoveryService::bind().await {
+            Ok(service) => *slot = Some(Arc::new(service)),
+            Err(error) => {
+                tracing::warn!(%error, "peer discovery unavailable; advertising the device id");
+                return None;
+            }
+        }
+    }
+    slot.as_ref()
+        .map(|service| service.identity(state.device_id.clone(), device_type.to_string()))
+}
+
+/// Close the discovery endpoint, if it was ever bound.
+async fn shutdown_discovery(state: &Arc<DaemonState>) {
+    if let Some(service) = state.discovery.lock().await.take() {
+        service.shutdown().await;
+    }
+}
+
+/// Delete pending pairings whose ticket window has closed.
+///
+/// Rows only outlive their window if the daemon exited while one was open;
+/// pruning on startup keeps `pairing.list` free of dead entries.
+async fn cleanup_old_pairings(state: &Arc<DaemonState>) -> Result<(), ServerError> {
+    use livtet_data::client_entities::pending_pairings;
+    use livtet_data::orm::{ColumnTrait, EntityTrait, QueryFilter};
+
+    pending_pairings::Entity::delete_many()
+        .filter(pending_pairings::Column::ExpiresAt.lt(primitive_now()))
+        .exec(state.engine.db())
+        .await
+        .map_err(|e| ServerError::Db(format!("cleanup failed: {e}")))?;
+
+    tracing::info!("cleaned up old pending pairings");
+    Ok(())
 }

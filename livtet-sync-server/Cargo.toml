@@ -17,8 +17,8 @@ path = "src/lib.rs"
 [[bin]]
 name = "livtet-sync-server"
 path = "src/main.rs"
-
 [dependencies]
+livtet-iroh = { workspace = true }
 livtet-sync = { workspace = true }
 livtet-sync-http = { workspace = true, features = ["poem"] }
 livtet-data = { workspace = true }
@@ -54,4 +54,6 @@ tokio = { workspace = true, features = [
   "io-std",
 ] }
 fs-err = { workspace = true }
-reqwest = { workspace = true, features = ["json"] }
+# `iroh-relay` selects `rustls-no-provider` on this same `reqwest`; the
+# `rustls` feature picks the provider so test clients can be constructed.
+reqwest = { workspace = true, features = ["json", "rustls"] }

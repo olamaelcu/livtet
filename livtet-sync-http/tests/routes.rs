@@ -15,7 +15,7 @@ fn client(device: &Device) -> TestClient<impl Endpoint> {
 }
 
 /// `client`, but over a caller-supplied waiter map so a test can register a
-/// pairing token before the routes are built.
+/// pairing identity before the routes are built.
 fn client_with_waiters(device: &Device, waiters: PairWaiters) -> TestClient<impl Endpoint> {
     let engine = SyncEngine::new(device.conn.clone(), device.engine.device_id().to_string());
     TestClient::new(make_sync_routes(Arc::new(RwLock::new(engine)), waiters))
@@ -405,7 +405,7 @@ mod pair_status {
     use super::*;
 
     #[tokio::test]
-    async fn an_unregistered_token_is_not_found() {
+    async fn an_unregistered_identity_is_not_found() {
         let device = Device::new("server").await;
 
         client(&device)
@@ -415,7 +415,7 @@ mod pair_status {
             .assert_status(StatusCode::NOT_FOUND);
     }
 
-    /// A registered token opens an SSE stream.
+    /// A registered identity opens an SSE stream.
     ///
     /// Only the status and content type are asserted. The stream's own body
     /// loop waits on the broadcast channel with a 300-second idle timeout, so
@@ -423,14 +423,14 @@ mod pair_status {
     /// `async_stream::stream!` body carries no coverage regions anyway, so
     /// draining it would buy nothing.
     #[tokio::test]
-    async fn a_registered_token_opens_an_event_stream() {
+    async fn a_registered_identity_opens_an_event_stream() {
         let device = Device::new("server").await;
         let waiters: PairWaiters = Arc::new(Mutex::new(HashMap::new()));
         let (tx, _rx) = tokio::sync::broadcast::channel(4);
-        waiters.lock().await.insert("pair-token".to_string(), tx);
+        waiters.lock().await.insert("pair-node".to_string(), tx);
 
         let response = client_with_waiters(&device, waiters)
-            .get("/sync/pair/status/pair-token")
+            .get("/sync/pair/status/pair-node")
             .send()
             .await;
         response.assert_status_is_ok();

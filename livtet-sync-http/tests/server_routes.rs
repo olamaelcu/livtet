@@ -46,11 +46,11 @@ async fn get_conflicts_returns_an_empty_list_for_a_fresh_engine() {
 }
 
 #[tokio::test]
-async fn pair_status_for_an_unknown_token_is_not_found() {
+async fn pair_status_for_an_unknown_identity_is_not_found() {
     let device = Device::new("server").await;
     let (mut server, url) = serve(&device).await;
 
-    // No pairing waiter is registered for this token, so the SSE handler
+    // No pairing waiter is registered for this identity, so the SSE handler
     // short-circuits with 404 rather than opening a stream.
     let resp = reqwest::Client::new()
         .get(format!("{url}/sync/pair/status/no-such-token"))

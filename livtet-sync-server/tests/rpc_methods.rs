@@ -13,14 +13,17 @@ use fs_err as fs;
 use livtet_sync_server::rpc::{self, StdioClient};
 
 fn temp_db_path(tag: &str) -> Utf8PathBuf {
+    // Concurrent tests can read the same nanosecond; a counter keeps the
+    // SQLite file (and its migration run) unique within the test binary.
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let seq = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|duration| duration.as_nanos())
         .unwrap_or(0);
     let path = std::env::temp_dir().join(format!(
-        "livtet-sync-server-{tag}-{}-{}.db",
+        "livtet-sync-server-{tag}-{}-{nanos}-{seq}.db",
         std::process::id(),
-        nanos
     ));
     Utf8PathBuf::from_path_buf(path).expect("temp dir path is valid UTF-8")
 }
@@ -155,10 +158,17 @@ async fn server_start_and_stop_are_reflected_in_status() {
     cleanup(&db_path);
 }
 
+/// The identity published by `pairing.begin` is not itself a claim, so
+/// rejecting it fails; only a request a remote device actually filed can be
+/// rejected.
 #[tokio::test]
-async fn pairing_reject_marks_a_minted_token_and_refuses_unknown_ones() {
+async fn pairing_reject_requires_a_remote_claim() {
     let db_path = temp_db_path("reject");
     let mut client = spawn(&db_path).await;
+
+    let status = ok_result(&mut client, rpc::method::STATUS, serde_json::json!({})).await;
+    let host = status["host"].as_str().expect("host").to_string();
+    let port = status["port"].as_u64().expect("port");
 
     let begin = ok_result(
         &mut client,
@@ -166,26 +176,66 @@ async fn pairing_reject_marks_a_minted_token_and_refuses_unknown_ones() {
         serde_json::json!({}),
     )
     .await;
-    let token = begin["token"].as_str().expect("token").to_string();
+    let local_node_id = begin["node_id"].as_str().expect("node_id").to_string();
 
-    let rejected = ok_result(
-        &mut client,
-        rpc::method::PAIRING_REJECT,
-        serde_json::json!({ "token": token }),
-    )
-    .await;
-    assert_eq!(rejected["ok"].as_bool(), Some(true));
-
-    // A token that was never minted is the caller's mistake.
+    // No pending row exists for the locally published identity.
     assert_eq!(
         error_code(
             &mut client,
             rpc::method::PAIRING_REJECT,
-            serde_json::json!({ "token": "01ARZ3NDEKTSV4RRFFQ69G5FAV" }),
+            serde_json::json!({ "token": local_node_id }),
         )
         .await,
         rpc::error_code::INVALID_PARAMS
     );
+
+    // A real remote claim is rejectable.
+    let remote_node_id = "aa11bb22cc33dd44ee55ff6677889900aabbccddeeff00112233445566778899";
+    let response = reqwest::Client::new()
+        .post(format!(
+            "http://{host}:{port}{}",
+            livtet_sync_http::PAIR_PATH
+        ))
+        .json(&serde_json::json!({
+            "device_id": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+            "name": "Remote Phone",
+            "device_type": "android",
+            "node_id": remote_node_id,
+        }))
+        .send()
+        .await
+        .expect("pair POST");
+    assert!(
+        response.status().is_success(),
+        "pair POST: {}",
+        response.status()
+    );
+
+    // The claim arrived over loopback, so stamp another host's address to
+    // stand in for a device on the network.
+    let pool = livtet_data::sql::sqlite::SqlitePoolOptions::new()
+        .connect_with(
+            livtet_data::sql::sqlite::SqliteConnectOptions::new()
+                .filename(&db_path)
+                .create_if_missing(false),
+        )
+        .await
+        .expect("open db");
+    livtet_data::sql::query("UPDATE pending_pairings SET origin_addr = ? WHERE token = ?")
+        .bind(format!("10.0.0.5:{port}"))
+        .bind(remote_node_id)
+        .execute(&pool)
+        .await
+        .expect("stamp a remote origin");
+    pool.close().await;
+
+    let rejected = ok_result(
+        &mut client,
+        rpc::method::PAIRING_REJECT,
+        serde_json::json!({ "token": remote_node_id }),
+    )
+    .await;
+    assert_eq!(rejected["ok"].as_bool(), Some(true));
 
     shutdown(&mut client).await;
     cleanup(&db_path);
@@ -336,23 +386,23 @@ async fn typed_params_take_the_same_path_as_a_json_value() {
         serde_json::json!({}),
     )
     .await;
-    let token = begin["token"].as_str().expect("token").to_string();
+    let node_id = begin["node_id"].as_str().expect("node_id").to_string();
 
     let response = client
         .request_params(
             rpc::method::PAIRING_REJECT,
-            &rpc::TokenParams {
-                token: token.clone(),
-            },
+            &rpc::TokenParams { token: node_id },
         )
         .await
         .expect("request_params transport");
-    assert!(
-        response.error.is_none(),
-        "typed params must reach the handler: {:?}",
-        response.error
+    // `pairing.begin` publishes an identity but files no claim, so rejecting
+    // it is the handler's invalid-params answer. Reaching that answer proves
+    // the typed params survived the transport.
+    assert_eq!(
+        response.error.map(|error| error.code),
+        Some(rpc::error_code::INVALID_PARAMS),
+        "typed params must reach the handler"
     );
-    assert_eq!(response.result.expect("result")["ok"].as_bool(), Some(true));
 
     shutdown(&mut client).await;
     cleanup(&db_path);
@@ -417,16 +467,12 @@ async fn approving_a_remote_claim_pairs_the_device() {
     let host = status["host"].as_str().expect("host").to_string();
     let port = status["port"].as_u64().expect("port");
 
-    let begin = ok_result(
-        &mut client,
-        rpc::method::PAIRING_BEGIN,
-        serde_json::json!({}),
-    )
-    .await;
-    let token = begin["token"].as_str().expect("token").to_string();
+    // The claim is keyed by the *remote* node identity. Reusing the daemon's
+    // own identity here would fail closed, correctly.
+    let remote_node_id = "aa11bb22cc33dd44ee55ff6677889900aabbccddeeff00112233445566778899";
 
-    // A remote device claims the ticket over HTTP, which fills in its name,
-    // type and device id.
+    // A remote device claims it over HTTP, which fills in its name, type and
+    // device id.
     let remote_device_id = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
     let response = reqwest::Client::new()
         .post(format!(
@@ -437,7 +483,7 @@ async fn approving_a_remote_claim_pairs_the_device() {
             "device_id": remote_device_id,
             "name": "Remote Phone",
             "device_type": "android",
-            "token": token,
+            "node_id": remote_node_id,
         }))
         .send()
         .await
@@ -461,7 +507,7 @@ async fn approving_a_remote_claim_pairs_the_device() {
         .expect("open db");
     livtet_data::sql::query("UPDATE pending_pairings SET origin_addr = ? WHERE token = ?")
         .bind(format!("10.0.0.5:{port}"))
-        .bind(token.clone())
+        .bind(remote_node_id)
         .execute(&pool)
         .await
         .expect("stamp a remote origin");
@@ -469,7 +515,7 @@ async fn approving_a_remote_claim_pairs_the_device() {
     let approved = ok_result(
         &mut client,
         rpc::method::PAIRING_APPROVE,
-        serde_json::json!({ "token": token }),
+        serde_json::json!({ "token": remote_node_id }),
     )
     .await;
     let session_token = approved["session_token"].as_str().expect("session_token");
@@ -510,7 +556,7 @@ async fn approving_a_remote_claim_pairs_the_device() {
     let second = ok_result(
         &mut client,
         rpc::method::PAIRING_APPROVE,
-        serde_json::json!({ "token": token }),
+        serde_json::json!({ "token": remote_node_id }),
     )
     .await;
     assert_eq!(second["device_id"].as_str(), Some(remote_device_id));

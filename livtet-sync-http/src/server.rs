@@ -14,6 +14,7 @@ use std::sync::Arc;
 
 use futures_util::StreamExt;
 use livtet_data::orm::EntityTrait;
+use livtet_iroh::NodeId;
 use livtet_sync::{
     Conflict, FullDump, PullResponse, PushResponse, SyncChange, SyncEngine, SyncStatus,
 };
@@ -36,6 +37,9 @@ use crate::{
 };
 
 type DynError = Box<dyn std::error::Error + Send + Sync>;
+
+/// How long a `/sync/pair` request stays approvable, in seconds.
+const PAIR_TICKET_TTL_SECS: i64 = 300;
 
 #[handler]
 async fn get_status(engine: Data<&Arc<RwLock<SyncEngine>>>) -> Result<Json<SyncStatus>, Error> {
@@ -85,20 +89,20 @@ async fn post_pair(
     let inner = engine.read().await;
 
     use livtet_data::client_entities::pending_pairings;
-    use livtet_data::orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, Set};
+    use livtet_data::orm::{ActiveModelTrait, EntityTrait, Set};
     use livtet_types::{Address, DbId, DeviceType, PairingStatus};
 
     let pending_id = DbId::from(PairingStatus::Pending);
+    // The pairing key is the peer's iroh node identity; reject anything that
+    // is not a plausible node id before it reaches the pending table.
+    let node_id: NodeId = body
+        .node_id
+        .parse()
+        .map_err(|_e| Error::from_status(StatusCode::BAD_REQUEST))?;
     let now = time::OffsetDateTime::now_utc();
     let now_pdt = time::PrimitiveDateTime::new(now.date(), now.time());
-
-    let pending = pending_pairings::Entity::find_by_id(&body.token)
-        .filter(pending_pairings::Column::StatusId.eq(pending_id))
-        .filter(pending_pairings::Column::ExpiresAt.gt(now_pdt))
-        .one(inner.db())
-        .await
-        .map_err(|_e| Error::from_status(StatusCode::INTERNAL_SERVER_ERROR))?
-        .ok_or(Error::from_status(StatusCode::UNAUTHORIZED))?;
+    let expires = now + time::Duration::seconds(PAIR_TICKET_TTL_SECS);
+    let expires_pdt = time::PrimitiveDateTime::new(expires.date(), expires.time());
 
     let device_type_id = Some(DbId::from(DeviceType::from_tag(&body.device_type)));
 
@@ -111,12 +115,8 @@ async fn post_pair(
         .ok()
         .or_else(|| DbId::from_hex(&body.device_id).ok());
 
-    let mut model: pending_pairings::ActiveModel = pending.into();
-    model.device_name = Set(Some(body.name.clone()));
-    model.device_type_id = Set(device_type_id);
-    model.device_id = Set(device_id);
     // Record where the request came from so the daemon can tell this remote
-    // request apart from a ticket it minted itself (which has no origin). The
+    // request apart from one it minted itself (which has no origin). The
     // peer's source port is ephemeral, so relate its IP to the address this
     // server was reached on: a request from the server's own IP therefore
     // normalizes to the server's exact `ip:port` and reads back as self.
@@ -125,23 +125,71 @@ async fn post_pair(
         .as_socket_addr()
         .zip(local.0.as_socket_addr())
         .map(|(peer, server)| Address::new(std::net::SocketAddr::new(peer.ip(), server.port())));
-    model.origin_addr = Set(origin_addr);
-    model
-        .update(inner.db())
+
+    let desktop_id = inner
+        .device_id()
+        .parse::<DbId>()
+        .map_err(|_e| Error::from_status(StatusCode::INTERNAL_SERVER_ERROR))?;
+    let listen_on = local.0.as_socket_addr().map(|addr| Address::new(*addr));
+
+    // The remote's node identity is the row key. A peer that discovery has
+    // just introduced is not yet in the table, so the first request inserts
+    // it; a peer retrying while its ticket is open refreshes the row instead.
+    let existing = pending_pairings::Entity::find_by_id(node_id.as_str())
+        .one(inner.db())
         .await
         .map_err(|_e| Error::from_status(StatusCode::INTERNAL_SERVER_ERROR))?;
+
+    match existing {
+        // A decided ticket must not be reopened by replaying `/sync/pair`.
+        Some(row) if row.status_id != Some(pending_id) => {
+            return Err(Error::from_status(StatusCode::CONFLICT));
+        }
+        Some(row) => {
+            let mut model: pending_pairings::ActiveModel = row.into();
+            model.desktop_id = Set(desktop_id);
+            model.listen_on = Set(listen_on);
+            model.device_name = Set(Some(body.name.clone()));
+            model.device_type_id = Set(device_type_id);
+            model.device_id = Set(device_id);
+            model.origin_addr = Set(origin_addr);
+            model.expires_at = Set(expires_pdt);
+            model
+                .update(inner.db())
+                .await
+                .map_err(|_e| Error::from_status(StatusCode::INTERNAL_SERVER_ERROR))?;
+        }
+        None => {
+            let model = pending_pairings::ActiveModel {
+                token: Set(node_id.0.clone()),
+                desktop_id: Set(desktop_id),
+                listen_on: Set(listen_on),
+                status_id: Set(Some(pending_id)),
+                device_name: Set(Some(body.name.clone())),
+                device_type_id: Set(device_type_id),
+                device_id: Set(device_id),
+                origin_addr: Set(origin_addr),
+                created_at: Set(now_pdt),
+                expires_at: Set(expires_pdt),
+            };
+            model
+                .insert(inner.db())
+                .await
+                .map_err(|_e| Error::from_status(StatusCode::INTERNAL_SERVER_ERROR))?;
+        }
+    }
 
     let (tx, _rx) = tokio::sync::broadcast::channel::<PairingDecision>(1);
     {
         let mut waiters = pair_waiters.lock().await;
-        waiters.insert(body.token.clone(), tx);
+        waiters.insert(node_id.0.clone(), tx);
     }
 
     tracing::info!(
-        "pairing request from device {} ({}) with token {}",
+        "pairing request from device {} ({}) with node_id {}",
         body.device_id,
         body.name,
-        body.token,
+        node_id.as_str(),
     );
     Ok(Json(serde_json::json!({ "status": "pending" })))
 }
@@ -188,6 +236,7 @@ async fn post_resolve_conflict(
 #[handler]
 async fn get_pair_status(
     pair_waiters: Data<&PairWaiters>,
+    // `token` here is the node identity (node_id) used for identity-based pairing.
     Path(token): Path<String>,
 ) -> Result<impl IntoResponse, Error> {
     let waiter = {

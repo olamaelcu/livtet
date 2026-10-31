@@ -2,6 +2,7 @@
 resolver = "3"
 members = [
   "livtet-core",
+  "livtet-iroh",
   "livtet-cli",
   "livtet-cli-common",
   "livtet-ffi",
@@ -33,6 +34,7 @@ rust-version = "1.97.0"
 [workspace.dependencies]
 # Self exports
 livtet-core = { path = "livtet-core" }
+livtet-iroh = { path = "livtet-iroh" }
 livtet-cli-common = { path = "livtet-cli-common" }
 livtet-data = { path = "livtet-data" }
 livtet-sync = { path = "livtet-sync" }

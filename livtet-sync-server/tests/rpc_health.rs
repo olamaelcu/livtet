@@ -8,14 +8,19 @@ use fs_err as fs;
 use livtet_sync_server::rpc::{self, StdioClient};
 
 fn temp_db_path() -> Utf8PathBuf {
+    // The wall clock alone collides: concurrent tests can read the same
+    // nanosecond, and two daemons migrating one SQLite file fail with
+    // "database is locked" / duplicate `core_migrations`. A per-process
+    // counter makes the path unique within the test binary.
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let seq = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|duration| duration.as_nanos())
         .unwrap_or(0);
     let path = std::env::temp_dir().join(format!(
-        "livtet-sync-server-test-{}-{}.db",
+        "livtet-sync-server-test-{}-{nanos}-{seq}.db",
         std::process::id(),
-        nanos
     ));
     Utf8PathBuf::from_path_buf(path).expect("temp dir path is valid UTF-8")
 }
@@ -92,14 +97,16 @@ async fn rpc_health_status_pairing_roundtrip() {
         .expect("pairing.begin response");
     assert!(begin.error.is_none(), "begin error: {:?}", begin.error);
     let begin = begin.result.expect("begin result");
-    let token = begin["token"].as_str().expect("token").to_string();
-    assert!(!token.is_empty(), "token must be non-empty");
+    let node_id = begin["node_id"].as_str().expect("node_id").to_string();
+    assert!(!node_id.is_empty(), "node_id must be non-empty");
     assert!(
-        begin["uri"]
-            .as_str()
-            .unwrap_or("")
-            .starts_with("livtet://sync?"),
-        "uri must be a livtet:// sync URI: {begin}"
+        begin["token"].is_null() && begin["uri"].is_null(),
+        "the identity contract mints no token or pairing URI: {begin}"
+    );
+    assert_eq!(
+        begin["identity"]["node_id"].as_str(),
+        Some(node_id.as_str()),
+        "identity must repeat the node id: {begin}"
     );
     assert!(begin["expires_at"].as_str().is_some());
 
@@ -116,8 +123,8 @@ async fn rpc_health_status_pairing_roundtrip() {
     assert!(
         !entries
             .iter()
-            .any(|entry| entry["token"].as_str() == Some(token.as_str())),
-        "unclaimed ticket must not be listed as a pairable device: {list}"
+            .any(|entry| entry["node_id"].as_str() == Some(node_id.as_str())),
+        "a locally minted identity must not be listed as a pairable device: {list}"
     );
 
     let status = client
@@ -142,7 +149,7 @@ async fn rpc_health_status_pairing_roundtrip() {
             "device_id": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
             "name": "Remote Phone",
             "device_type": "android",
-            "token": token,
+            "node_id": node_id,
         }))
         .send()
         .await
@@ -162,7 +169,7 @@ async fn rpc_health_status_pairing_roundtrip() {
     assert!(
         !entries
             .iter()
-            .any(|entry| entry["token"].as_str() == Some(token.as_str())),
+            .any(|entry| entry["node_id"].as_str() == Some(node_id.as_str())),
         "a request from the server's own IP must be excluded: {list}"
     );
 
@@ -188,7 +195,7 @@ async fn rpc_health_status_pairing_roundtrip() {
         .expect("open db");
     livtet_data::sql::query("UPDATE pending_pairings SET origin_addr = ? WHERE token = ?")
         .bind(format!("10.0.0.5:{port}"))
-        .bind(token.clone())
+        .bind(node_id.clone())
         .execute(&pool)
         .await
         .expect("stamp remote origin");
@@ -202,7 +209,7 @@ async fn rpc_health_status_pairing_roundtrip() {
     assert!(
         entries
             .iter()
-            .any(|entry| entry["token"].as_str() == Some(token.as_str())),
+            .any(|entry| entry["node_id"].as_str() == Some(node_id.as_str())),
         "remote-origin pairing missing from pairing.list: {list}"
     );
 
@@ -220,7 +227,7 @@ async fn rpc_health_status_pairing_roundtrip() {
     // Stamping the server's own address drops it back out of the list.
     livtet_data::sql::query("UPDATE pending_pairings SET origin_addr = ? WHERE token = ?")
         .bind(format!("{host}:{port}"))
-        .bind(token.clone())
+        .bind(node_id.clone())
         .execute(&pool)
         .await
         .expect("stamp self origin");
@@ -235,7 +242,7 @@ async fn rpc_health_status_pairing_roundtrip() {
     assert!(
         !entries
             .iter()
-            .any(|entry| entry["token"].as_str() == Some(token.as_str())),
+            .any(|entry| entry["node_id"].as_str() == Some(node_id.as_str())),
         "self-originated pairing must be excluded: {list}"
     );
 
@@ -286,20 +293,21 @@ async fn pairing_approve_rejects_unclaimed_ticket() {
         }
     };
 
-    // Mint a local ticket. Nothing has claimed it, so it is not a pairing.
+    // `pairing.begin` only publishes this device's identity; no pending row
+    // exists until a remote device actually claims it.
     let begin = client
         .request(rpc::method::PAIRING_BEGIN, serde_json::json!({}))
         .await
         .expect("pairing.begin response");
     let begin = begin.result.expect("begin result");
-    let token = begin["token"].as_str().expect("token").to_string();
+    let node_id = begin["node_id"].as_str().expect("node_id").to_string();
 
-    // Approving an unclaimed ticket must fail closed rather than minting a
-    // phantom device for the desktop itself.
+    // Approving an identity with no remote claim must fail closed rather than
+    // minting a phantom device for the desktop itself.
     let approve = client
         .request(
             rpc::method::PAIRING_APPROVE,
-            serde_json::json!({ "token": token }),
+            serde_json::json!({ "token": node_id }),
         )
         .await
         .expect("pairing.approve response");

@@ -20,6 +20,7 @@ poem = [
   "dep:tokio",
   "dep:tracing",
   "dep:livtet-types",
+  "dep:livtet-iroh",
 ]
 
 [dependencies]
@@ -28,6 +29,7 @@ livtet-sync = { workspace = true }
 # `livtet-data` is base, not optional: `SyncSession::new` names
 # `livtet_data::orm::DatabaseConnection`, so the generic layer needs it.
 livtet-data = { workspace = true }
+livtet-iroh = { workspace = true, optional = true }
 async-trait = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -37,6 +39,10 @@ thiserror = { workspace = true }
 reqwest = { workspace = true, optional = true, default-features = false, features = [
   "json",
   "http2",
+  # `iroh-relay` enables `rustls-no-provider` on this same `reqwest`, which
+  # panics in `Client::build` unless a provider is selected. `rustls` here
+  # selects one (aws-lc-rs) for every `reqwest` user in the workspace.
+  "rustls",
 ] }
 url = { version = "2", optional = true }
 
