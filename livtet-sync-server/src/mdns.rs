@@ -1,14 +1,15 @@
-//! mDNS advertisement of the sync endpoint.
+//! mDNS advertisement and browse of the sync endpoint.
 //!
 //! The iOS and Android clients browse `_livtet-sync._tcp` (`NWBrowser` and
 //! `NsdManager` respectively) and read the peer's node id from the TXT record.
 //! The SRV record carries the HTTP port, so a discovered peer is immediately
-//! reachable for `POST /sync/pair`.
+//! reachable for `POST /sync/pair`. The desktop does the same browse on request
+//! (`discovery.nearby`) to populate its nearby-device list.
 //!
 //! This is deliberately separate from iroh's own mDNS address lookup
 //! (`livtet-iroh`): iroh publishes node-id → address records for QUIC
-//! connections, while this record tells the *apps* where the HTTP pairing
-//! surface is.
+//! connections and resolves a known id, while this record tells the *apps*
+//! which peers exist and where the HTTP pairing surface is.
 
 use std::collections::HashMap;
 use std::net::IpAddr;
@@ -68,6 +69,9 @@ pub struct Advertiser {
 impl Advertiser {
     /// Announce `node_id` on `ip:port`.
     ///
+    /// `device_name` is the display name peers read from the TXT record; a
+    /// `None` or blank value falls back to [`friendly_name`].
+    ///
     /// `ip` is the address the HTTP server actually bound. An unspecified
     /// address (`0.0.0.0`) switches the record to "all interface addresses";
     /// a loopback address is published as-is, which is only reachable from the
@@ -75,10 +79,11 @@ impl Advertiser {
     pub fn start(
         node_id: &str,
         device_id: &str,
+        device_name: Option<&str>,
         ip: IpAddr,
         port: u16,
     ) -> Result<Self, ServerError> {
-        let info = service_info(node_id, device_id, ip, port)?;
+        let info = service_info(node_id, device_id, device_name, ip, port)?;
         let daemon = ServiceDaemon::new()
             .map_err(|error| ServerError::Server(format!("mDNS daemon: {error}")))?;
         if let Err(error) = daemon.register(info.clone()) {
@@ -231,9 +236,13 @@ fn peer_from_resolved(info: &ResolvedService) -> Option<NearbyPeer> {
 
 /// Build the mDNS record. Split out from [`Advertiser::start`] so the TXT
 /// contract can be asserted without multicast.
+///
+/// The TXT `name` is `device_name` when it has any non-blank content, else a
+/// name generated from `device_id`, so peers always have something to show.
 pub fn service_info(
     node_id: &str,
     device_id: &str,
+    device_name: Option<&str>,
     ip: IpAddr,
     port: u16,
 ) -> Result<ServiceInfo, ServerError> {
@@ -243,11 +252,16 @@ pub fn service_info(
     // carries the bare form for display.
     let host = format!("livtet-{short}.local.");
     let display_host = format!("livtet-{short}");
+    let name = device_name
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| friendly_name(device_id));
 
     let mut props: HashMap<String, String> = HashMap::new();
     props.insert(TXT_NODE_ID.to_string(), node_id.to_string());
     props.insert(TXT_DEVICE_ID.to_string(), device_id.to_string());
-    props.insert(TXT_DEVICE_NAME.to_string(), friendly_name(device_id));
+    props.insert(TXT_DEVICE_NAME.to_string(), name);
     props.insert(TXT_DEVICE_FLAVOR.to_string(), "desktop".to_string());
     props.insert(
         TXT_VERSION.to_string(),
@@ -282,6 +296,7 @@ mod tests {
         let info = service_info(
             "aa11bb22cc33dd44ee55ff6677889900",
             "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+            None,
             IpAddr::V4(Ipv4Addr::new(192, 168, 1, 20)),
             41234,
         )
@@ -320,6 +335,7 @@ mod tests {
         let loopback = service_info(
             "ab",
             "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+            None,
             IpAddr::V4(Ipv4Addr::LOCALHOST),
             3120,
         )
@@ -333,6 +349,7 @@ mod tests {
         let any = service_info(
             "ab",
             "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+            None,
             IpAddr::V4(Ipv4Addr::UNSPECIFIED),
             3120,
         )
@@ -349,6 +366,7 @@ mod tests {
         let info = service_info(
             "aa11bb22cc33dd44ee55ff6677889900",
             "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+            None,
             IpAddr::V4(Ipv4Addr::new(192, 168, 1, 20)),
             41234,
         )
@@ -366,6 +384,51 @@ mod tests {
         assert_eq!(peer.addresses, vec!["192.168.1.20".to_string()]);
         // The trailing dot is an mDNS fully-qualified form, not display text.
         assert_eq!(peer.hostname, "livtet-aa11bb22cc33.local");
+    }
+
+    #[test]
+    fn a_chosen_device_name_is_advertised_and_decoded() {
+        let info = service_info(
+            "aa11bb22cc33dd44ee55ff6677889900",
+            "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+            Some("Josh's MacBook"),
+            IpAddr::V4(Ipv4Addr::new(192, 168, 1, 20)),
+            41234,
+        )
+        .expect("record");
+
+        assert_eq!(
+            txt(&info, TXT_DEVICE_NAME).as_deref(),
+            Some("Josh's MacBook")
+        );
+
+        let peer = peer_from_resolved(&info.as_resolved_service()).expect("peer");
+        assert_eq!(peer.name, "Josh's MacBook");
+    }
+
+    #[test]
+    fn an_absent_or_blank_device_name_falls_back_to_the_generated_name() {
+        let generated = friendly_name("01ARZ3NDEKTSV4RRFFQ69G5FAV");
+
+        let blank = service_info(
+            "ab",
+            "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+            Some("   "),
+            IpAddr::V4(Ipv4Addr::LOCALHOST),
+            3120,
+        )
+        .expect("record");
+        assert_eq!(txt(&blank, TXT_DEVICE_NAME), Some(generated.clone()));
+
+        let absent = service_info(
+            "ab",
+            "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+            None,
+            IpAddr::V4(Ipv4Addr::LOCALHOST),
+            3120,
+        )
+        .expect("record");
+        assert_eq!(txt(&absent, TXT_DEVICE_NAME), Some(generated));
     }
 
     #[test]

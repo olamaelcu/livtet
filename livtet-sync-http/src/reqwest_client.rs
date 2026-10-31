@@ -9,8 +9,8 @@ use crate::{
     client::SyncHttpClient,
     error::SyncHttpError,
     routes::{
-        CHANGES_PATH, CONFLICTS_PATH, PULL_FULL_PATH, PUSH_PATH, ResolveRequest, STATUS_PATH,
-        join_url,
+        CHANGES_PATH, CONFLICTS_PATH, PULL_FULL_PATH, PUSH_PATH, ResolveRequest, SESSION_HEADER,
+        STATUS_PATH, join_url,
     },
     session::SyncSession,
 };
@@ -22,6 +22,8 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 pub struct ReqwestHttpClient {
     base_url: Option<String>,
     http: reqwest::Client,
+    /// Session token minted at pairing approval; sent on every request.
+    session_token: Option<String>,
 }
 
 impl ReqwestHttpClient {
@@ -39,6 +41,34 @@ impl ReqwestHttpClient {
         Self {
             base_url: None,
             http,
+            session_token: None,
+        }
+    }
+
+    /// Attach the session token minted when this device was approved.
+    ///
+    /// Must be set before [`SyncHttpClient::connect`], which validates the
+    /// session against `GET /sync/status`.
+    pub fn with_session_token(mut self, token: impl Into<String>) -> Self {
+        self.session_token = Some(token.into());
+        self
+    }
+
+    /// Connect and authenticate in one step.
+    pub async fn connect_with_session(
+        &mut self,
+        base_url: &str,
+        token: impl Into<String>,
+    ) -> Result<(), SyncHttpError> {
+        self.session_token = Some(token.into());
+        self.connect(base_url).await
+    }
+
+    /// Add the session header, when a token is present.
+    fn auth(&self, request: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+        match self.session_token.as_deref() {
+            Some(token) => request.header(SESSION_HEADER, token),
+            None => request,
         }
     }
 
@@ -58,7 +88,7 @@ impl SyncHttpClient for ReqwestHttpClient {
     async fn connect(&mut self, base_url: &str) -> Result<(), SyncHttpError> {
         let url = join_url(base_url, STATUS_PATH)?;
         let _parsed: url::Url = url.parse()?;
-        let resp = self.http.get(&url).send().await?;
+        let resp = self.auth(self.http.get(&url)).send().await?;
         if !resp.status().is_success() {
             return Err(SyncHttpError::Status {
                 code: resp.status().as_u16(),
@@ -71,7 +101,7 @@ impl SyncHttpClient for ReqwestHttpClient {
 
     async fn status(&self) -> Result<SyncStatus, SyncHttpError> {
         let url = join_url(self.require_connected()?, STATUS_PATH)?;
-        let resp = self.http.get(&url).send().await?;
+        let resp = self.auth(self.http.get(&url)).send().await?;
         let code = resp.status();
         let body = resp.text().await.unwrap_or_default();
         if !code.is_success() {
@@ -86,7 +116,7 @@ impl SyncHttpClient for ReqwestHttpClient {
     async fn pull_since(&self, since: i64, limit: i64) -> Result<PullResponse, SyncHttpError> {
         let path = format!("{CHANGES_PATH}?since_version={since}&limit={limit}");
         let url = join_url(self.require_connected()?, &path)?;
-        let resp = self.http.get(&url).send().await?;
+        let resp = self.auth(self.http.get(&url)).send().await?;
         let code = resp.status();
         let body = resp.text().await.unwrap_or_default();
         if !code.is_success() {
@@ -100,7 +130,7 @@ impl SyncHttpClient for ReqwestHttpClient {
 
     async fn pull_full(&self) -> Result<FullDump, SyncHttpError> {
         let url = join_url(self.require_connected()?, PULL_FULL_PATH)?;
-        let resp = self.http.get(&url).send().await?;
+        let resp = self.auth(self.http.get(&url)).send().await?;
         let code = resp.status();
         let body = resp.text().await.unwrap_or_default();
         if !code.is_success() {
@@ -114,7 +144,11 @@ impl SyncHttpClient for ReqwestHttpClient {
 
     async fn push(&self, changes: Vec<SyncChange>) -> Result<PushResponse, SyncHttpError> {
         let url = join_url(self.require_connected()?, PUSH_PATH)?;
-        let resp = self.http.post(&url).json(&changes).send().await?;
+        let resp = self
+            .auth(self.http.post(&url))
+            .json(&changes)
+            .send()
+            .await?;
         let code = resp.status();
         let body = resp.text().await.unwrap_or_default();
         if !code.is_success() {
@@ -138,7 +172,7 @@ impl SyncHttpClient for ReqwestHttpClient {
             resolution: resolution.to_string(),
             merged_payload: merged.map(str::to_string),
         };
-        let resp = self.http.post(&url).json(&body).send().await?;
+        let resp = self.auth(self.http.post(&url)).json(&body).send().await?;
         let code = resp.status();
         // The server answers 404 when the conflict no longer exists; that
         // is a valid "not resolved here" outcome rather than an error.
@@ -180,5 +214,19 @@ impl SyncSession<ReqwestHttpClient> {
         http: reqwest::Client,
     ) -> Self {
         Self::new(db, device_id, ReqwestHttpClient::with_http(http))
+    }
+
+    /// Connect and authenticate with the session token minted at pairing
+    /// approval.
+    pub async fn connect_with_session(
+        &mut self,
+        base_url: &str,
+        token: impl Into<String>,
+    ) -> Result<(), SyncHttpError> {
+        self.client_mut()
+            .connect_with_session(base_url, token)
+            .await?;
+        let _ = self.engine().get_latest_version().await?;
+        Ok(())
     }
 }

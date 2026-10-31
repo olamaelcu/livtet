@@ -25,7 +25,8 @@ use crate::requests::{
     self, Notifier, REQUEST_LOG_CAP, RequestLog, RequestRecord, new_request_log,
 };
 use crate::rpc::{
-    self, DeviceParams, PairingBeginParams, RecentParams, ResolveParams, TokenParams,
+    self, DeviceNameParams, DeviceParams, PairingBeginParams, RecentParams, ResolveParams,
+    TokenParams,
 };
 
 /// Shared, long-lived daemon state.
@@ -39,6 +40,9 @@ pub struct DaemonState {
     pub engine: SyncEngine,
     /// This daemon's device id.
     pub device_id: String,
+    /// Name advertised to nearby peers; `None` falls back to one generated
+    /// from the device id. Mutation re-registers the mDNS record.
+    pub device_name: Mutex<Option<String>>,
     /// Ring buffer of recently served requests.
     pub request_log: RequestLog,
     /// Sink for outgoing JSON-RPC notifications.
@@ -81,6 +85,7 @@ pub async fn run_async(config: ServerConfig) -> Result<(), ServerError> {
     let db: DatabaseConnection =
         livtet_data::orm::SqlxSqliteConnector::from_sqlx_sqlite_pool(pool.clone());
     let device_id = resolve_device_id(&db, config.device_id.as_deref()).await?;
+    let device_name = config.device_name.clone();
     let engine = SyncEngine::new(db, device_id.clone());
 
     let pair_waiters: PairWaiters = Arc::new(Mutex::new(HashMap::new()));
@@ -111,6 +116,7 @@ pub async fn run_async(config: ServerConfig) -> Result<(), ServerError> {
         pool,
         engine,
         device_id,
+        device_name: Mutex::new(device_name),
         request_log: new_request_log(REQUEST_LOG_CAP),
         notifier,
         started_at: time::OffsetDateTime::now_utc(),
@@ -474,6 +480,9 @@ async fn dispatch(
         rpc::method::PAIRING_BEGIN => finish(&request, handle_pairing_begin(&request, state).await),
         rpc::method::PAIRING_LIST => finish(&request, handle_pairing_list(state).await),
         rpc::method::DISCOVERY_NEARBY => finish(&request, handle_discovery_nearby(state).await),
+        rpc::method::DISCOVERY_RENAME => {
+            finish(&request, handle_discovery_rename(&request, state).await)
+        }
         rpc::method::PAIRING_APPROVE => {
             finish(&request, handle_pairing_approve(&request, state).await)
         }
@@ -658,6 +667,33 @@ async fn handle_discovery_nearby(
         .collect();
 
     Ok(serde_json::to_value(nearby)?)
+}
+
+/// Change the name peers see, re-registering the mDNS record when serving.
+///
+/// The value is normalized here (trimmed, blank → `None`) so the CLI flag,
+/// the settings field, and this RPC all mean the same thing: `None` restores
+/// the generated fallback.
+async fn handle_discovery_rename(
+    request: &rpc::RpcRequest,
+    state: &Arc<DaemonState>,
+) -> Result<serde_json::Value, RpcFailure> {
+    let params: DeviceNameParams = parse_params(request)?;
+    let name = params
+        .name
+        .as_deref()
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .map(str::to_string);
+    *state.device_name.lock().await = name.clone();
+
+    let serving = state.server.lock().await.is_some();
+    if serving {
+        stop_advertiser(state).await;
+        advertise(state).await;
+    }
+
+    Ok(serde_json::json!({ "name": name }))
 }
 
 async fn handle_pairing_approve(
@@ -962,7 +998,14 @@ async fn advertise(state: &Arc<DaemonState>) {
         return;
     };
     let node_id = discovery_node_id(state).await;
-    match Advertiser::start(&node_id, &state.device_id, ip, port) {
+    let device_name = state.device_name.lock().await.clone();
+    match Advertiser::start(
+        &node_id,
+        &state.device_id,
+        device_name.as_deref(),
+        ip,
+        port,
+    ) {
         Ok(advertiser) => *state.advertiser.lock().await = Some(advertiser),
         Err(error) => tracing::warn!(%error, "mDNS advertising failed"),
     }

@@ -4,15 +4,34 @@
 
 use std::net::SocketAddr;
 
+use livtet_data::orm::{ConnectionTrait, DbBackend, Statement};
 use livtet_sync_http::{
     ReqwestHttpClient, ReqwestSyncClient, SyncHttpClient, SyncHttpError, SyncServerInstance,
 };
 use livtet_test_utils::sync::{Device, change};
 
 const LOOPBACK_ANY_PORT: ([u8; 4], u16) = ([127, 0, 0, 1], 0);
+/// The session token seeded for every test server.
+const TEST_SESSION: &str = "test-session";
+
+/// Seed a paired device carrying [`TEST_SESSION`].
+async fn seed_session(device: &Device) {
+    let statement = Statement::from_sql_and_values(
+        DbBackend::Sqlite,
+        "INSERT OR IGNORE INTO paired_devices (device_id, paired_at, session_token) \
+         VALUES (?, strftime('%Y-%m-%d %H:%M:%S','now'), ?)",
+        [Vec::<u8>::from([7u8; 16]).into(), TEST_SESSION.into()],
+    );
+    device
+        .conn
+        .execute_raw(statement)
+        .await
+        .expect("seed a paired session");
+}
 
 /// A server over `device`, listening on an ephemeral loopback port.
 async fn serve(device: &Device) -> (SyncServerInstance, String) {
+    seed_session(device).await;
     let mut server = SyncServerInstance::new();
     let addr = server
         .start_on(
@@ -26,7 +45,7 @@ async fn serve(device: &Device) -> (SyncServerInstance, String) {
 }
 
 async fn connected_client(url: &str) -> ReqwestHttpClient {
-    let mut client = ReqwestHttpClient::new();
+    let mut client = ReqwestHttpClient::new().with_session_token(TEST_SESSION);
     client.connect(url).await.expect("connect");
     client
 }
@@ -66,7 +85,13 @@ async fn server_refuses_a_second_start_and_can_restart_after_stop() {
 
     server.stop().await.unwrap();
     assert!(!server.is_running());
-    assert!(ReqwestHttpClient::new().connect(&url).await.is_err());
+    assert!(
+        ReqwestHttpClient::new()
+            .with_session_token(TEST_SESSION)
+            .connect(&url)
+            .await
+            .is_err()
+    );
     server.stop().await.expect("stopping twice is a no-op");
 
     let addr = server
@@ -213,7 +238,10 @@ async fn a_session_pairs_the_local_engine_with_the_remote_server() {
 
     let mut session = ReqwestSyncClient::with_default_http(&phone.conn, "phone");
     assert!(session.base_url().is_none());
-    session.connect(&url).await.unwrap();
+    session
+        .connect_with_session(&url, TEST_SESSION)
+        .await
+        .unwrap();
     assert_eq!(session.base_url(), Some(url.as_str()));
 
     assert_eq!(session.engine().device_id(), "phone");
@@ -240,7 +268,10 @@ async fn a_session_accepts_a_caller_supplied_http_client() {
 
     let mut session = ReqwestSyncClient::with_http(&phone.conn, "phone", reqwest::Client::new());
     assert!(session.base_url().is_none());
-    session.connect(&url).await.expect("connect");
+    session
+        .connect_with_session(&url, TEST_SESSION)
+        .await
+        .expect("connect");
     assert_eq!(session.base_url(), Some(url.as_str()));
     assert_eq!(
         session.status().await.expect("status").latest_version,
@@ -256,6 +287,7 @@ async fn a_session_accepts_a_caller_supplied_http_client() {
 #[tokio::test]
 async fn start_binds_every_interface_on_the_given_port() {
     let device = Device::new("server").await;
+    seed_session(&device).await;
     let port = livtet_test_utils::fault::reserve_port();
 
     let mut server = SyncServerInstance::new();

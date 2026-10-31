@@ -24,13 +24,9 @@ use tokio::sync::broadcast;
 /// subscriber.
 ///
 /// `session_token` is the 26-char Crockford ULID minted by the desktop
-/// approval flow (`approve_pairing` in `livtet-tauri`). It is forwarded
-/// to the mobile client so it can authenticate subsequent sync requests.
-/// The mobile client already parsed `livtet://sync?...&token=` from the
-/// QR code, but the broadcast field carries the *session* token rather
-/// than the pairing token (they are different: the pairing token is
-/// single-use and expires, the session token persists for the lifetime
-/// of the pairing).
+/// approval flow. It is forwarded to the claiming device so it can
+/// authenticate subsequent sync requests. The stream is only opened by a
+/// caller that presents the claim secret returned from `POST /sync/pair`.
 #[derive(Clone, Serialize)]
 pub struct PairingDecision {
     pub event: String,
@@ -38,10 +34,23 @@ pub struct PairingDecision {
     pub session_token: String,
 }
 
-/// Process-wide map of node identity (`node_id` / `NodeId`) → broadcast sender.
+/// One registered pairing request.
+///
+/// The claim secret is what proves the status-stream subscriber is the device
+/// that filed the claim; without it, anyone who learns a node id could read the
+/// session token out of the decision event.
+#[derive(Clone, Debug)]
+pub struct PairingWaiter {
+    /// Secret returned to the claiming device by `POST /sync/pair`.
+    pub claim: String,
+    /// Decision fan-out for the status stream.
+    pub sender: broadcast::Sender<PairingDecision>,
+}
+
+/// Process-wide map of node identity (`node_id` / `NodeId`) → pairing waiter.
 /// Created in `start_sync_server` and registered via `set_pair_waiters`; consumed
 /// by `apply_pairing_decision` (called from Tauri commands).
-pub type PairWaiters = Arc<tokio::sync::Mutex<HashMap<String, broadcast::Sender<PairingDecision>>>>;
+pub type PairWaiters = Arc<tokio::sync::Mutex<HashMap<String, PairingWaiter>>>;
 
 /// Registry stored in a `std::sync::Mutex<Option<...>>` so it can be
 /// replaced on restart.
@@ -97,11 +106,11 @@ pub async fn apply_pairing_decision(node_id: &str, decision: &str, session_token
     };
 
     let mut map = waiters.lock().await;
-    let signaled = if let Some(tx) = map.get(node_id) {
+    let signaled = if let Some(waiter) = map.get(node_id) {
         // `send` only fails if there are no active receivers, which can happen
         // if the mobile disconnected between `post_pair` and our fan-out.
         // We don't treat that as an error — the pairing still completed.
-        let _ = tx.send(payload);
+        let _ = waiter.sender.send(payload);
         true
     } else {
         false

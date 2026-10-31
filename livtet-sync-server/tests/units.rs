@@ -48,6 +48,14 @@ fn every_flag_is_parsed() {
     assert_eq!(config.device_id.as_deref(), Some("dev-7"));
 }
 
+/// `--lan` is the shorthand for a LAN-reachable bind; the routes it exposes
+/// are session-gated.
+#[test]
+fn lan_flag_binds_every_interface() {
+    let config = ServerConfig::from_args(args(&["--lan"])).expect("--lan");
+    assert_eq!(config.host, "0.0.0.0");
+}
+
 /// A flag whose value is missing must not silently fall back to the default.
 #[test]
 fn a_flag_without_its_value_is_an_error_naming_the_flag() {

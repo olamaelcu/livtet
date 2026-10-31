@@ -21,6 +21,7 @@ poem = [
   "dep:tracing",
   "dep:livtet-types",
   "dep:livtet-iroh",
+  "dep:ulid",
 ]
 
 [dependencies]
@@ -30,6 +31,7 @@ livtet-sync = { workspace = true }
 # `livtet_data::orm::DatabaseConnection`, so the generic layer needs it.
 livtet-data = { workspace = true }
 livtet-iroh = { workspace = true, optional = true }
+ulid = { workspace = true, optional = true }
 async-trait = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

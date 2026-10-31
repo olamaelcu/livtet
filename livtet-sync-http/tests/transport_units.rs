@@ -184,7 +184,7 @@ fn join_url_rejects_a_base_that_is_not_an_absolute_http_url() {
 #[tokio::test]
 async fn pairing_registry_signals_then_forgets_a_waiter() {
     use livtet_sync_http::pairing::{
-        PairWaiters, apply_pairing_decision, get_pair_waiters, set_pair_waiters,
+        PairWaiters, PairingWaiter, apply_pairing_decision, get_pair_waiters, set_pair_waiters,
         set_pair_waiters_if_empty,
     };
     use std::collections::HashMap;
@@ -197,7 +197,13 @@ async fn pairing_registry_signals_then_forgets_a_waiter() {
 
     let waiters: PairWaiters = Arc::new(tokio::sync::Mutex::new(HashMap::new()));
     let (tx, mut rx) = tokio::sync::broadcast::channel(4);
-    waiters.lock().await.insert("pair-token".to_string(), tx);
+    waiters.lock().await.insert(
+        "pair-token".to_string(),
+        PairingWaiter {
+            claim: "claim-1".to_string(),
+            sender: tx,
+        },
+    );
 
     assert!(
         set_pair_waiters_if_empty(waiters.clone()),

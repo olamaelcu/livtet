@@ -13,6 +13,9 @@ use crate::error::SyncHttpError;
 pub const STATUS_PATH: &str = "/sync/status";
 /// `GET` this peer's identity (node id + device id) for discovery confirmation.
 pub const IDENTITY_PATH: &str = "/sync/identity";
+
+/// Header carrying the session token minted at pairing approval.
+pub const SESSION_HEADER: &str = "x-livtet-session";
 /// `GET` incremental changes since a version.
 pub const CHANGES_PATH: &str = "/sync/changes";
 /// `GET` a full dump of all syncable tables.

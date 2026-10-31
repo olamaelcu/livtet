@@ -51,6 +51,9 @@ discovery, and make pairing key on that identity over **HTTP**:
    `iroh_mdns_address_lookup::MdnsAddressLookup`, so a node id resolves to a
    current address on the LAN, falling back to the relay. The daemon binds it
    once at startup; a failure degrades to explicit addresses, not to a crash.
+   Enumeration is separate: iroh's lookup resolves a *known* node id, so the
+   daemon browses the `_livtet-sync._tcp` record on request
+   (`discovery.nearby`, a two-second listen) to list the peers advertising it.
 3. **Claim.** `pairing.begin` publishes the identity and creates no row.
    `POST /sync/pair` upserts the `pending_pairings` row keyed by the caller's
    node id, recording the origin address and a 300-second expiry; a decided row
@@ -62,16 +65,33 @@ discovery, and make pairing key on that identity over **HTTP**:
    saw in the mDNS record; `/sync/pair` and `/sync/pair/status/:node_id` carry
    the rest. `livtet-ffi` gains no pairing API — one fewer lifecycle to keep
    in step with the Rust endpoint, and the same surface a future CLI can use.
+5. **Data routes require a session.** `/sync/status`, `/changes`, `/pull-full`,
+   `/push`, `/conflicts`, `/conflicts/:id/resolve`, and `/files/:id` accept
+   either `Authorization: Bearer <token>` or `x-livtet-session: <token>` and
+   validate it against `paired_devices.session_token`. Absent and unknown
+   tokens are both `401`. `/sync/identity`, `POST /sync/pair`, and the status
+   stream stay public — the stream is gated by a claim instead.
+6. **The claim is a secret.** `POST /sync/pair` returns
+   `{ status: "pending", claim }`; `/sync/pair/status/:node_id?claim=…` opens
+   only when the claim matches. Without it, anyone who learned a node id could
+   subscribe and read the session token out of the approval event.
 5. **Advertisement.** With the HTTP server running, the daemon registers
-   `_livtet-sync._tcp` with TXT `id=<node_id>`, `device_id`, `version`,
-   `hostname`, `deviceFlavor=desktop`, and the SRV record pointing at the
-   bound HTTP port. The record is withdrawn when the server stops. A bound
-   `0.0.0.0` publishes every interface address; an explicit address (including
-   loopback) is published as-is.
-6. **Handoff stays manual.** A device that cannot browse mDNS enters the node
+   `_livtet-sync._tcp` with TXT `id=<node_id>`, `device_id`,
+   `name=<friendly name>`, `version`, `hostname`, `deviceFlavor=desktop`, and
+   the SRV record pointing at the bound HTTP port. The name comes from the
+   daemon's `--device-name` flag; without one (or when it is blank) the name
+   is generated stably from the device id, so a peer never has to show a ULID.
+   The record is withdrawn when the server stops. A bound `0.0.0.0` publishes
+   every interface address; an explicit address (including loopback) is
+   published as-is.
+7. **LAN is opt-in, not a hardcoded flag.** The daemon binds `127.0.0.1` by
+   default and `--lan` (or `--host 0.0.0.0`) opts into a LAN-reachable bind;
+   the desktop passes that flag from its own setting. With an unspecified bind
+   the mDNS record advertises every interface address.
+8. **Handoff stays manual.** A device that cannot browse mDNS enters the node
    id (or scans it as a QR code) and the address, then posts the claim. No
    pairing URI is minted any more.
-7. **Transport.** Unchanged: HTTP `/sync/*` carries status, changes, push,
+9. **Transport.** Unchanged: HTTP `/sync/*` carries status, changes, push,
    conflicts, and files. Only identity, discovery, and advertisement move to
    iroh/mDNS, so the data path does not depend on the relay being reachable.
 
@@ -92,10 +112,14 @@ and any future Rust consumer reach the same primitives from one dependency.
 
 ### Harder / to watch
 
-* **Loopback default.** The desktop launches the daemon with `--host
-  127.0.0.1`, so the advertisement is only reachable from the same machine (or
-  an iOS simulator sharing its stack). LAN peering needs a non-loopback bind,
-  which is gated on authenticating `/sync/*` (see below).
+* **LAN is a switch, not the default.** The daemon still starts on loopback;
+  a LAN-reachable bind is opt-in (`--lan`), and the desktop must surface that
+  switch. Until it does, discovery works but pairing only reaches the same
+  machine (or an iOS simulator sharing its stack).
+* **`POST /sync/pair` is unauthenticated by design.** Any device that can
+  reach the port and knows a node id may file a claim; approval on this device
+  is the gate. Rate limiting is not implemented yet, so a LAN bind exposes that
+  endpoint to the local network.
 * **Two mDNS records.** `_livtet-sync._tcp` (app discovery, HTTP port) and
   iroh's own address-lookup records (node id → QUIC address) are separate
   protocols with separate lifetimes. They must both come down on shutdown.
@@ -107,14 +131,18 @@ and any future Rust consumer reach the same primitives from one dependency.
   unless a provider is selected. `livtet-sync-http` enables `reqwest`'s
   `rustls` feature to select one for the whole workspace.
 * **Mobile clients still speak the old claim.** iOS posts `token` and polls by
-  token; both must move to `node_id` before pairing works end to end.
+  token; both must move to `node_id` before pairing works end to end, and the
+  data routes now need the session header on every request.
 
 ### Follow-ups
 
-* Session-token validation on `/sync/*` (still deferred from desktop ADR 12) —
-  required before the daemon binds a non-loopback interface by default.
-* Migrate the iOS `NetworkClient` claim/SSE to `node_id`, and add a claim client
-  to Android (today it only browses).
-* Surface discovered peers in the desktop UI, driven by the daemon's mDNS/iroh
-  events instead of one-off manual entry.
+* Desktop LAN switch: pass `--lan` to the sidecar when the user enables it, and
+  restart the daemon when the setting flips.
+* Rate-limit `POST /sync/pair` before advertising on untrusted networks.
+* Migrate the iOS `NetworkClient` claim/SSE to `node_id` and send the session
+  header on data routes; add a claim client to Android (today it only browses).
+* Discovered peers are surfaced in the desktop pairing panel: it polls
+  `discovery.nearby` while open and lists peers by friendly name, device
+  flavor, and address, with the node id one copy away. Push-based update
+  events remain future work; polling keeps the daemon lifecycle unchanged.
 * File and cover transfer over the sync channel; `get_file` is unauthenticated.

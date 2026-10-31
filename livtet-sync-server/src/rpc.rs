@@ -33,6 +33,8 @@ pub mod method {
     pub const PAIRING_LIST: &str = "pairing.list";
     /// Peers currently advertising `_livtet-sync._tcp` on the local network.
     pub const DISCOVERY_NEARBY: &str = "discovery.nearby";
+    /// Change the name advertised to nearby peers and re-register the record.
+    pub const DISCOVERY_RENAME: &str = "discovery.rename";
     /// Approve a pending pairing.
     pub const PAIRING_APPROVE: &str = "pairing.approve";
     /// Reject a pending pairing.
@@ -168,6 +170,14 @@ pub struct PairingBeginParams {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TokenParams {
     pub token: String,
+}
+
+/// Parameters for [`method::DISCOVERY_RENAME`].
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct DeviceNameParams {
+    /// Chosen name; absent or blank restores the generated fallback.
+    #[serde(default)]
+    pub name: Option<String>,
 }
 
 /// Parameters carrying a device id.

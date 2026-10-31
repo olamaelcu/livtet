@@ -3,13 +3,31 @@
 
 use std::{collections::HashMap, sync::Arc};
 
+use livtet_data::orm::{ConnectionTrait, DbBackend, Statement};
 use livtet_sync::{Conflict, FullDump, PullResponse, PushResponse, SyncEngine, SyncStatus};
+use livtet_sync_http::pairing::PairingWaiter;
 use livtet_sync_http::routes::SyncIdentity;
 use livtet_sync_http::{PairWaiters, make_sync_routes};
 use livtet_test_utils::sync::{Device, change};
-use poem::{Endpoint, http::StatusCode, test::TestClient};
+use poem::http::{HeaderValue, header::AUTHORIZATION};
+use poem::{Endpoint, EndpointExt, http::StatusCode, test::TestClient};
 use serde::de::DeserializeOwned;
 use tokio::sync::{Mutex, RwLock};
+
+/// The session token every test client presents, seeded by [`test_auth`].
+const TEST_SESSION: &str = "test-session";
+
+/// Seed a paired device carrying [`TEST_SESSION`]. Idempotent, so the
+/// middleware can call it on every request.
+async fn seed_session(conn: &livtet_data::orm::DatabaseConnection) {
+    let statement = Statement::from_sql_and_values(
+        DbBackend::Sqlite,
+        "INSERT OR IGNORE INTO paired_devices (device_id, paired_at, session_token) \
+         VALUES (?, strftime('%Y-%m-%d %H:%M:%S','now'), ?)",
+        [Vec::<u8>::from([7u8; 16]).into(), TEST_SESSION.into()],
+    );
+    let _ = conn.execute_raw(statement).await;
+}
 
 fn client(device: &Device) -> TestClient<impl Endpoint> {
     client_with_waiters(device, Arc::new(Mutex::new(HashMap::new())))
@@ -18,6 +36,32 @@ fn client(device: &Device) -> TestClient<impl Endpoint> {
 /// `client`, but over a caller-supplied waiter map so a test can register a
 /// pairing identity before the routes are built.
 fn client_with_waiters(device: &Device, waiters: PairWaiters) -> TestClient<impl Endpoint> {
+    let engine = SyncEngine::new(device.conn.clone(), device.engine.device_id().to_string());
+    let device_id = device.engine.device_id().to_string();
+    let identity = SyncIdentity {
+        node_id: format!("node-{device_id}"),
+        device_id,
+    };
+    let conn = device.conn.clone();
+    TestClient::new(
+        make_sync_routes(Arc::new(RwLock::new(engine)), waiters, identity).around(
+            move |endpoint, mut req: poem::Request| {
+                let conn = conn.clone();
+                async move {
+                    seed_session(&conn).await;
+                    req.headers_mut().insert(
+                        AUTHORIZATION,
+                        HeaderValue::from_static("Bearer test-session"),
+                    );
+                    endpoint.call(req).await
+                }
+            },
+        ),
+    )
+}
+
+/// The routes with no session injected, for asserting the 401 arms.
+fn unauthenticated(device: &Device, waiters: PairWaiters) -> TestClient<impl Endpoint> {
     let engine = SyncEngine::new(device.conn.clone(), device.engine.device_id().to_string());
     let device_id = device.engine.device_id().to_string();
     let identity = SyncIdentity {
@@ -70,6 +114,57 @@ async fn identity_reports_the_node_and_device_ids() {
 
     assert_eq!(identity.device_id, "peer");
     assert_eq!(identity.node_id, "node-peer");
+}
+
+/// Data routes are session-gated; identity, the claim, and its status stream
+/// are the only public surface.
+#[tokio::test]
+async fn protected_routes_reject_missing_or_unknown_sessions() {
+    let device = Device::new("server").await;
+    let waiters: PairWaiters = Arc::new(Mutex::new(HashMap::new()));
+    let client = unauthenticated(&device, waiters);
+
+    for path in [
+        "/sync/status",
+        "/sync/changes?since_version=0",
+        "/sync/pull-full",
+        "/sync/conflicts",
+    ] {
+        client
+            .get(path)
+            .send()
+            .await
+            .assert_status(StatusCode::UNAUTHORIZED);
+    }
+
+    client
+        .post("/sync/push")
+        .content_type("application/json")
+        .body("[]")
+        .send()
+        .await
+        .assert_status(StatusCode::UNAUTHORIZED);
+
+    client
+        .get("/sync/status")
+        .header("authorization", "Bearer not-a-session")
+        .send()
+        .await
+        .assert_status(StatusCode::UNAUTHORIZED);
+
+    // A discovered peer confirms the node id before claiming; that is public.
+    client
+        .get("/sync/identity")
+        .send()
+        .await
+        .assert_status_is_ok();
+}
+
+#[tokio::test]
+async fn a_paired_session_reaches_the_data_routes() {
+    let device = Device::new("server").await;
+    let response = client(&device).get("/sync/status").send().await;
+    response.assert_status_is_ok();
 }
 
 #[tokio::test]
@@ -448,14 +543,48 @@ mod pair_status {
         let device = Device::new("server").await;
         let waiters: PairWaiters = Arc::new(Mutex::new(HashMap::new()));
         let (tx, _rx) = tokio::sync::broadcast::channel(4);
-        waiters.lock().await.insert("pair-node".to_string(), tx);
+        waiters.lock().await.insert(
+            "pair-node".to_string(),
+            PairingWaiter {
+                claim: "claim-1".to_string(),
+                sender: tx,
+            },
+        );
 
         let response = client_with_waiters(&device, waiters)
-            .get("/sync/pair/status/pair-node")
+            .get("/sync/pair/status/pair-node?claim=claim-1")
             .send()
             .await;
         response.assert_status_is_ok();
         response.assert_header("content-type", "text/event-stream");
+    }
+
+    /// The stream carries the session token, so it only opens for the device
+    /// that filed the claim: a known node id alone is not enough.
+    #[tokio::test]
+    async fn a_missing_or_wrong_claim_is_unauthorized() {
+        let device = Device::new("server").await;
+        let waiters: PairWaiters = Arc::new(Mutex::new(HashMap::new()));
+        let (tx, _rx) = tokio::sync::broadcast::channel(4);
+        waiters.lock().await.insert(
+            "pair-node".to_string(),
+            PairingWaiter {
+                claim: "claim-1".to_string(),
+                sender: tx,
+            },
+        );
+
+        let client = client_with_waiters(&device, waiters);
+        client
+            .get("/sync/pair/status/pair-node")
+            .send()
+            .await
+            .assert_status(StatusCode::UNAUTHORIZED);
+        client
+            .get("/sync/pair/status/pair-node?claim=wrong")
+            .send()
+            .await
+            .assert_status(StatusCode::UNAUTHORIZED);
     }
 
     /// The handler's `Json` extractor rejects a body it cannot parse before

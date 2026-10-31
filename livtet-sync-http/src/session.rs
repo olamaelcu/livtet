@@ -83,6 +83,16 @@ impl<C: SyncHttpClient> SyncSession<C> {
             .await?)
     }
 
+    /// The transport client, for configuration the shared API does not expose.
+    pub fn client(&self) -> &C {
+        &self.client
+    }
+
+    /// The transport client, mutably — e.g. to attach a session token.
+    pub fn client_mut(&mut self) -> &mut C {
+        &mut self.client
+    }
+
     /// The connected base URL, if any.
     pub fn base_url(&self) -> Option<&str> {
         self.client.base_url()

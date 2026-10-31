@@ -13,7 +13,7 @@
 use std::sync::Arc;
 
 use futures_util::StreamExt;
-use livtet_data::orm::EntityTrait;
+use livtet_data::orm::{ConnectionTrait, DbBackend, EntityTrait, Statement};
 use livtet_iroh::NodeId;
 use livtet_sync::{
     Conflict, FullDump, PullResponse, PushResponse, SyncChange, SyncEngine, SyncStatus,
@@ -29,11 +29,11 @@ use poem::{
 use tokio::sync::{Mutex, RwLock, watch};
 
 use crate::{
-    pairing::{PairWaiters, PairingDecision},
+    pairing::{PairWaiters, PairingDecision, PairingWaiter},
     routes::{
         CHANGES_PATH, CONFLICTS_PATH, FILE_PATH, IDENTITY_PATH, PAIR_PATH, PAIR_STATUS_PATH,
         PULL_FULL_PATH, PUSH_PATH, PairRequest, PullQuery, RESOLVE_CONFLICT_PATH, ResolveRequest,
-        STATUS_PATH, SyncIdentity,
+        SESSION_HEADER, STATUS_PATH, SyncIdentity,
     },
 };
 
@@ -42,9 +42,59 @@ type DynError = Box<dyn std::error::Error + Send + Sync>;
 /// How long a `/sync/pair` request stays approvable, in seconds.
 const PAIR_TICKET_TTL_SECS: i64 = 300;
 
+/// Pull the session token out of `Authorization: Bearer …` or the dedicated
+/// header. Returns `None` when neither carries a non-empty value.
+fn session_token(req: &poem::Request) -> Option<String> {
+    if let Some(value) = req
+        .headers()
+        .get(SESSION_HEADER)
+        .and_then(|value| value.to_str().ok())
+    {
+        let token = value.trim();
+        if !token.is_empty() {
+            return Some(token.to_string());
+        }
+    }
+
+    let header = req
+        .headers()
+        .get(poem::http::header::AUTHORIZATION)?
+        .to_str()
+        .ok()?;
+    let token = header
+        .strip_prefix("Bearer ")
+        .or_else(|| header.strip_prefix("bearer "))?
+        .trim();
+    (!token.is_empty()).then(|| token.to_string())
+}
+
+/// Reject a request whose session token does not belong to a paired device.
+///
+/// `paired_devices.session_token` is created by a later client migration and is
+/// not on the SeaORM entity, so this is a targeted statement rather than a
+/// model query. Unknown and absent tokens are both `401` — the response must
+/// not distinguish "no header" from "not paired".
+async fn authorize(engine: &SyncEngine, req: &poem::Request) -> Result<(), Error> {
+    let token = session_token(req).ok_or_else(|| Error::from_status(StatusCode::UNAUTHORIZED))?;
+    let statement = Statement::from_sql_and_values(
+        DbBackend::Sqlite,
+        "SELECT 1 FROM paired_devices WHERE session_token = ? LIMIT 1",
+        [token.into()],
+    );
+    match engine.db().query_one_raw(statement).await {
+        Ok(Some(_)) => Ok(()),
+        Ok(None) => Err(Error::from_status(StatusCode::UNAUTHORIZED)),
+        Err(_) => Err(Error::from_status(StatusCode::INTERNAL_SERVER_ERROR)),
+    }
+}
+
 #[handler]
-async fn get_status(engine: Data<&Arc<RwLock<SyncEngine>>>) -> Result<Json<SyncStatus>, Error> {
+async fn get_status(
+    req: &poem::Request,
+    engine: Data<&Arc<RwLock<SyncEngine>>>,
+) -> Result<Json<SyncStatus>, Error> {
     let inner = engine.read().await;
+    authorize(&inner, req).await?;
     let latest_version = inner
         .get_latest_version()
         .await
@@ -64,11 +114,13 @@ async fn get_identity(identity: Data<&SyncIdentity>) -> Json<SyncIdentity> {
 
 #[handler]
 async fn get_changes(
+    req: &poem::Request,
     engine: Data<&Arc<RwLock<SyncEngine>>>,
     query: Query<PullQuery>,
 ) -> Result<Json<PullResponse>, Error> {
     let limit = query.limit.unwrap_or(100);
     let inner = engine.read().await;
+    authorize(&inner, req).await?;
     let response = inner
         .pull_changes(query.since_version, limit)
         .await
@@ -77,8 +129,12 @@ async fn get_changes(
 }
 
 #[handler]
-async fn get_pull_full(engine: Data<&Arc<RwLock<SyncEngine>>>) -> Result<Json<FullDump>, Error> {
+async fn get_pull_full(
+    req: &poem::Request,
+    engine: Data<&Arc<RwLock<SyncEngine>>>,
+) -> Result<Json<FullDump>, Error> {
     let inner = engine.read().await;
+    authorize(&inner, req).await?;
     let dump = inner
         .pull_full()
         .await
@@ -187,10 +243,20 @@ async fn post_pair(
         }
     }
 
+    // The claimant proves it filed this request by presenting the claim on the
+    // status stream; otherwise a bystander who knows the node id could read the
+    // session token out of the decision.
+    let claim = ulid::Ulid::generate().to_string();
     let (tx, _rx) = tokio::sync::broadcast::channel::<PairingDecision>(1);
     {
         let mut waiters = pair_waiters.lock().await;
-        waiters.insert(node_id.0.clone(), tx);
+        waiters.insert(
+            node_id.0.clone(),
+            PairingWaiter {
+                claim: claim.clone(),
+                sender: tx,
+            },
+        );
     }
 
     tracing::info!(
@@ -199,15 +265,19 @@ async fn post_pair(
         body.name,
         node_id.as_str(),
     );
-    Ok(Json(serde_json::json!({ "status": "pending" })))
+    Ok(Json(
+        serde_json::json!({ "status": "pending", "claim": claim }),
+    ))
 }
 
 #[handler]
 async fn post_push(
+    req: &poem::Request,
     engine: Data<&Arc<RwLock<SyncEngine>>>,
     Json(changes): Json<Vec<SyncChange>>,
 ) -> Result<Json<PushResponse>, Error> {
     let inner = engine.read().await;
+    authorize(&inner, req).await?;
     let response = inner
         .push_changes(changes)
         .await
@@ -217,6 +287,7 @@ async fn post_push(
 
 #[handler]
 async fn post_resolve_conflict(
+    req: &poem::Request,
     engine: Data<&Arc<RwLock<SyncEngine>>>,
     Path(conflict_id): Path<i64>,
     Json(body): Json<ResolveRequest>,
@@ -225,6 +296,7 @@ async fn post_resolve_conflict(
         return Err(Error::from_status(StatusCode::BAD_REQUEST));
     }
     let inner = engine.read().await;
+    authorize(&inner, req).await?;
     let resolved = inner
         .resolve_conflict(
             conflict_id,
@@ -241,22 +313,33 @@ async fn post_resolve_conflict(
     }
 }
 
+/// Query parameters for the pairing status stream.
+#[derive(Debug, serde::Deserialize)]
+struct PairStatusQuery {
+    /// Secret returned to the claimant by `POST /sync/pair`.
+    claim: Option<String>,
+}
+
 #[handler]
 async fn get_pair_status(
     pair_waiters: Data<&PairWaiters>,
-    // `token` here is the node identity (node_id) used for identity-based pairing.
-    Path(token): Path<String>,
+    // The path segment is the node identity used as the pairing key.
+    Path(node_id): Path<String>,
+    Query(query): Query<PairStatusQuery>,
 ) -> Result<impl IntoResponse, Error> {
     let waiter = {
         let waiters = pair_waiters.lock().await;
-        waiters.get(&token).cloned()
+        waiters.get(&node_id).cloned()
     };
 
     let mut rx = match waiter {
-        Some(tx) => tx.subscribe(),
-        None => {
-            return Err(Error::from_status(StatusCode::NOT_FOUND));
+        // A known node id without the claim must not reveal that pairing is
+        // pending, nor open the stream that carries the session token.
+        Some(waiter) if query.claim.as_deref() == Some(waiter.claim.as_str()) => {
+            waiter.sender.subscribe()
         }
+        Some(_) => return Err(Error::from_status(StatusCode::UNAUTHORIZED)),
+        None => return Err(Error::from_status(StatusCode::NOT_FOUND)),
     };
 
     let stream = async_stream::stream! {
@@ -293,9 +376,11 @@ async fn get_pair_status(
 
 #[handler]
 async fn get_conflicts(
+    req: &poem::Request,
     engine: Data<&Arc<RwLock<SyncEngine>>>,
 ) -> Result<Json<Vec<Conflict>>, Error> {
     let inner = engine.read().await;
+    authorize(&inner, req).await?;
     let conflicts = inner
         .list_conflicts()
         .await
@@ -323,6 +408,7 @@ async fn get_file(
     };
 
     let engine = engine.read().await;
+    authorize(&engine, req).await?;
 
     let row = match livtet_data::entities::digital_inventory::Entity::find_by_id(inv_id)
         .one(engine.db())
