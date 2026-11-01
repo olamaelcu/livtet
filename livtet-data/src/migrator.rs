@@ -4,7 +4,7 @@ use std::str::FromStr;
 
 use sqlx::{AssertSqlSafe, SqlitePool, sqlite::SqliteConnectOptions};
 
-use crate::state::sqlite_pool_options;
+use crate::state::sqlite_pool_options_with_foreign_keys;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Kind {
@@ -58,7 +58,9 @@ pub async fn connect_with_migrations_foreign_keys(
     let opts = SqliteConnectOptions::from_str(&normalized)?
         .create_if_missing(true)
         .foreign_keys(foreign_keys);
-    let pool = sqlite_pool_options().connect_with(opts).await?;
+    let pool = sqlite_pool_options_with_foreign_keys(foreign_keys)
+        .connect_with(opts)
+        .await?;
 
     // Apply database-level performance optimizations (persist in file)
     sqlx::query(AssertSqlSafe("PRAGMA journal_mode = WAL"))

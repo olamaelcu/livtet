@@ -34,14 +34,26 @@ pub struct SharedState {
 /// mechanism — corruption on power loss is impossible even if the
 /// last WAL frames aren't fsync'd.
 pub fn sqlite_pool_options() -> SqlitePoolOptions {
+    sqlite_pool_options_with_foreign_keys(true)
+}
+
+/// [`sqlite_pool_options`] with an explicit connection-level foreign-key
+/// setting. The sync daemon applies library payloads whose optional ids can
+/// be zero-length, so it opens with enforcement off.
+pub fn sqlite_pool_options_with_foreign_keys(foreign_keys: bool) -> SqlitePoolOptions {
     SqlitePoolOptions::new()
         .max_connections(5)
         .min_connections(1)
         .acquire_timeout(std::time::Duration::from_secs(5))
         .idle_timeout(Some(std::time::Duration::from_secs(300)))
-        .after_connect(|conn, _meta| {
+        .after_connect(move |conn, _meta| {
             Box::pin(async move {
-                sqlx::query(AssertSqlSafe("PRAGMA foreign_keys = ON"))
+                let pragma = if foreign_keys {
+                    "PRAGMA foreign_keys = ON"
+                } else {
+                    "PRAGMA foreign_keys = OFF"
+                };
+                sqlx::query(AssertSqlSafe(pragma))
                     .execute(&mut *conn)
                     .await?;
                 sqlx::query(AssertSqlSafe("PRAGMA busy_timeout = 5000"))
