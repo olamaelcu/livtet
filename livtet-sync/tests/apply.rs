@@ -57,6 +57,24 @@ async fn applies_the_payload_fields_and_records_the_remote_row() {
 }
 
 #[tokio::test]
+async fn applies_an_edition_whose_optional_ids_are_empty() {
+    let device = Device::seeded("receiver").await;
+    let (id, payload, version) = latest(&device, "edition").await;
+
+    let outcome = device
+        .engine
+        .apply_changes(
+            vec![change("edition", &id, "UPDATE", version + 1, &payload)],
+            ApplyOptions::default(),
+        )
+        .await
+        .expect("apply");
+
+    assert_eq!(outcome.applied, 1);
+    assert!(outcome.conflicts.is_empty());
+}
+
+#[tokio::test]
 async fn inventory_paths_replace_the_sender_absolute_paths() {
     let device = Device::seeded("receiver").await;
     let (id, payload, version) = latest(&device, "digital_inventory").await;

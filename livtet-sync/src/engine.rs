@@ -691,7 +691,7 @@ async fn delete_entity(
                 });
             }
             conditions.push(format!("{column} = ?"));
-            values.push(sql_value(&value));
+            values.push(sql_value(&column, &value));
         }
         if conditions.is_empty() {
             return Err(SyncError::Deserialization {
@@ -728,16 +728,23 @@ fn is_identifier(value: &str) -> bool {
             .all(|character| character.is_ascii_alphanumeric() || character == '_')
 }
 
-fn sql_value(value: &Value) -> SqlValue {
-    match value {
-        Value::String(text)
-            if text.len() == 32 && text.bytes().all(|byte| byte.is_ascii_hexdigit()) =>
-        {
-            match DbId::from_hex(text) {
-                Ok(id) => SqlValue::Bytes(Some(id.to_bytes().to_vec())),
-                Err(_) => SqlValue::String(Some(text.clone())),
+fn sql_value(column: &str, value: &Value) -> SqlValue {
+    if is_id_column(column) {
+        match value {
+            // A zero-length id is stored as an empty BLOB by the business
+            // schema (seeded formats/languages), not as text.
+            Value::String(text) if text.is_empty() => return SqlValue::Bytes(Some(Vec::new())),
+            Value::String(text)
+                if text.len() == 32 && text.bytes().all(|byte| byte.is_ascii_hexdigit()) =>
+            {
+                if let Ok(id) = DbId::from_hex(text) {
+                    return SqlValue::Bytes(Some(id.to_bytes().to_vec()));
+                }
             }
+            _ => {}
         }
+    }
+    match value {
         Value::String(text) => SqlValue::String(Some(text.clone())),
         Value::Bool(flag) => SqlValue::Bool(Some(*flag)),
         Value::Number(number) => number.as_i64().map_or_else(
@@ -747,6 +754,10 @@ fn sql_value(value: &Value) -> SqlValue {
         Value::Null => SqlValue::String(None),
         other => SqlValue::String(Some(other.to_string())),
     }
+}
+
+fn is_id_column(column: &str) -> bool {
+    column == "id" || column.ends_with("_id")
 }
 
 /// Upsert one entity from its change payload.
@@ -780,7 +791,7 @@ async fn upsert_payload(
         columns.push(format!("\"{column}\""));
         placeholders.push("?".to_string());
         updates.push(format!("\"{column}\" = excluded.\"{column}\""));
-        values.push(sql_value(value));
+        values.push(sql_value(column, value));
     }
     if columns.is_empty() {
         return Err(SyncError::Deserialization {
