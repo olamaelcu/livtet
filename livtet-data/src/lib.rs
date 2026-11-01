@@ -42,7 +42,9 @@ pub use db_error::ConstraintViolation;
 pub use entities::*;
 pub use error::{CoreError, Result as CoreResult};
 pub use index::NamedIndex;
-pub use migrator::{Kind, connect_with_migrations, run_kinds};
+pub use migrator::{
+    Kind, connect_with_migrations, connect_with_migrations_foreign_keys, run_kinds,
+};
 pub use primary_key::PrimaryKey;
 #[cfg(feature = "fake")]
 pub use seed::{SeedConfig, SeedResult, seed_database};

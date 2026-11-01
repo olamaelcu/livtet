@@ -441,24 +441,11 @@ impl SyncEngine {
     /// would echo the change back to the peer: rows written above the
     /// pre-apply version are deleted before the remote change row is recorded.
     ///
-    /// Foreign-key checks are suspended for the pass. Library rows imported
-    /// with FK enforcement off carry zero-length ids in optional columns
+    /// Foreign-key checks are off for the daemon's pool (see
+    /// `connect_with_migrations_foreign_keys`): library rows imported with FK
+    /// enforcement off carry zero-length ids in optional columns
     /// (`editions.format_id`), and the matching parent row does not exist.
     pub async fn apply_changes(
-        &self,
-        changes: Vec<SyncChange>,
-        options: ApplyOptions,
-    ) -> Result<ApplyOutcome, SyncError> {
-        let statement =
-            Statement::from_string(DatabaseBackend::Sqlite, "PRAGMA foreign_keys = OFF");
-        self.db.execute_raw(statement).await?;
-        let result = self.apply_changes_inner(changes, options).await;
-        let restore = Statement::from_string(DatabaseBackend::Sqlite, "PRAGMA foreign_keys = ON");
-        let _ = self.db.execute_raw(restore).await;
-        result
-    }
-
-    async fn apply_changes_inner(
         &self,
         changes: Vec<SyncChange>,
         options: ApplyOptions,

@@ -75,9 +75,10 @@ pub struct ServerHandle {
 /// RPC loop until the parent sends `shutdown` or closes stdin.
 pub async fn run_async(config: ServerConfig) -> Result<(), ServerError> {
     let db_url = config.db_path.to_string();
-    let pool = livtet_data::connect_with_migrations(
+    let pool = livtet_data::connect_with_migrations_foreign_keys(
         &db_url,
         &[livtet_data::Kind::Business, livtet_data::Kind::Client],
+        false,
     )
     .await
     .map_err(|e| ServerError::Db(e.to_string()))?;

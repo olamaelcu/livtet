@@ -37,12 +37,27 @@ pub async fn connect_with_migrations(
     database_url: &str,
     kinds: impl IntoIterator<Item = &Kind>,
 ) -> Result<SqlitePool, sqlx::Error> {
+    connect_with_migrations_foreign_keys(database_url, kinds, true).await
+}
+
+/// [`connect_with_migrations`], with an explicit foreign-key setting.
+///
+/// The sync daemon applies payloads from a library that was imported with
+/// foreign-key enforcement off (optional ids can be zero-length), so it opens
+/// its pool with `foreign_keys = false`; every other caller keeps them on.
+pub async fn connect_with_migrations_foreign_keys(
+    database_url: &str,
+    kinds: impl IntoIterator<Item = &Kind>,
+    foreign_keys: bool,
+) -> Result<SqlitePool, sqlx::Error> {
     let normalized = if database_url.starts_with("sqlite:") {
         database_url.to_string()
     } else {
         format!("sqlite:{}", database_url)
     };
-    let opts = SqliteConnectOptions::from_str(&normalized)?.create_if_missing(true);
+    let opts = SqliteConnectOptions::from_str(&normalized)?
+        .create_if_missing(true)
+        .foreign_keys(foreign_keys);
     let pool = sqlite_pool_options().connect_with(opts).await?;
 
     // Apply database-level performance optimizations (persist in file)
