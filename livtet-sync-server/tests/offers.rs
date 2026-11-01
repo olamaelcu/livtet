@@ -286,6 +286,20 @@ async fn a_pulled_offer_waits_for_the_reader_and_reports_its_decision() {
     .await
     .expect("seed paired device");
 
+    // A device this side claimed is the only kind that can be pulled from, and
+    // the desktop needs the flag to tell the two listings apart.
+    let listed = ok_result(
+        &mut client,
+        rpc::method::DEVICES_LIST,
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(
+        listed[0]["outbound"],
+        serde_json::Value::Bool(true),
+        "a claimed device is outbound: {listed}"
+    );
+
     let pulled = ok_result(
         &mut client,
         rpc::method::DEVICES_PULL,
@@ -466,13 +480,12 @@ async fn an_unreachable_peer_keeps_its_stored_address() {
         error.message
     );
 
-    let stored: String = livtet_data::sql::query_scalar(
-        "SELECT listen_on FROM paired_devices WHERE device_id = ?",
-    )
-    .bind(peer_device.to_bytes().to_vec())
-    .fetch_one(&pool_for(&db_path).await)
-    .await
-    .expect("stored address");
+    let stored: String =
+        livtet_data::sql::query_scalar("SELECT listen_on FROM paired_devices WHERE device_id = ?")
+            .bind(peer_device.to_bytes().to_vec())
+            .fetch_one(&pool_for(&db_path).await)
+            .await
+            .expect("stored address");
     assert_eq!(
         stored, dead_address,
         "a browse that named no peer must not rewrite the address"

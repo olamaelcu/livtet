@@ -1033,6 +1033,12 @@ async fn handle_devices_list(state: &Arc<DaemonState>) -> Result<serde_json::Val
                 "device_type_id": row.device_type_id.map(|id| id.to_string()),
                 "paired_at": format_primitive(row.paired_at),
                 "last_sync_at": row.last_sync_at.map(format_primitive),
+                // Which way the pairing points: an outbound row is one this
+                // side claimed, so it holds the token the peer issued and can
+                // be pulled from. An approved row holds a token *this* side
+                // issued, which only lets the peer pull from here. Both are
+                // paired devices; only one can be pulled from.
+                "outbound": row.outbound,
             })
         })
         .collect();
@@ -2358,7 +2364,10 @@ mod tests {
             device_type: "desktop".to_string(),
             version: "0.2.1".to_string(),
             hostname: "jackys-macbook-pro.local".to_string(),
-            addresses: addresses.iter().map(|address| address.to_string()).collect(),
+            addresses: addresses
+                .iter()
+                .map(|address| address.to_string())
+                .collect(),
             port,
         }
     }
@@ -2367,7 +2376,10 @@ mod tests {
     /// link-local address reaches this machine, never the peer.
     #[test]
     fn the_routable_address_wins_over_the_local_ones() {
-        let advertised = peer(&["127.0.0.1", "fe80::1c2b:3eff:fe4d:5a6b", "192.168.1.226"], 7710);
+        let advertised = peer(
+            &["127.0.0.1", "fe80::1c2b:3eff:fe4d:5a6b", "192.168.1.226"],
+            7710,
+        );
 
         let chosen = preferred_address(&advertised).expect("an address to dial");
 

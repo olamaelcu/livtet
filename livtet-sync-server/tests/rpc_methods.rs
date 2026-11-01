@@ -551,6 +551,14 @@ async fn approving_a_remote_claim_pairs_the_device() {
     assert_eq!(entries.len(), 1, "exactly one device paired: {devices}");
     assert_eq!(entries[0]["device_id"].as_str(), Some(remote_device_id));
     assert_eq!(entries[0]["name"].as_str(), Some("Remote Phone"));
+    // An approved pairing is the peer's claim on this device: it may pull from
+    // here, so the row is listed without the outbound flag the desktop needs
+    // to know it can never pull from it.
+    assert_eq!(
+        entries[0]["outbound"],
+        serde_json::Value::Bool(false),
+        "an approved device is not outbound: {devices}"
+    );
 
     // The session token is persisted, not just returned — the remote device
     // authenticates later requests with it.
