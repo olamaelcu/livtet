@@ -82,6 +82,27 @@ pub enum ClientSettings {
     UpdatedAt,
 }
 
+#[derive(DeriveIden)]
+pub enum InboundOffers {
+    Table,
+    OfferId,
+    FromDeviceId,
+    InventoryId,
+    EditionId,
+    WorkId,
+    Title,
+    Authors,
+    FileName,
+    FileSizeBytes,
+    FileHash,
+    HasCover,
+    OfferedAt,
+    ReceivedAt,
+    Status,
+    DecidedAt,
+    DeferredChanges,
+}
+
 // ── Existence helpers ─────────────────────────────────────────────────
 //
 // Migrations sometimes need to inspect the live schema before issuing DDL

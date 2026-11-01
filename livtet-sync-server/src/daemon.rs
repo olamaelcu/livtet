@@ -1,6 +1,7 @@
 //! The sync server daemon: SQLite + embedded sync HTTP server + stdio RPC loop.
 
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
@@ -12,7 +13,7 @@ use livtet_data::orm::{
 use livtet_iroh::{DiscoveryService, NodeId, PeerIdentity, SecretKey};
 use livtet_sync::SyncEngine;
 use livtet_sync_http::routes::{CHANGES_PATH, PAIR_PATH, PULL_FULL_PATH, PUSH_PATH, SyncIdentity};
-use livtet_sync_http::{PairWaiters, make_sync_routes, set_pair_waiters};
+use livtet_sync_http::{OfferDecision, PairWaiters, make_sync_routes_with_sink, set_pair_waiters};
 use livtet_types::{DbId, PairingStatus};
 use poem::{Endpoint, EndpointExt, Server};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -25,8 +26,8 @@ use crate::requests::{
     self, Notifier, REQUEST_LOG_CAP, RequestLog, RequestRecord, new_request_log,
 };
 use crate::rpc::{
-    self, DeviceNameParams, DeviceParams, OfferBookParams, PairingBeginParams, PairingClaimParams,
-    RecentParams, ResolveParams, TokenParams,
+    self, DeviceNameParams, DeviceParams, OfferBookParams, OfferDecisionParams, OfferParams,
+    PairingBeginParams, PairingClaimParams, RecentParams, ResolveParams, TokenParams,
 };
 
 /// Shared, long-lived daemon state.
@@ -221,7 +222,23 @@ pub async fn start_server(state: &Arc<DaemonState>) -> Result<(), ServerError> {
         device_id: state.device_id.clone(),
     };
 
-    let app = make_sync_routes(engine, pair_waiters, identity)
+    // A decision arrives over HTTP, but the reader it belongs to is on the
+    // other side of the stdio control channel: the sink is the seam.
+    let decision_notifier = state.notifier.clone();
+    let offer_sink: livtet_sync_http::OfferDecisionSink =
+        Arc::new(move |decision: OfferDecision| {
+            requests::notify(
+                &decision_notifier,
+                rpc::method::NOTIFY_OFFER_DECIDED,
+                serde_json::json!({
+                    "offer_id": decision.offer_id,
+                    "device_id": decision.device_id,
+                    "accepted": decision.accepted,
+                }),
+            );
+        });
+
+    let app = make_sync_routes_with_sink(engine, pair_waiters, identity, offer_sink)
         .around(move |endpoint, req| {
             let log = log.clone();
             let notifier = notifier.clone();
@@ -506,6 +523,9 @@ async fn dispatch(
             finish(&request, handle_devices_offer_book(&request, state).await)
         }
         rpc::method::DEVICES_PULL => finish(&request, handle_devices_pull(&request, state).await),
+        rpc::method::OFFERS_LIST => finish(&request, handle_offers_list(state).await),
+        rpc::method::OFFERS_COVER => finish(&request, handle_offers_cover(&request, state).await),
+        rpc::method::OFFERS_DECIDE => finish(&request, handle_offers_decide(&request, state).await),
         rpc::method::DEVICES_REVOKE => {
             finish(&request, handle_devices_revoke(&request, state).await)
         }
@@ -1025,7 +1045,7 @@ async fn handle_devices_offer_book(
     state: &Arc<DaemonState>,
 ) -> Result<serde_json::Value, RpcFailure> {
     use livtet_data::client_entities::paired_devices;
-    use livtet_data::entities::{digital_inventory, editions};
+    use livtet_data::entities::{authors, digital_inventory, editions, work_authors, works};
 
     let params: OfferBookParams = parse_params(request)?;
     let device_id = params
@@ -1071,12 +1091,44 @@ async fn handle_devices_offer_book(
 
     let offer_id = ulid::Ulid::generate().to_string();
     let inventory_id = inventory.id.to_hex();
+    // The reader on the other side is asked about this book before any catalog
+    // row lands, so the title and authors cannot come from its own tables: the
+    // offer carries them.
+    let work = works::Entity::find_by_id(edition.work_id)
+        .one(db)
+        .await?
+        .ok_or_else(|| invalid_params(format!("unknown work: {}", edition.work_id)))?;
+    let title = edition
+        .title
+        .clone()
+        .filter(|title| !title.trim().is_empty())
+        .unwrap_or_else(|| work.title.clone());
+    let mut authors: Vec<String> = authors::Entity::find()
+        .filter(
+            authors::Column::Id.is_in(
+                work_authors::Entity::find()
+                    .filter(work_authors::Column::WorkId.eq(edition.work_id))
+                    .all(db)
+                    .await?
+                    .into_iter()
+                    .map(|link| link.author_id)
+                    .collect::<Vec<_>>(),
+            ),
+        )
+        .all(db)
+        .await?
+        .into_iter()
+        .map(|author| author.name)
+        .collect();
+    authors.sort();
     let payload = serde_json::json!({
         "offer_id": offer_id,
         "inventory_id": inventory_id,
         "edition_id": edition_id.to_hex(),
         "work_id": edition.work_id.to_hex(),
         "to_device_id": device_id.to_string(),
+        "title": title,
+        "authors": authors,
         "file_name": camino::Utf8Path::new(file_path)
             .file_name()
             .unwrap_or("book"),
@@ -1167,7 +1219,7 @@ async fn pull_device(
 ) -> Result<serde_json::Value, ServerError> {
     use livtet_data::client_entities::paired_devices;
     use livtet_data::orm::{EntityTrait, Set};
-    use livtet_sync::{ApplyOptions, InventoryPaths, PullResponse};
+    use livtet_sync::{ApplyOptions, PullResponse};
 
     let db = state.engine.db();
     let peer = paired_devices::Entity::find_by_id(device_id)
@@ -1253,7 +1305,10 @@ async fn pull_device(
             break;
         }
 
-        let mut paths: HashMap<String, InventoryPaths> = HashMap::new();
+        // A book this device offered is a question, not a delivery: record it
+        // for the reader to answer and hold the catalog rows that describe it,
+        // so a declined book never reaches the library.
+        let mut offers: Vec<(livtet_sync::SyncChange, serde_json::Value)> = Vec::new();
         for change in pull
             .changes
             .iter()
@@ -1268,30 +1323,48 @@ async fn pull_device(
             {
                 continue;
             }
-            let downloaded =
-                download_offer(&client, &base, &token, &payload, &books_dir, &covers_dir).await?;
-            paths.insert(downloaded.0, downloaded.1);
-            offered += 1;
+            offers.push((change.clone(), payload));
         }
 
-        let metadata: Vec<_> = pull
+        let changes: Vec<_> = pull
             .changes
             .into_iter()
             .filter(|change| change.entity_type != "file_offer")
             .collect();
+        // Rows describing an offered book wait with it; everything else is a
+        // library change and applies now.
+        let held_ids: HashSet<String> = offers
+            .iter()
+            .flat_map(|(_, payload)| offer_row_ids(payload))
+            .collect();
+        let (deferred, metadata): (Vec<_>, Vec<_>) = changes
+            .into_iter()
+            .partition(|change| held_ids.contains(change.entity_id.as_str()));
         if !metadata.is_empty() {
             let outcome = state
                 .engine
                 .apply_changes(
                     metadata,
                     ApplyOptions {
-                        inventory_paths: paths,
+                        inventory_paths: HashMap::new(),
                     },
                 )
                 .await
                 .map_err(ServerError::from)?;
             applied += outcome.applied;
             conflicts += outcome.conflicts.len();
+        }
+
+        for (change, payload) in &offers {
+            let ids = offer_row_ids(payload);
+            let held: Vec<livtet_sync::SyncChange> = deferred
+                .iter()
+                .filter(|row| ids.contains(&row.entity_id))
+                .cloned()
+                .collect();
+            if record_inbound_offer(state, change, payload, &held).await? {
+                offered += 1;
+            }
         }
 
         cursor = pull.latest_version.to_string();
@@ -1489,6 +1562,407 @@ async fn download_offer(
             cover_path,
         },
     ))
+}
+
+/// The inventory, edition, and work ids an offer names.
+///
+/// A pull holds these rows back until the reader decides; the offer payload
+/// carries them in the same hex form `change_log` rows write.
+fn offer_row_ids(payload: &serde_json::Value) -> HashSet<String> {
+    ["inventory_id", "edition_id", "work_id"]
+        .iter()
+        .filter_map(|key| payload.get(*key).and_then(serde_json::Value::as_str))
+        .map(str::to_string)
+        .collect()
+}
+
+/// Record one offer from a pull, holding the rows that describe it.
+///
+/// Returns `true` when this is a newly pending offer, so the caller can count
+/// it and the app can be told to ask. A re-offer refreshes a pending row; a
+/// decided one stays decided, because the reader's answer outranks a retry.
+async fn record_inbound_offer(
+    state: &Arc<DaemonState>,
+    change: &livtet_sync::SyncChange,
+    payload: &serde_json::Value,
+    held: &[livtet_sync::SyncChange],
+) -> Result<bool, ServerError> {
+    use livtet_data::client_entities::inbound_offers;
+
+    let text = |key: &str| {
+        payload
+            .get(key)
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string)
+    };
+    let offer_id =
+        text("offer_id").ok_or_else(|| ServerError::Server("offer has no id".to_string()))?;
+    let inventory_id = text("inventory_id")
+        .ok_or_else(|| ServerError::Server("offer has no inventory id".to_string()))?;
+    let edition_id = text("edition_id")
+        .ok_or_else(|| ServerError::Server("offer has no edition id".to_string()))?;
+    let work_id =
+        text("work_id").ok_or_else(|| ServerError::Server("offer has no work id".to_string()))?;
+    // A sender that predates the title in the payload leaves nothing to show;
+    // the dialog still needs a line, so the offer keeps a neutral one.
+    let title = text("title").unwrap_or_else(|| "Untitled".to_string());
+    let authors = payload
+        .get("authors")
+        .cloned()
+        .unwrap_or_else(|| serde_json::json!([]))
+        .to_string();
+    let deferred = serde_json::to_string(held).unwrap_or_else(|_| "[]".to_string());
+    let from_device_id = change.device_id.clone();
+
+    let existing = inbound_offers::Entity::find_by_id(offer_id.clone())
+        .one(state.engine.db())
+        .await
+        .map_err(|error| ServerError::Server(format!("inbound offer lookup: {error}")))?;
+    let fresh = existing.is_none();
+    if let Some(row) = &existing
+        && row.status != "pending"
+    {
+        return Ok(false);
+    }
+
+    livtet_data::sql::query(
+        "INSERT INTO inbound_offers (offer_id, from_device_id, inventory_id, edition_id, \
+             work_id, title, authors, file_name, file_size_bytes, file_hash, has_cover, \
+             offered_at, received_at, status, deferred_changes) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?) \
+         ON CONFLICT(offer_id) DO UPDATE SET \
+             from_device_id = excluded.from_device_id, \
+             inventory_id = excluded.inventory_id, \
+             edition_id = excluded.edition_id, \
+             work_id = excluded.work_id, \
+             title = excluded.title, \
+             authors = excluded.authors, \
+             file_name = excluded.file_name, \
+             file_size_bytes = excluded.file_size_bytes, \
+             file_hash = excluded.file_hash, \
+             has_cover = excluded.has_cover, \
+             offered_at = excluded.offered_at, \
+             deferred_changes = excluded.deferred_changes \
+         WHERE inbound_offers.status = 'pending'",
+    )
+    .bind(offer_id.clone())
+    .bind(from_device_id.clone())
+    .bind(inventory_id)
+    .bind(edition_id)
+    .bind(work_id)
+    .bind(title.clone())
+    .bind(authors)
+    .bind(text("file_name"))
+    .bind(
+        payload
+            .get("file_size_bytes")
+            .and_then(serde_json::Value::as_i64),
+    )
+    .bind(text("file_hash"))
+    .bind(
+        payload
+            .get("has_cover")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false),
+    )
+    .bind(change.changed_at.clone())
+    .bind(now_string())
+    .bind(deferred)
+    .execute(&state.pool)
+    .await
+    .map_err(|error| ServerError::Server(format!("could not record the offer: {error}")))?;
+
+    if fresh {
+        requests::notify(
+            &state.notifier,
+            rpc::method::NOTIFY_OFFER_RECEIVED,
+            serde_json::json!({
+                "offer_id": offer_id,
+                "from_device_id": from_device_id,
+                "title": title,
+            }),
+        );
+    }
+    Ok(fresh)
+}
+
+/// An outbound peer's HTTP surface and the session token it issued here.
+async fn peer_endpoint(
+    state: &Arc<DaemonState>,
+    device_id: &str,
+) -> Result<(reqwest::Client, String, String), ServerError> {
+    use livtet_data::client_entities::paired_devices;
+
+    let id = device_id
+        .parse::<DbId>()
+        .ok()
+        .or_else(|| DbId::from_hex(device_id).ok())
+        .ok_or_else(|| ServerError::Server(format!("invalid device id: {device_id}")))?;
+    let peer = paired_devices::Entity::find_by_id(id)
+        .one(state.engine.db())
+        .await
+        .map_err(|error| ServerError::Server(format!("paired device lookup: {error}")))?
+        .ok_or_else(|| {
+            ServerError::Server("the offering device is no longer paired".to_string())
+        })?;
+    if !peer.outbound {
+        return Err(ServerError::Server(
+            "the offering device was not claimed by this installation".to_string(),
+        ));
+    }
+    let listen_on = peer
+        .listen_on
+        .as_ref()
+        .map(ToString::to_string)
+        .ok_or_else(|| ServerError::Server("paired device has no address".to_string()))?;
+    let token: String = livtet_data::sql::query_scalar(
+        "SELECT session_token FROM paired_devices WHERE device_id = ?",
+    )
+    .bind(id.to_bytes().to_vec())
+    .fetch_one(&state.pool)
+    .await
+    .map_err(|error| ServerError::Server(format!("session token lookup: {error}")))?;
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(60))
+        .build()
+        .map_err(|error| ServerError::Server(format!("offer client: {error}")))?;
+    Ok((
+        client,
+        format!("http://{}", listen_on.trim_end_matches('/')),
+        token,
+    ))
+}
+
+/// Books offered to this desktop that are still waiting on a decision.
+async fn handle_offers_list(state: &Arc<DaemonState>) -> Result<serde_json::Value, RpcFailure> {
+    use livtet_data::client_entities::{inbound_offers, paired_devices};
+
+    let mut rows = inbound_offers::Entity::find()
+        .filter(inbound_offers::Column::Status.eq("pending"))
+        .all(state.engine.db())
+        .await?;
+    rows.sort_by(|left, right| right.received_at.cmp(&left.received_at));
+
+    let names: HashMap<String, Option<String>> = paired_devices::Entity::find()
+        .all(state.engine.db())
+        .await?
+        .into_iter()
+        .map(|device| (device.device_id.to_string(), device.name))
+        .collect();
+
+    let list: Vec<serde_json::Value> = rows
+        .iter()
+        .map(|row| {
+            serde_json::json!({
+                "offer_id": row.offer_id,
+                "from_device_id": row.from_device_id,
+                "from_name": names.get(&row.from_device_id).cloned().flatten(),
+                "title": row.title,
+                "authors": serde_json::from_str::<Vec<String>>(&row.authors).unwrap_or_default(),
+                "file_name": row.file_name,
+                "file_size_bytes": row.file_size_bytes,
+                "has_cover": row.has_cover,
+                "offered_at": row.offered_at,
+                "received_at": row.received_at,
+            })
+        })
+        .collect();
+    Ok(serde_json::Value::Array(list))
+}
+
+/// One inbound offer's cover, fetched from the sender and encoded for the UI.
+///
+/// The bytes have not been downloaded yet — that happens on acceptance — so
+/// this reaches back over the same token the pull used. `null` means there is
+/// nothing to show, which is not an error: plenty of books have no cover.
+async fn handle_offers_cover(
+    request: &rpc::RpcRequest,
+    state: &Arc<DaemonState>,
+) -> Result<serde_json::Value, RpcFailure> {
+    use base64::Engine as _;
+    use livtet_data::client_entities::inbound_offers;
+
+    let params: OfferParams = parse_params(request)?;
+    let row = inbound_offers::Entity::find_by_id(params.offer_id)
+        .one(state.engine.db())
+        .await?
+        .ok_or_else(|| invalid_params("no such offer".to_string()))?;
+    if !row.has_cover {
+        return Ok(serde_json::Value::Null);
+    }
+
+    let (client, base, token) = peer_endpoint(state, &row.from_device_id).await?;
+    let response = client
+        .get(format!("{base}/sync/covers/{}", row.inventory_id))
+        .header("x-livtet-session", &token)
+        .send()
+        .await
+        .map_err(|error| RpcFailure {
+            code: rpc::error_code::INTERNAL_ERROR,
+            message: format!("cover fetch: {error}"),
+        })?;
+    if !response.status().is_success() {
+        return Ok(serde_json::Value::Null);
+    }
+    let content_type = response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("image/png")
+        .to_string();
+    let bytes = response.bytes().await.map_err(|error| RpcFailure {
+        code: rpc::error_code::INTERNAL_ERROR,
+        message: format!("cover body: {error}"),
+    })?;
+    Ok(serde_json::json!({
+        "content_type": content_type,
+        "data_url": format!(
+            "data:{content_type};base64,{}",
+            base64::engine::general_purpose::STANDARD.encode(&bytes)
+        ),
+    }))
+}
+
+/// Take or decline an inbound offer, then tell the sender what happened.
+///
+/// Accepting is what downloads the file and applies the held rows, so nothing
+/// of a declined book ever reaches the library. The decision stands locally
+/// whether or not the sender is still reachable; `delivered` says which.
+async fn handle_offers_decide(
+    request: &rpc::RpcRequest,
+    state: &Arc<DaemonState>,
+) -> Result<serde_json::Value, RpcFailure> {
+    use livtet_data::client_entities::inbound_offers;
+    use livtet_sync::{ApplyOptions, InventoryPaths};
+
+    let params: OfferDecisionParams = parse_params(request)?;
+    let row = inbound_offers::Entity::find_by_id(params.offer_id.clone())
+        .one(state.engine.db())
+        .await?
+        .ok_or_else(|| invalid_params(format!("no such offer: {}", params.offer_id)))?;
+    if row.status != "pending" {
+        return Err(invalid_params(format!(
+            "offer {} was already {}",
+            params.offer_id, row.status
+        )));
+    }
+
+    let (client, base, token) = peer_endpoint(state, &row.from_device_id).await?;
+    let mut applied = 0;
+    let mut conflicts = 0;
+
+    if params.accepted {
+        let books_dir = state.config.books_dir.clone().ok_or_else(|| RpcFailure {
+            code: rpc::error_code::INTERNAL_ERROR,
+            message: "no books directory configured".to_string(),
+        })?;
+        let covers_dir = state.config.covers_dir.clone().ok_or_else(|| RpcFailure {
+            code: rpc::error_code::INTERNAL_ERROR,
+            message: "no covers directory configured".to_string(),
+        })?;
+        fs_err::tokio::create_dir_all(books_dir.as_std_path())
+            .await
+            .map_err(|error| RpcFailure {
+                code: rpc::error_code::INTERNAL_ERROR,
+                message: format!("books directory: {error}"),
+            })?;
+        fs_err::tokio::create_dir_all(covers_dir.as_std_path())
+            .await
+            .map_err(|error| RpcFailure {
+                code: rpc::error_code::INTERNAL_ERROR,
+                message: format!("covers directory: {error}"),
+            })?;
+
+        let offer = serde_json::json!({
+            "inventory_id": row.inventory_id,
+            "file_name": row.file_name,
+            "has_cover": row.has_cover,
+        });
+        let (inventory_id, paths) =
+            download_offer(&client, &base, &token, &offer, &books_dir, &covers_dir)
+                .await
+                .map_err(|error| RpcFailure {
+                    code: rpc::error_code::INTERNAL_ERROR,
+                    message: error.to_string(),
+                })?;
+
+        let held: Vec<livtet_sync::SyncChange> =
+            serde_json::from_str(&row.deferred_changes).unwrap_or_default();
+        if !held.is_empty() {
+            let outcome = state
+                .engine
+                .apply_changes(
+                    held,
+                    ApplyOptions {
+                        inventory_paths: HashMap::from([(
+                            inventory_id,
+                            InventoryPaths {
+                                file_path: paths.file_path.clone(),
+                                cover_path: paths.cover_path.clone(),
+                            },
+                        )]),
+                    },
+                )
+                .await
+                .map_err(ServerError::from)?;
+            applied = outcome.applied;
+            conflicts = outcome.conflicts.len();
+        }
+    }
+
+    livtet_data::sql::query(
+        "UPDATE inbound_offers SET status = ?, decided_at = ?, deferred_changes = '[]' \
+         WHERE offer_id = ?",
+    )
+    .bind(if params.accepted {
+        "accepted"
+    } else {
+        "rejected"
+    })
+    .bind(now_string())
+    .bind(row.offer_id.clone())
+    .execute(&state.pool)
+    .await
+    .map_err(|error| RpcFailure {
+        code: rpc::error_code::INTERNAL_ERROR,
+        message: format!("could not record the decision: {error}"),
+    })?;
+
+    let delivered = post_offer_decision(&client, &base, &token, &row.offer_id, params.accepted)
+        .await
+        .is_ok();
+
+    Ok(serde_json::json!({
+        "offer_id": row.offer_id,
+        "accepted": params.accepted,
+        "delivered": delivered,
+        "applied": applied,
+        "conflicts": conflicts,
+    }))
+}
+
+/// Tell the sender what its offer became.
+async fn post_offer_decision(
+    client: &reqwest::Client,
+    base: &str,
+    token: &str,
+    offer_id: &str,
+    accepted: bool,
+) -> Result<(), ServerError> {
+    let response = client
+        .post(format!("{base}/sync/offers/{offer_id}/decision"))
+        .header("x-livtet-session", token)
+        .json(&serde_json::json!({ "accepted": accepted }))
+        .send()
+        .await
+        .map_err(|error| ServerError::Server(format!("offer decision: {error}")))?;
+    if !response.status().is_success() {
+        return Err(ServerError::Server(format!(
+            "offer decision returned HTTP {}",
+            response.status()
+        )));
+    }
+    Ok(())
 }
 
 async fn handle_devices_revoke(

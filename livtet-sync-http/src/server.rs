@@ -26,19 +26,43 @@ use poem::{
     post,
     web::{Data, Json, Path, Query, sse},
 };
+use serde::Serialize;
 use tokio::sync::{Mutex, RwLock, watch};
 
 use crate::{
     pairing::{PairWaiters, PairingDecision, PairingWaiter},
     rate_limit::ClaimRateLimiter,
     routes::{
-        CHANGES_PATH, CONFLICTS_PATH, COVER_PATH, FILE_PATH, IDENTITY_PATH, PAIR_PATH,
-        PAIR_STATUS_PATH, PULL_FULL_PATH, PUSH_PATH, PairRequest, PullQuery, RESOLVE_CONFLICT_PATH,
-        ResolveRequest, SESSION_HEADER, STATUS_PATH, SyncIdentity,
+        CHANGES_PATH, CONFLICTS_PATH, COVER_PATH, FILE_PATH, IDENTITY_PATH, OFFER_DECISION_PATH,
+        OfferDecisionRequest, PAIR_PATH, PAIR_STATUS_PATH, PULL_FULL_PATH, PUSH_PATH, PairRequest,
+        PullQuery, RESOLVE_CONFLICT_PATH, ResolveRequest, SESSION_HEADER, STATUS_PATH,
+        SyncIdentity,
     },
 };
 
 type DynError = Box<dyn std::error::Error + Send + Sync>;
+
+/// What a paired device decided about an offer this server sent.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct OfferDecision {
+    /// The sender's offer id, as recorded in its `change_log` row.
+    pub offer_id: String,
+    /// The paired device that answered, as a `DbId` ULID string.
+    pub device_id: String,
+    /// Whether it took the book.
+    pub accepted: bool,
+}
+
+/// Receives [`OfferDecision`]s so the daemon can tell its parent process.
+///
+/// The decision arrives over HTTP, but the reader it concerns is on the
+/// other side of the stdio control channel; this is the seam between them.
+pub type OfferDecisionSink = Arc<dyn Fn(OfferDecision) + Send + Sync>;
+
+/// A sink for callers that do not report decisions (`SyncServerInstance`, tests).
+pub fn no_offer_decision_sink() -> OfferDecisionSink {
+    Arc::new(|_decision: OfferDecision| {})
+}
 
 /// How long a `/sync/pair` request stays approvable, in seconds.
 const PAIR_TICKET_TTL_SECS: i64 = 300;
@@ -607,10 +631,66 @@ async fn get_cover(
         .body(bytes))
 }
 
-pub fn make_sync_routes(
+/// Record a paired device's answer to an offer this desktop sent.
+///
+/// The offer is the sender's own `change_log` row, so authorization is two
+/// checks: the caller is a paired device (its session token), and the row is
+/// addressed to that device. Nothing is written here — the decision belongs to
+/// the reader on the other machine, and the daemon reports it to its parent
+/// process through the sink.
+#[handler]
+async fn post_offer_decision(
+    Path(offer_id): Path<String>,
+    Data(engine): Data<&Arc<RwLock<SyncEngine>>>,
+    Data(sink): Data<&OfferDecisionSink>,
+    req: &poem::Request,
+    Json(body): Json<OfferDecisionRequest>,
+) -> Result<Json<serde_json::Value>, Error> {
+    let engine = engine.read().await;
+    let device_id = authorize(&engine, req).await?;
+
+    let statement = Statement::from_sql_and_values(
+        DbBackend::Sqlite,
+        "SELECT payload FROM change_log \
+         WHERE entity_type = 'file_offer' AND json_extract(payload, '$.offer_id') = ? \
+         LIMIT 1",
+        [offer_id.clone().into()],
+    );
+    let row = engine
+        .db()
+        .query_one_raw(statement)
+        .await
+        .map_err(|_| Error::from_status(StatusCode::INTERNAL_SERVER_ERROR))?
+        .ok_or_else(|| Error::from_status(StatusCode::NOT_FOUND))?;
+    let payload: String = row
+        .try_get("", "payload")
+        .map_err(|_| Error::from_status(StatusCode::INTERNAL_SERVER_ERROR))?;
+    let payload: serde_json::Value = serde_json::from_str(&payload).unwrap_or_default();
+    if payload
+        .get("to_device_id")
+        .and_then(serde_json::Value::as_str)
+        != Some(device_id.as_str())
+    {
+        return Err(Error::from_status(StatusCode::FORBIDDEN));
+    }
+
+    sink(OfferDecision {
+        offer_id,
+        device_id,
+        accepted: body.accepted,
+    });
+    Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+/// Build the sync surface with a sink for offer decisions.
+///
+/// The daemon uses this one: it is the only caller with a parent process to
+/// tell. Every other caller gets [`no_offer_decision_sink`].
+pub fn make_sync_routes_with_sink(
     engine: Arc<RwLock<SyncEngine>>,
     pair_waiters: PairWaiters,
     identity: SyncIdentity,
+    offer_sink: OfferDecisionSink,
 ) -> impl poem::Endpoint<Output = poem::Response> {
     Route::new()
         .at(STATUS_PATH, get(get_status))
@@ -624,10 +704,21 @@ pub fn make_sync_routes(
         .at(RESOLVE_CONFLICT_PATH, post(post_resolve_conflict))
         .at(FILE_PATH, get(get_file))
         .at(COVER_PATH, get(get_cover))
+        .at(OFFER_DECISION_PATH, post(post_offer_decision))
         .with(AddData::new(engine))
         .with(AddData::new(pair_waiters))
         .with(AddData::new(identity))
+        .with(AddData::new(offer_sink))
         .with(Cors::new())
+}
+
+/// Build the sync surface without offer-decision reporting.
+pub fn make_sync_routes(
+    engine: Arc<RwLock<SyncEngine>>,
+    pair_waiters: PairWaiters,
+    identity: SyncIdentity,
+) -> impl poem::Endpoint<Output = poem::Response> {
+    make_sync_routes_with_sink(engine, pair_waiters, identity, no_offer_decision_sink())
 }
 
 /// A managed sync server instance with graceful shutdown.

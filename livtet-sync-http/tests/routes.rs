@@ -7,8 +7,11 @@ use livtet_data::orm::{ConnectionTrait, DbBackend, Statement};
 use livtet_sync::{Conflict, FullDump, PullResponse, PushResponse, SyncEngine, SyncStatus};
 use livtet_sync_http::pairing::PairingWaiter;
 use livtet_sync_http::routes::SyncIdentity;
-use livtet_sync_http::{PairWaiters, make_sync_routes};
+use livtet_sync_http::{
+    OfferDecision, OfferDecisionSink, PairWaiters, make_sync_routes, make_sync_routes_with_sink,
+};
 use livtet_test_utils::sync::{Device, change};
+use livtet_types::DbId;
 use poem::http::{HeaderValue, header::AUTHORIZATION};
 use poem::{Endpoint, EndpointExt, http::StatusCode, test::TestClient};
 use serde::de::DeserializeOwned;
@@ -165,6 +168,147 @@ async fn a_paired_session_reaches_the_data_routes() {
     let device = Device::new("server").await;
     let response = client(&device).get("/sync/status").send().await;
     response.assert_status_is_ok();
+}
+
+/// The device [`seed_session`] pairs, as the string `DbId` renders.
+fn session_device_id() -> String {
+    DbId::from_bytes([7u8; 16]).to_string()
+}
+
+/// The routes plus a sink that records what the sender would be told.
+fn client_with_decisions(
+    device: &Device,
+) -> (
+    TestClient<impl Endpoint>,
+    Arc<std::sync::Mutex<Vec<OfferDecision>>>,
+) {
+    let seen: Arc<std::sync::Mutex<Vec<OfferDecision>>> = Arc::default();
+    let engine = SyncEngine::new(device.conn.clone(), device.engine.device_id().to_string());
+    let device_id = device.engine.device_id().to_string();
+    let identity = SyncIdentity {
+        node_id: format!("node-{device_id}"),
+        device_id,
+    };
+    let conn = device.conn.clone();
+    let sink: OfferDecisionSink = {
+        let seen = Arc::clone(&seen);
+        Arc::new(move |decision: OfferDecision| {
+            seen.lock().expect("decisions lock").push(decision);
+        })
+    };
+    let routes = make_sync_routes_with_sink(
+        Arc::new(RwLock::new(engine)),
+        Arc::new(Mutex::new(HashMap::new())),
+        identity,
+        sink,
+    )
+    .around(move |endpoint, mut req: poem::Request| {
+        let conn = conn.clone();
+        async move {
+            seed_session(&conn).await;
+            req.headers_mut().insert(
+                AUTHORIZATION,
+                HeaderValue::from_static("Bearer test-session"),
+            );
+            endpoint.call(req).await
+        }
+    });
+    (TestClient::new(routes), seen)
+}
+
+/// Write a `file_offer` row addressed to `to_device_id`.
+async fn seed_offer(device: &Device, offer_id: &str, to_device_id: &str) {
+    let payload = serde_json::json!({
+        "offer_id": offer_id,
+        "inventory_id": "00000000000000000000000000000001",
+        "edition_id": "00000000000000000000000000000002",
+        "work_id": "00000000000000000000000000000003",
+        "to_device_id": to_device_id,
+        "title": "Offered Book",
+        "authors": ["Ada Lovelace"],
+    })
+    .to_string();
+    livtet_data::sql::query(
+        "INSERT INTO change_log (entity_type, entity_id, operation, version, payload, \
+             changed_at, device_id) \
+         VALUES ('file_offer', '00000000000000000000000000000001', 'OFFER', \
+             (SELECT COALESCE(MAX(version), 0) + 1 FROM change_log), ?, datetime('now'), ?)",
+    )
+    .bind(payload)
+    .bind(device.engine.device_id().to_string())
+    .execute(device.pool())
+    .await
+    .expect("seed offer");
+}
+
+/// The device an offer was addressed to is the one that may answer it, and the
+/// answer is what the sender is told.
+#[tokio::test]
+async fn an_offer_is_answered_by_its_addressee() {
+    let device = Device::new("server").await;
+    seed_offer(&device, "offer-1", &session_device_id()).await;
+    let (cli, seen) = client_with_decisions(&device);
+
+    cli.post("/sync/offers/offer-1/decision")
+        .content_type("application/json")
+        .body(r#"{ "accepted": true }"#)
+        .send()
+        .await
+        .assert_status_is_ok();
+
+    assert_eq!(
+        seen.lock().expect("decisions lock").as_slice(),
+        [OfferDecision {
+            offer_id: "offer-1".to_string(),
+            device_id: session_device_id(),
+            accepted: true,
+        }]
+    );
+}
+
+/// An offer names its target; another paired device may not answer it.
+#[tokio::test]
+async fn an_offer_cannot_be_answered_by_another_device() {
+    let device = Device::new("server").await;
+    seed_offer(&device, "offer-2", &DbId::new().to_string()).await;
+    let (cli, seen) = client_with_decisions(&device);
+
+    cli.post("/sync/offers/offer-2/decision")
+        .content_type("application/json")
+        .body(r#"{ "accepted": true }"#)
+        .send()
+        .await
+        .assert_status(StatusCode::FORBIDDEN);
+
+    assert!(seen.lock().expect("decisions lock").is_empty());
+}
+
+/// An offer id this desktop never sent has no answer to record.
+#[tokio::test]
+async fn an_unknown_offer_has_nothing_to_answer() {
+    let device = Device::new("server").await;
+    let (cli, _seen) = client_with_decisions(&device);
+
+    cli.post("/sync/offers/missing/decision")
+        .content_type("application/json")
+        .body(r#"{ "accepted": false }"#)
+        .send()
+        .await
+        .assert_status(StatusCode::NOT_FOUND);
+}
+
+/// The decision route is session-gated like every other data route.
+#[tokio::test]
+async fn answering_an_offer_needs_a_session() {
+    let device = Device::new("server").await;
+    let cli = unauthenticated(&device, Arc::new(Mutex::new(HashMap::new())));
+
+    cli.post("/sync/offers/offer-3/decision")
+        .content_type("application/json")
+        .body(r#"{ "accepted": true }"#)
+        .send()
+        .await
+        .assert_status(StatusCode::UNAUTHORIZED);
 }
 
 #[tokio::test]

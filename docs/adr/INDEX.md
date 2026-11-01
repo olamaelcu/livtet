@@ -6,3 +6,4 @@
 | 2 | [Own the sync client schema and audit triggers in livtet-data migrations](0002-own-the-sync-client-schema-in-livtet-data-migrations.md) | 2026-09-23 |
 | 3 | [Index file availability as a filterable search field](0003-index-file-availability-as-a-filterable-search-field.md) | 2026-09-24 |
 | 4 | [Pair devices by iroh node identity instead of a single-use pairing token](0004-pair-devices-by-iroh-node-identity.md) | 2026-10-31 |
+| 5 | [Offers are a question the receiver answers](0005-offers-are-a-question-the-receiver-answers.md) | 2026-11-01 |

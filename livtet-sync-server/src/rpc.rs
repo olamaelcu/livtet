@@ -47,6 +47,12 @@ pub mod method {
     pub const DEVICES_OFFER_BOOK: &str = "devices.offer_book";
     /// Pull changes and offered files from one outbound paired device.
     pub const DEVICES_PULL: &str = "devices.pull";
+    /// Books paired devices have offered this one, waiting on a decision.
+    pub const OFFERS_LIST: &str = "offers.list";
+    /// Accept or decline an inbound offer.
+    pub const OFFERS_DECIDE: &str = "offers.decide";
+    /// One inbound offer's cover image, encoded as a data URL.
+    pub const OFFERS_COVER: &str = "offers.cover";
     /// Revoke a paired device.
     pub const DEVICES_REVOKE: &str = "devices.revoke";
     /// List unresolved sync conflicts.
@@ -68,6 +74,10 @@ pub mod method {
     pub const NOTIFY_REQUEST_RECEIVED: &str = "request.received";
     /// Notification: a sync push/pull completed.
     pub const NOTIFY_SYNC_COMPLETED: &str = "sync.completed";
+    /// Notification: a paired device offered a book this desktop should ask about.
+    pub const NOTIFY_OFFER_RECEIVED: &str = "offer.received";
+    /// Notification: a paired device answered an offer this desktop sent.
+    pub const NOTIFY_OFFER_DECIDED: &str = "offer.decided";
     /// Notification: the embedded HTTP server started.
     pub const NOTIFY_SERVER_STARTED: &str = "server.started";
     /// Notification: the embedded HTTP server stopped.
@@ -213,6 +223,20 @@ pub struct PairingClaimParams {
     /// Friendly name the peer showed in discovery.
     #[serde(default)]
     pub device_name: Option<String>,
+}
+
+/// Parameters carrying an inbound offer id.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OfferParams {
+    pub offer_id: String,
+}
+
+/// Parameters for [`method::OFFERS_DECIDE`].
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OfferDecisionParams {
+    pub offer_id: String,
+    /// Whether the reader takes the book.
+    pub accepted: bool,
 }
 
 /// Parameters for [`method::CONFLICTS_RESOLVE`].

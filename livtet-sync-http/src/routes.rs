@@ -35,6 +35,12 @@ pub const FILE_PATH: &str = "/sync/files/:inventory_id";
 /// `GET` the extracted cover for an inventory id.
 pub const COVER_PATH: &str = "/sync/covers/:inventory_id";
 
+/// `POST` a paired device's answer to an offer this server sent.
+///
+/// The receiver's daemon calls this after its reader accepts or declines an
+/// inbound offer, so the sender learns what became of the book it offered.
+pub const OFFER_DECISION_PATH: &str = "/sync/offers/:offer_id/decision";
+
 /// Query parameters for [`CHANGES_PATH`].
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PullQuery {
@@ -67,6 +73,13 @@ pub struct PairRequest {
 pub struct ResolveRequest {
     pub resolution: String,
     pub merged_payload: Option<String>,
+}
+
+/// Body for [`OFFER_DECISION_PATH`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OfferDecisionRequest {
+    /// Whether the receiving reader took the book.
+    pub accepted: bool,
 }
 
 /// Join a base URL and a path, trimming the boundary slash.

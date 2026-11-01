@@ -33,9 +33,9 @@ pub mod server_error;
 pub use client::SyncHttpClient;
 pub use error::SyncHttpError;
 pub use routes::{
-    CHANGES_PATH, CONFLICTS_PATH, FILE_PATH, PAIR_PATH, PAIR_STATUS_PATH, PULL_FULL_PATH,
-    PUSH_PATH, PairRequest, PullQuery, RESOLVE_CONFLICT_PATH, ResolveRequest, STATUS_PATH,
-    join_url,
+    CHANGES_PATH, CONFLICTS_PATH, FILE_PATH, OFFER_DECISION_PATH, OfferDecisionRequest, PAIR_PATH,
+    PAIR_STATUS_PATH, PULL_FULL_PATH, PUSH_PATH, PairRequest, PullQuery, RESOLVE_CONFLICT_PATH,
+    ResolveRequest, STATUS_PATH, join_url,
 };
 pub use session::SyncSession;
 
@@ -47,6 +47,9 @@ pub use pairing::{
 #[cfg(feature = "reqwest")]
 pub use reqwest_client::{ReqwestHttpClient, ReqwestSyncClient};
 #[cfg(feature = "poem")]
-pub use server::{SyncServerInstance, make_sync_routes, start_sync_server};
+pub use server::{
+    OfferDecision, OfferDecisionSink, SyncServerInstance, make_sync_routes,
+    make_sync_routes_with_sink, no_offer_decision_sink, start_sync_server,
+};
 #[cfg(feature = "poem")]
 pub use server_error::ApiError;
