@@ -444,7 +444,10 @@ async fn a_claim_without_an_address_stays_one_way() {
     let remote_node_id = "bb22cc33dd44ee55ff6677889900aabbccddeeff00112233445566778899aa";
     let remote_device_id = "01ARZ3NDEKTSV4RRFFQ69G5FAW";
     reqwest::Client::new()
-        .post(format!("http://{host}:{port}{}", livtet_sync_http::PAIR_PATH))
+        .post(format!(
+            "http://{host}:{port}{}",
+            livtet_sync_http::PAIR_PATH
+        ))
         .json(&serde_json::json!({
             "device_id": remote_device_id,
             "name": "Old Peer",
@@ -495,7 +498,10 @@ async fn a_claim_without_an_address_stays_one_way() {
         )
         .await
         .expect("pull transport");
-    let error = pull.error.expect("a one-way pairing cannot be pulled").message;
+    let error = pull
+        .error
+        .expect("a one-way pairing cannot be pulled")
+        .message;
     assert!(
         error.contains("not claimed"),
         "the refusal must name the direction, not the network: {error}"
@@ -558,22 +564,20 @@ async fn starting_up_promotes_legacy_pairings_but_not_wildcard_addresses() {
     let mut restarted = spawn(&db_path).await;
     ok_result(&mut restarted, rpc::method::STATUS, serde_json::json!({})).await;
 
-    let promoted: i64 = livtet_data::sql::query_scalar(
-        "SELECT outbound FROM paired_devices WHERE device_id = ?",
-    )
-    .bind(peer)
-    .fetch_one(&pool)
-    .await
-    .expect("read the promoted row");
+    let promoted: i64 =
+        livtet_data::sql::query_scalar("SELECT outbound FROM paired_devices WHERE device_id = ?")
+            .bind(peer)
+            .fetch_one(&pool)
+            .await
+            .expect("read the promoted row");
     assert_eq!(promoted, 1, "a real peer address is enough to pull");
 
-    let untouched: i64 = livtet_data::sql::query_scalar(
-        "SELECT outbound FROM paired_devices WHERE device_id = ?",
-    )
-    .bind(own)
-    .fetch_one(&pool)
-    .await
-    .expect("read the self-addressed row");
+    let untouched: i64 =
+        livtet_data::sql::query_scalar("SELECT outbound FROM paired_devices WHERE device_id = ?")
+            .bind(own)
+            .fetch_one(&pool)
+            .await
+            .expect("read the self-addressed row");
     assert_eq!(
         untouched, 0,
         "a wildcard address is this device's own, not a peer to dial"
@@ -739,13 +743,15 @@ async fn approving_a_remote_claim_pairs_the_device() {
 
     // A pairing approved here is mutual: this device may dial the claimer, and
     // the address it dials is the claimer's own, not this device's.
-    let stored: (i64, Option<String>) = livtet_data::sql::query_as(
-        "SELECT outbound, listen_on FROM paired_devices LIMIT 1",
-    )
-    .fetch_one(&pool)
-    .await
-    .expect("read back the mutual pairing");
-    assert_eq!(stored.0, 1, "approving a claim must make the pairing mutual");
+    let stored: (i64, Option<String>) =
+        livtet_data::sql::query_as("SELECT outbound, listen_on FROM paired_devices LIMIT 1")
+            .fetch_one(&pool)
+            .await
+            .expect("read back the mutual pairing");
+    assert_eq!(
+        stored.0, 1,
+        "approving a claim must make the pairing mutual"
+    );
     assert_eq!(
         stored.1.as_deref(),
         Some("203.0.113.9:7710"),

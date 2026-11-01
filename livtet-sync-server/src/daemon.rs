@@ -402,12 +402,25 @@ async fn read_loop(
 
         match rpc::parse_message(trimmed) {
             Ok(rpc::RpcMessage::Request(request)) => {
-                let is_shutdown = request.method == rpc::method::SHUTDOWN;
-                let response = dispatch(request, state, out_tx).await;
-                let _ = out_tx.send(rpc::encode_response(&response));
-                if is_shutdown {
+                // `shutdown` stays inline: its answer must be queued before the
+                // loop breaks and the writer drains, or the parent never learns
+                // the daemon left.
+                if request.method == rpc::method::SHUTDOWN {
+                    let response = dispatch(request, state, out_tx).await;
+                    let _ = out_tx.send(rpc::encode_response(&response));
                     break;
                 }
+                // Everything else runs concurrently. A pull holds the RPC for
+                // as long as its HTTP calls, file writes and `apply_changes`
+                // take, and dispatching inline starved every other call for
+                // that long: the settings page's status and discovery polls
+                // timed out while a single peer was being read.
+                let state = Arc::clone(state);
+                let out_tx = out_tx.clone();
+                tokio::spawn(async move {
+                    let response = dispatch(request, &state, &out_tx).await;
+                    let _ = out_tx.send(rpc::encode_response(&response));
+                });
             }
             // Inbound notifications/responses from the parent are ignored.
             Ok(_) => {}
