@@ -1325,15 +1325,26 @@ async fn write_setting(
     key: &str,
     value: &str,
 ) -> Result<(), ServerError> {
-    livtet_data::sql::query(
-        "INSERT INTO client_settings (key, value) VALUES (?, ?) \
-         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-    )
-    .bind(key.to_string())
-    .bind(value.to_string())
-    .execute(&state.pool)
-    .await
-    .map_err(|error| ServerError::Server(format!("settings write: {error}")))?;
+    use livtet_data::client_entities::client_settings;
+    use livtet_data::orm::{EntityTrait, Set, sea_query::OnConflict};
+
+    let model = client_settings::ActiveModel {
+        key: Set(key.to_string()),
+        value: Set(value.to_string()),
+        updated_at: Set(primitive_now()),
+    };
+    client_settings::Entity::insert(model)
+        .on_conflict(
+            OnConflict::column(client_settings::Column::Key)
+                .update_columns([
+                    client_settings::Column::Value,
+                    client_settings::Column::UpdatedAt,
+                ])
+                .to_owned(),
+        )
+        .exec(state.engine.db())
+        .await
+        .map_err(|error| ServerError::Server(format!("settings write: {error}")))?;
     Ok(())
 }
 
