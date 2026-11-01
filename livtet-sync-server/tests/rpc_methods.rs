@@ -438,6 +438,7 @@ async fn the_daemon_emits_well_formed_notifications() {
         rpc::method::NOTIFY_PAIRING_REQUESTED,
         rpc::method::NOTIFY_REQUEST_RECEIVED,
         rpc::method::NOTIFY_SYNC_COMPLETED,
+        rpc::method::NOTIFY_SYNC_PULLED,
         rpc::method::NOTIFY_SERVER_STARTED,
         rpc::method::NOTIFY_SERVER_STOPPED,
     ];

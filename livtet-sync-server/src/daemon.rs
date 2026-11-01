@@ -1227,24 +1227,25 @@ async fn pull_device(
     device_id: DbId,
     background: bool,
 ) -> Result<serde_json::Value, ServerError> {
-    let error = match pull_device_once(state, device_id, background).await {
-        Ok(outcome) => return Ok(outcome),
-        Err(error) => error,
+    let outcome = match pull_device_once(state, device_id, background).await {
+        Ok(outcome) => outcome,
+        Err(error) => match re_resolve_peer_address(state, device_id).await {
+            Ok(true) => {
+                tracing::info!(%device_id, %error, "peer address changed; retrying the pull");
+                pull_device_once(state, device_id, background).await?
+            }
+            Ok(false) => return Err(error),
+            Err(browse_error) => {
+                // The pull's own failure is the one worth reporting: a browse
+                // that heard nothing is how a peer that is simply off looks.
+                tracing::debug!(%device_id, %browse_error, "could not re-resolve the peer");
+                return Err(error);
+            }
+        },
     };
 
-    match re_resolve_peer_address(state, device_id).await {
-        Ok(true) => {
-            tracing::info!(%device_id, %error, "peer address changed; retrying the pull");
-            pull_device_once(state, device_id, background).await
-        }
-        Ok(false) => Err(error),
-        Err(browse_error) => {
-            // The pull's own failure is the one worth reporting: a browse that
-            // heard nothing is how a peer that is simply off looks.
-            tracing::debug!(%device_id, %browse_error, "could not re-resolve the peer");
-            Err(error)
-        }
-    }
+    report_pulled(state, device_id, &outcome);
+    Ok(outcome)
 }
 
 /// Correct a paired peer's stored address from its mDNS advertisement.
@@ -2279,6 +2280,34 @@ fn spawn_pull_loop(state: Arc<DaemonState>) {
             }
         }
     });
+}
+
+/// Tell the parent process that a pull changed this library.
+///
+/// The pull runs on the daemon's own clock, so nothing else would tell the UI:
+/// `sync.completed` reports requests this device *served*. Only a pull that
+/// applied rows is reported — a pull that found nothing changed the catalog by
+/// definition not at all, and a UI refetch would be pure noise.
+fn report_pulled(state: &Arc<DaemonState>, device_id: DbId, outcome: &serde_json::Value) {
+    let applied = outcome
+        .get("applied")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0);
+    if applied == 0 {
+        return;
+    }
+    requests::notify(
+        &state.notifier,
+        rpc::method::NOTIFY_SYNC_PULLED,
+        serde_json::json!({
+            "device_id": device_id.to_string(),
+            "applied": applied,
+            "conflicts": outcome
+                .get("conflicts")
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or(0),
+        }),
+    );
 }
 
 async fn outbound_device_ids(state: &Arc<DaemonState>) -> Vec<DbId> {

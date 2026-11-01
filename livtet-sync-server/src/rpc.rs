@@ -74,6 +74,12 @@ pub mod method {
     pub const NOTIFY_REQUEST_RECEIVED: &str = "request.received";
     /// Notification: a sync push/pull completed.
     pub const NOTIFY_SYNC_COMPLETED: &str = "sync.completed";
+    /// Notification: a pull from a paired device applied changes here.
+    ///
+    /// Distinct from [`NOTIFY_SYNC_COMPLETED`], which reports a request this
+    /// device *served*: this one means the local catalog grew, so a UI showing
+    /// it has something new to read.
+    pub const NOTIFY_SYNC_PULLED: &str = "sync.pulled";
     /// Notification: a paired device offered a book this desktop should ask about.
     pub const NOTIFY_OFFER_RECEIVED: &str = "offer.received";
     /// Notification: a paired device answered an offer this desktop sent.

@@ -482,6 +482,92 @@ async fn an_unreachable_peer_keeps_its_stored_address() {
     cleanup(&root);
 }
 
+/// A pull that applies rows tells the parent process, so a library view can
+/// refresh without polling. A pull that finds nothing must stay quiet.
+#[tokio::test]
+async fn a_pull_that_applies_changes_tells_the_parent() {
+    let root = temp_path("pulled");
+    let books = root.join("books");
+    let covers = root.join("covers");
+    let db_path = root.join("sync.db");
+    for dir in [books.clone(), covers.clone()] {
+        fs::create_dir_all(dir.as_std_path()).expect("create temp dir");
+    }
+
+    let (peer_addr, peer) = start_peer().await;
+    let mut client = spawn_daemon(&db_path, &books, &covers).await;
+
+    let status = ok_result(&mut client, rpc::method::STATUS, serde_json::json!({})).await;
+    let _device_id = status["device_id"].as_str().expect("status device id");
+
+    // A plain catalog row: no offer, so the pull applies it immediately.
+    let peer_device = DbId::new();
+    let work = DbId::new();
+    *peer.changes.lock().expect("changes lock") = vec![SyncChange {
+        id: 1,
+        entity_type: "work".to_string(),
+        entity_id: work.to_hex(),
+        operation: "UPDATE".to_string(),
+        version: 1,
+        payload: serde_json::json!({
+            "id": work.to_hex(),
+            "title": "Pulled Book",
+            "created_at": "2026-11-01 09:00:00",
+        })
+        .to_string(),
+        changed_at: "2026-11-01 09:00:00".to_string(),
+        device_id: peer_device.to_string(),
+    }];
+
+    livtet_data::sql::query(
+        "INSERT INTO paired_devices \
+             (device_id, name, listen_on, device_type_id, paired_at, last_sync_at, \
+              session_token, outbound) \
+         VALUES (?, 'Peer', ?, NULL, datetime('now'), NULL, 'peer-token', 1)",
+    )
+    .bind(peer_device.to_bytes().to_vec())
+    .bind(peer_addr.clone())
+    .execute(&pool_for(&db_path).await)
+    .await
+    .expect("seed paired device");
+
+    let pulled = ok_result(
+        &mut client,
+        rpc::method::DEVICES_PULL,
+        serde_json::json!({ "device_id": peer_device.to_string() }),
+    )
+    .await;
+    assert_eq!(pulled["applied"].as_u64(), Some(1), "the row applied");
+
+    // Whatever else arrived first (the server announcing itself), the pull's
+    // notification has to be among them.
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    let mut reported = None;
+    while std::time::Instant::now() < deadline && reported.is_none() {
+        let Some(notification) = client.next_notification(Duration::from_millis(500)).await else {
+            continue;
+        };
+        if notification.method == rpc::method::NOTIFY_SYNC_PULLED {
+            reported = Some(notification);
+        }
+    }
+    let reported = reported.expect("a pull that applied changes must report them");
+    assert_eq!(
+        reported.params["applied"].as_u64(),
+        Some(1),
+        "the report says how much landed: {:?}",
+        reported.params
+    );
+    assert_eq!(
+        reported.params["device_id"].as_str(),
+        Some(peer_device.to_string().as_str()),
+        "the report names the peer it came from"
+    );
+
+    shutdown(&mut client).await;
+    cleanup(&root);
+}
+
 /// A pool over the daemon's own database file, for asserting on its rows.
 async fn pool_for(db_path: &Utf8Path) -> livtet_data::sql::SqlitePool {
     let options: livtet_data::sql::sqlite::SqliteConnectOptions =
