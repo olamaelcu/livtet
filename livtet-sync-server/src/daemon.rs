@@ -2004,6 +2004,10 @@ async fn handle_offers_decide(
         "delivered": delivered,
         "applied": applied,
         "conflicts": conflicts,
+        // The receiving side indexes what it accepted; it needs the edition
+        // the offer carried, which its own tables now hold but which the
+        // caller cannot name from the offer id alone.
+        "edition_id": row.edition_id,
     }))
 }
 
@@ -2186,7 +2190,8 @@ async fn stop_advertiser(state: &Arc<DaemonState>) {
 /// only one that can start the transfer.
 fn spawn_pull_loop(state: Arc<DaemonState>) {
     tokio::spawn(async move {
-        let mut ticker = tokio::time::interval(Duration::from_secs(60));
+        let interval = Duration::from_secs(state.config.pull_interval_secs.max(1));
+        let mut ticker = tokio::time::interval(interval);
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
             ticker.tick().await;

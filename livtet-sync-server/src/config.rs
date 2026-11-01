@@ -23,6 +23,11 @@ pub struct ServerConfig {
     pub books_dir: Option<Utf8PathBuf>,
     /// Where received covers are written; required before pulling offers.
     pub covers_dir: Option<Utf8PathBuf>,
+    /// How often the pull loop reads every outbound peer.
+    ///
+    /// The peer cannot push, so a shorter interval is the only way a book
+    /// arrives sooner; it costs one dial and one query per peer per tick.
+    pub pull_interval_secs: u64,
 }
 
 impl Default for ServerConfig {
@@ -35,6 +40,7 @@ impl Default for ServerConfig {
             device_name: None,
             books_dir: None,
             covers_dir: None,
+            pull_interval_secs: 60,
         }
     }
 }
@@ -91,6 +97,14 @@ impl ServerConfig {
                         ServerError::Config("--books-dir requires a path".to_string())
                     })?;
                     config.books_dir = Some(Utf8PathBuf::from(value));
+                }
+                "--pull-interval-secs" => {
+                    let value = args.next().ok_or_else(|| {
+                        ServerError::Config("--pull-interval-secs requires a value".to_string())
+                    })?;
+                    config.pull_interval_secs = value.parse().map_err(|_| {
+                        ServerError::Config(format!("invalid pull interval: {value}"))
+                    })?;
                 }
                 "--covers-dir" => {
                     let value = args.next().ok_or_else(|| {
