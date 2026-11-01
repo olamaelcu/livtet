@@ -16,6 +16,7 @@ pub mod m0011_edition_format_metadata;
 pub mod m0013_shelf_tables;
 pub mod m0014_reading_progress_annotations;
 pub mod m0015_reading_bookmarks;
+pub mod m0016_progress_unit_vocabulary;
 pub mod schema;
 
 pub use sea_orm_migration::MigratorTrait;
@@ -43,6 +44,7 @@ impl MigratorTrait for Migrator {
             Box::new(crate::migration::m0013_shelf_tables::Migration),
             Box::new(crate::migration::m0014_reading_progress_annotations::Migration),
             Box::new(crate::migration::m0015_reading_bookmarks::Migration),
+            Box::new(crate::migration::m0016_progress_unit_vocabulary::Migration),
         ]
     }
 }

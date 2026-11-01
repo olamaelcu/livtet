@@ -10,11 +10,11 @@ use serde::{Deserialize, Serialize};
 /// content, so it has no `user_id`, `content` or update timestamp.
 ///
 /// The position is encoded exactly like [`super::reading_progress`]:
-/// `progress` carries the number, `progress_unit` names its unit
-/// (`"ratio"`, `"page"`, `"timestamp"`, `"epub"`, …), and `last_location`
-/// carries the opaque locator (a serialized Readium locator for EPUB). One
-/// shape therefore covers EPUBs, PDFs, physical page numbers and audiobook
-/// positions alike.
+/// `progress` carries the number, `progress_unit` names its unit using a
+/// [`livtet_types::ProgressUnit`] token (`percentage`, `page`, `virtual_page`,
+/// `timestamp`, `chapter`, `cfi`), and `last_location` carries the opaque
+/// locator (a serialized Readium locator for EPUB). One shape therefore covers
+/// EPUBs, PDFs, physical page numbers and audiobook positions alike.
 #[cfg_attr(feature = "fake", derive(fake::Dummy))]
 #[derive(Clone, Debug, Serialize, Deserialize, DeriveEntityModel)]
 #[sea_orm(table_name = "reading_bookmarks")]

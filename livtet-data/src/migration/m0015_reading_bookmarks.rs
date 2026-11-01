@@ -20,12 +20,11 @@ impl MigrationTrait for Migration {
         // Append-only, so only `created_at`.
         //
         // The position is encoded exactly like `reading_progress`:
-        // `progress_unit` names the unit stored in `progress` —
-        //   - "ratio"     : a 0.0-1.0 completion fraction
-        //   - "page"      : a 1-based page number (PDF and physical books)
-        //   - "timestamp" : a seek position in seconds (audiobooks)
-        //   - "epub"      : a serialized Readium locator in `last_location`
-        // — so a bookmark works for every reader family.
+        // `progress_unit` names the unit stored in `progress`, using the
+        // `livtet_types::ProgressUnit` tokens — "percentage", "page",
+        // "virtual_page", "timestamp", "chapter", "cfi" — and
+        // `last_location` carries the opaque locator (a serialized Readium
+        // locator for EPUB), so one shape covers every reader family.
         create_strict_table(
             manager,
             &Table::create()
@@ -34,7 +33,7 @@ impl MigrationTrait for Migration {
                 .col(pk_db_id(ReadingBookmarks::Id))
                 .col(db_id(ReadingBookmarks::EditionId))
                 .col(double(ReadingBookmarks::Progress))
-                .col(text_null(ReadingBookmarks::ProgressUnit).default("ratio".to_string()))
+                .col(text_null(ReadingBookmarks::ProgressUnit).default("percentage".to_string()))
                 .col(text_null(ReadingBookmarks::LastLocation))
                 .col(timestamp(ReadingBookmarks::CreatedAt).default(Expr::current_timestamp()))
                 .foreign_key(

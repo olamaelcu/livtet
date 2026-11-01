@@ -88,10 +88,10 @@ impl MigrationTrait for Migration {
         .await?;
 
         // Reading progress table — append-only, so only created_at (no updated_at).
-        // `progress_unit` records the semantic unit stored in `progress`:
-        //   - "ratio"  : a 0.0-1.0 completion fraction (ebooks / percent-based formats)
-        //   - "page"   : a 1-based physical page number
-        //   - "seconds": a seek position in seconds (audiobooks)
+        // `progress_unit` records the unit stored in `progress`, using the
+        // `livtet_types::ProgressUnit` tokens ("percentage", "page",
+        // "virtual_page", "timestamp", "chapter", "cfi"). m0016 folds the
+        // retired "ratio"/"epub"/"pdf" spellings onto them.
         create_strict_table(
             manager,
             &Table::create()
@@ -101,7 +101,7 @@ impl MigrationTrait for Migration {
                 .col(db_id(ReadingProgress::EditionId))
                 .col(db_id(ReadingProgress::FormatId))
                 .col(double(ReadingProgress::Progress))
-                .col(text_null(ReadingProgress::ProgressUnit).default("ratio".to_string()))
+                .col(text_null(ReadingProgress::ProgressUnit).default("percentage".to_string()))
                 .col(text_null(ReadingProgress::LastLocation))
                 .col(big_integer(ReadingProgress::TotalReadingTimeSecs).default(0i64))
                 .col(timestamp(ReadingProgress::CreatedAt).default(Expr::current_timestamp()))
