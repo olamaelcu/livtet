@@ -15,7 +15,7 @@ iroh = { version = "1", default-features = false, features = ["tls-ring"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
-tokio = { workspace = true, features = ["io-util"] }
+tokio = { workspace = true, features = ["io-util", "fs", "rt"] }
 tracing = { workspace = true }
 
 [dev-dependencies]

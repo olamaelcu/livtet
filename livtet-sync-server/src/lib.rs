@@ -1,9 +1,10 @@
 //! `livtet-sync-server` — a sync daemon for the Livtet ecosystem.
 //!
 //! The library exposes [`run`], which connects to a SQLite database
-//! (running business + client migrations), hosts the poem sync HTTP server
-//! so remote devices can sync, and speaks JSON-RPC 2.0 as newline-delimited
-//! JSON over stdio with its parent process (the desktop app).
+//! (running business + client migrations), answers sync peers over iroh
+//! streams (and, while the HTTP surface is retired, over poem as well), and
+//! speaks JSON-RPC 2.0 as newline-delimited JSON over stdio with its parent
+//! process (the desktop app).
 //!
 //! The `[[bin]]` target's `main` is a thin wrapper over [`run`].
 
@@ -11,8 +12,10 @@ pub mod config;
 pub mod daemon;
 pub mod error;
 pub mod mdns;
+pub mod peer;
 pub mod requests;
 pub mod rpc;
+pub mod wire;
 
 pub use config::ServerConfig;
 pub use daemon::DaemonState;

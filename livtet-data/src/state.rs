@@ -56,7 +56,11 @@ pub fn sqlite_pool_options_with_foreign_keys(foreign_keys: bool) -> SqlitePoolOp
                 sqlx::query(AssertSqlSafe(pragma))
                     .execute(&mut *conn)
                     .await?;
-                sqlx::query(AssertSqlSafe("PRAGMA busy_timeout = 5000"))
+                // A sync pull applies a whole page in one transaction, and the
+                // desktop writes to the same file while it does. Five seconds
+                // was shorter than an apply, so the loser reported "database
+                // is locked" instead of waiting.
+                sqlx::query(AssertSqlSafe("PRAGMA busy_timeout = 15000"))
                     .execute(&mut *conn)
                     .await?;
                 sqlx::query(AssertSqlSafe("PRAGMA temp_store = MEMORY"))

@@ -21,6 +21,7 @@ path = "src/main.rs"
 livtet-iroh = { workspace = true }
 livtet-sync = { workspace = true }
 livtet-sync-http = { workspace = true, features = ["poem"] }
+livtet-sync-iroh = { workspace = true }
 livtet-data = { workspace = true }
 livtet-types = { workspace = true }
 poem = { version = "3.1", default-features = false, features = ["server"] }

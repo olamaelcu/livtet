@@ -13,7 +13,7 @@ use livtet_data::orm::{
 use livtet_iroh::{DiscoveryService, NodeId, PeerIdentity, SecretKey};
 use livtet_sync::SyncEngine;
 use livtet_sync_http::routes::{CHANGES_PATH, PAIR_PATH, PULL_FULL_PATH, PUSH_PATH, SyncIdentity};
-use livtet_sync_http::{OfferDecision, PairWaiters, make_sync_routes_with_sink, set_pair_waiters};
+use livtet_sync_http::{PairWaiters, make_sync_routes_with_sink, set_pair_waiters};
 use livtet_types::{DbId, PairingStatus};
 use poem::{Endpoint, EndpointExt, Server};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -56,6 +56,14 @@ pub struct DaemonState {
     pub last_request_at: Arc<std::sync::Mutex<Option<String>>>,
     /// Broadcast registry shared with `livtet-sync-http`'s pairing routes.
     pub pair_waiters: PairWaiters,
+    /// How an answered offer reaches the desktop, whichever transport carried it.
+    pub offer_sink: livtet_sync_http::OfferDecisionSink,
+    /// Serialises this daemon's own writes.
+    ///
+    /// RPCs now run concurrently, so a background pull and a reader-triggered
+    /// one can both try to apply a page; SQLite allows one writer, and the
+    /// loser gets `SQLITE_BUSY`. Waiting here is cheaper than failing there.
+    pub write_gate: tokio::sync::Mutex<()>,
     /// The `iroh` discovery endpoint, bound at startup when the network allows.
     pub discovery: Mutex<Option<Arc<DiscoveryService>>>,
     /// The mDNS advertisement of the HTTP pairing surface, while the server runs.
@@ -122,6 +130,22 @@ pub async fn run_async(config: ServerConfig) -> Result<(), ServerError> {
         }
     };
 
+    // A decision arrives from the peer, but the reader it belongs to is on the
+    // other side of the stdio control channel: the sink is the seam, and both
+    // transports route through it.
+    let decision_notifier = notifier.clone();
+    let offer_sink: livtet_sync_http::OfferDecisionSink = Arc::new(move |decision| {
+        requests::notify(
+            &decision_notifier,
+            rpc::method::NOTIFY_OFFER_DECIDED,
+            serde_json::json!({
+                "offer_id": decision.offer_id,
+                "device_id": decision.device_id,
+                "accepted": decision.accepted,
+            }),
+        );
+    });
+
     let state = Arc::new(DaemonState {
         config,
         pool,
@@ -134,6 +158,8 @@ pub async fn run_async(config: ServerConfig) -> Result<(), ServerError> {
         requests_served: Arc::new(AtomicU64::new(0)),
         last_request_at: Arc::new(std::sync::Mutex::new(None)),
         pair_waiters,
+        offer_sink,
+        write_gate: tokio::sync::Mutex::new(()),
         discovery: Mutex::new(discovery),
         advertiser: Mutex::new(None),
         server: Mutex::new(None),
@@ -144,6 +170,19 @@ pub async fn run_async(config: ServerConfig) -> Result<(), ServerError> {
 
     start_server(&state).await?;
     advertise(&state).await;
+
+    // The framed transport runs on the discovery endpoint that is already
+    // bound: no port, no listener of its own, and it closes when the endpoint
+    // does.
+    let endpoint = state
+        .discovery
+        .lock()
+        .await
+        .as_ref()
+        .map(|service| service.endpoint().clone());
+    if let Some(endpoint) = endpoint {
+        livtet_sync_iroh::spawn_server(endpoint, crate::wire::handler(Arc::clone(&state)));
+    }
     spawn_pull_loop(Arc::clone(&state));
     let _ = cleanup_old_pairings(&state).await;
     let _ = promote_mutual_pairings(&state).await;
@@ -223,21 +262,7 @@ pub async fn start_server(state: &Arc<DaemonState>) -> Result<(), ServerError> {
         device_id: state.device_id.clone(),
     };
 
-    // A decision arrives over HTTP, but the reader it belongs to is on the
-    // other side of the stdio control channel: the sink is the seam.
-    let decision_notifier = state.notifier.clone();
-    let offer_sink: livtet_sync_http::OfferDecisionSink =
-        Arc::new(move |decision: OfferDecision| {
-            requests::notify(
-                &decision_notifier,
-                rpc::method::NOTIFY_OFFER_DECIDED,
-                serde_json::json!({
-                    "offer_id": decision.offer_id,
-                    "device_id": decision.device_id,
-                    "accepted": decision.accepted,
-                }),
-            );
-        });
+    let offer_sink = state.offer_sink.clone();
 
     let app = make_sync_routes_with_sink(engine, pair_waiters, identity, offer_sink)
         .around(move |endpoint, req| {
@@ -571,6 +596,15 @@ async fn handle_health(state: &Arc<DaemonState>) -> Result<serde_json::Value, Rp
     }))
 }
 
+/// Whether a pending row is a real remote claim.
+///
+/// A row with no socket origin arrived over iroh, where the connection's node
+/// id is the identity and cannot be spoofed; a row whose origin is this
+/// device's own address is this machine talking to itself, and is not a peer.
+fn is_remote_claim(origin: Option<&livtet_types::Address>, self_addr: &str) -> bool {
+    origin.is_none_or(|addr| addr.to_string() != self_addr)
+}
+
 async fn handle_status(state: &Arc<DaemonState>) -> Result<serde_json::Value, RpcFailure> {
     use livtet_data::client_entities::{paired_devices, pending_pairings};
 
@@ -578,16 +612,18 @@ async fn handle_status(state: &Arc<DaemonState>) -> Result<serde_json::Value, Rp
     let latest_version = state.engine.get_latest_version().await?;
     let paired_device_count = paired_devices::Entity::find().count(db).await?;
 
-    // A pending pairing counts only when it arrived from another host. Tickets
-    // this daemon minted carry no origin, and a request from the daemon's own
-    // address is itself, so both are excluded by the `!=` comparison.
+    // A pending pairing counts only when it is a real remote claim; see
+    // `is_remote_claim`. The table holds a handful of rows, so filtering in
+    // Rust keeps the rule in one place instead of in two queries.
     let self_addr = self_address(state).await;
     let pending_pairing_count = pending_pairings::Entity::find()
         .filter(pending_pairings::Column::StatusId.eq(DbId::from(PairingStatus::Pending)))
         .filter(pending_pairings::Column::ExpiresAt.gt(primitive_now()))
-        .filter(pending_pairings::Column::OriginAddr.ne(self_addr))
-        .count(db)
-        .await?;
+        .all(db)
+        .await?
+        .into_iter()
+        .filter(|row| is_remote_claim(row.origin_addr.as_ref(), &self_addr))
+        .count();
 
     let running = state.server.lock().await.is_some();
     let last_request_at = state
@@ -662,16 +698,17 @@ async fn handle_pairing_begin(
 async fn handle_pairing_list(state: &Arc<DaemonState>) -> Result<serde_json::Value, RpcFailure> {
     use livtet_data::client_entities::pending_pairings;
 
-    // A ticket is a pairable device only when the request came from another
-    // host. Tickets this daemon minted have no origin, so they never appear;
-    // the `!=` also drops anything sent from the daemon's own address.
+    // A claim that arrived over iroh carries no socket origin and is admitted;
+    // one whose origin is this device's own address is not a peer.
     let self_addr = self_address(state).await;
-    let rows = pending_pairings::Entity::find()
+    let rows: Vec<_> = pending_pairings::Entity::find()
         .filter(pending_pairings::Column::StatusId.eq(DbId::from(PairingStatus::Pending)))
         .filter(pending_pairings::Column::ExpiresAt.gt(primitive_now()))
-        .filter(pending_pairings::Column::OriginAddr.ne(self_addr))
         .all(state.engine.db())
-        .await?;
+        .await?
+        .into_iter()
+        .filter(|row| is_remote_claim(row.origin_addr.as_ref(), &self_addr))
+        .collect();
 
     let list: Vec<serde_json::Value> = rows
         .iter()
@@ -766,11 +803,14 @@ async fn handle_pairing_approve(
     // own identity, or one recorded without an origin, is not a peer.
     let self_addr = self_address(state).await;
     let pending_node_id = pending.token.clone();
+    // A claim filed over iroh has no socket origin — the connection's node id
+    // is the identity, and a peer cannot forge it. A claim that carries an
+    // origin (the HTTP transport) must not be this device talking to itself.
     if pending_node_id == state.device_id
         || pending
             .origin_addr
             .as_ref()
-            .is_none_or(|addr| addr.to_string() == self_addr)
+            .is_some_and(|addr| addr.to_string() == self_addr)
     {
         return Err(invalid_params(format!(
             "pairing node id did not originate from a remote device: {pending_node_id}"
@@ -788,6 +828,9 @@ async fn handle_pairing_approve(
         .filter(|address| address.to_string() != self_addr)
         .cloned();
 
+    // A claim over iroh carries no socket origin: the connection's node id is
+    // the identity, and it is what the row dials later.
+    let claimed_over_iroh = pending.origin_addr.is_none();
     let model = paired_devices::ActiveModel {
         device_id: Set(device_id),
         name: Set(pending.device_name.clone()),
@@ -795,12 +838,11 @@ async fn handle_pairing_approve(
         device_type_id: Set(pending.device_type_id),
         paired_at: Set(primitive_now()),
         last_sync_at: Set(None),
-        // A pairing is mutual when the claim named where the peer serves: the
-        // token is minted here and stored by both sides, so this device can
-        // pull from the peer exactly as the peer pulls from it. A claim from a
-        // peer that predates mutual pairing carries no address to dial, and
-        // stays one-way until the two are paired again.
-        outbound: Set(peer_address.is_some()),
+        // A pairing is mutual when the peer can be dialled: it named where it
+        // serves, or it claimed over iroh, where the node id — the pairing key
+        // itself — is the address. A claim that arrived over HTTP with no
+        // address comes from a peer too old to speak iroh, and stays one-way.
+        outbound: Set(peer_address.is_some() || claimed_over_iroh),
     };
     paired_devices::Entity::insert(model)
         .on_conflict(
@@ -819,12 +861,15 @@ async fn handle_pairing_approve(
 
     // `session_token` is added by a later client migration and is not on the
     // entity, so persist it with a targeted statement through the pool.
-    livtet_data::sql::query("UPDATE paired_devices SET session_token = ? WHERE device_id = ?")
-        .bind(session_token.clone())
-        .bind(device_id.to_bytes().to_vec())
-        .execute(&state.pool)
-        .await
-        .map_err(|e| ServerError::Db(e.to_string()))?;
+    livtet_data::sql::query(
+        "UPDATE paired_devices SET session_token = ?, node_id = ? WHERE device_id = ?",
+    )
+    .bind(session_token.clone())
+    .bind(pending_node_id.clone())
+    .bind(device_id.to_bytes().to_vec())
+    .execute(&state.pool)
+    .await
+    .map_err(|e| ServerError::Db(e.to_string()))?;
 
     let mut pending_model: pending_pairings::ActiveModel = pending.into();
     pending_model.status_id = Set(Some(DbId::from(PairingStatus::Approved)));
@@ -900,34 +945,47 @@ async fn claim_peer(
     state: &Arc<DaemonState>,
     params: PairingClaimParams,
 ) -> Result<(), ServerError> {
-    use futures_util::StreamExt;
     use livtet_data::client_entities::paired_devices;
     use livtet_data::orm::{EntityTrait, Set, sea_query::OnConflict};
+    use livtet_sync_iroh::{Request, Response};
     use livtet_types::Address;
 
-    let base = format!("http://{}", params.listen_on.trim_end_matches('/'));
-    let http = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(310))
-        .build()
-        .map_err(|error| ServerError::Server(format!("pairing client: {error}")))?;
+    // Pairing is dialled by node id, so the claimant needs no reachable port
+    // and the approver's address never enters the exchange.
+    let endpoint = state
+        .discovery
+        .lock()
+        .await
+        .as_ref()
+        .map(|service| service.endpoint().clone())
+        .ok_or_else(|| {
+            ServerError::Server("peer discovery is not bound, so pairing cannot dial".to_string())
+        })?;
+    let connection = livtet_sync_iroh::dial(&endpoint, &params.node_id)
+        .await
+        .map_err(|error| ServerError::Server(format!("pairing dial: {error}")))?;
 
-    let identity: serde_json::Value = http
-        .get(format!("{base}/sync/identity"))
-        .send()
+    // Who is on the other end? The connection authenticates the node id, and
+    // the identity frame names the device id the pairing row is keyed by.
+    let exchange = livtet_sync_iroh::call(&connection, &Request::Identity)
         .await
-        .map_err(|error| ServerError::Server(format!("peer identity: {error}")))?
-        .json()
-        .await
-        .map_err(|error| ServerError::Server(format!("peer identity body: {error}")))?;
+        .map_err(|error| ServerError::Server(format!("peer identity: {error}")))?;
+    let identity = match exchange.response {
+        Response::Identity(identity) => identity,
+        other => {
+            return Err(ServerError::Server(format!(
+                "peer identity: unexpected reply {other:?}"
+            )));
+        }
+    };
     let peer_device_id = identity
-        .get("device_id")
-        .and_then(serde_json::Value::as_str)
-        .ok_or_else(|| ServerError::Server("peer identity carried no device id".to_string()))?;
-    let peer_device_id = peer_device_id
+        .device_id
         .parse::<DbId>()
         .ok()
-        .or_else(|| DbId::from_hex(peer_device_id).ok())
-        .ok_or_else(|| ServerError::Server(format!("invalid peer device id: {peer_device_id}")))?;
+        .or_else(|| DbId::from_hex(&identity.device_id).ok())
+        .ok_or_else(|| {
+            ServerError::Server(format!("invalid peer device id: {}", identity.device_id))
+        })?;
 
     let our_node = discovery_node_id(state).await;
     let our_name = state
@@ -936,72 +994,47 @@ async fn claim_peer(
         .await
         .clone()
         .unwrap_or_else(|| crate::mdns::friendly_name(&state.device_id));
-    let claim: serde_json::Value = http
-        .post(format!("{base}/sync/pair"))
-        .json(&serde_json::json!({
-            "device_id": state.device_id,
-            "name": our_name,
-            "device_type": "desktop",
-            "node_id": our_node,
-            // Where this device serves, so the approving side can read it
-            // back: the claim arrives from an ephemeral source port.
-            "listen_on": own_endpoint(state).await,
-        }))
-        .send()
-        .await
-        .map_err(|error| ServerError::Server(format!("pairing claim: {error}")))?
-        .json()
-        .await
-        .map_err(|error| ServerError::Server(format!("pairing claim body: {error}")))?;
-    let secret = claim
-        .get("claim")
-        .and_then(serde_json::Value::as_str)
-        .ok_or_else(|| ServerError::Server("pairing claim returned no secret".to_string()))?;
-
-    let mut stream = http
-        .get(format!("{base}/sync/pair/status/{our_node}?claim={secret}"))
-        .send()
-        .await
-        .map_err(|error| ServerError::Server(format!("pairing status: {error}")))?
-        .bytes_stream();
-    let mut buffer = String::new();
-    let mut decision: Option<serde_json::Value> = None;
-    while let Some(chunk) = stream.next().await {
-        let chunk =
-            chunk.map_err(|error| ServerError::Server(format!("pairing stream: {error}")))?;
-        buffer.push_str(&String::from_utf8_lossy(&chunk));
-        if let Some(found) = buffer.lines().find_map(|line| {
-            line.strip_prefix("data:")
-                .and_then(|data| serde_json::from_str::<serde_json::Value>(data.trim()).ok())
-        }) {
-            decision = Some(found);
-            break;
+    let exchange = livtet_sync_iroh::call(
+        &connection,
+        &Request::Pair {
+            device_id: state.device_id.clone(),
+            name: our_name,
+            device_type: "desktop".to_string(),
+            node_id: our_node,
+        },
+    )
+    .await
+    .map_err(|error| ServerError::Server(format!("pairing claim: {error}")))?;
+    let session_token = match exchange.response {
+        Response::Paired { session_token, .. } if !session_token.is_empty() => session_token,
+        Response::Paired { .. } => {
+            return Err(ServerError::Server(
+                "approval carried no session token".to_string(),
+            ));
         }
-    }
-    drop(stream);
+        Response::Refused { reason } => {
+            return Err(ServerError::Server(format!(
+                "pairing was refused: {reason}"
+            )));
+        }
+        other => {
+            return Err(ServerError::Server(format!(
+                "pairing claim: unexpected reply {other:?}"
+            )));
+        }
+    };
 
-    let decision =
-        decision.ok_or_else(|| ServerError::Server("pairing stream ended early".to_string()))?;
-    if decision.get("event").and_then(serde_json::Value::as_str) != Some("approved") {
-        return Err(ServerError::Server("pairing was rejected".to_string()));
-    }
-    let session_token = decision
-        .get("session_token")
-        .and_then(serde_json::Value::as_str)
-        .filter(|token| !token.is_empty())
-        .ok_or_else(|| ServerError::Server("approval carried no session token".to_string()))?;
-
-    let listen_on: std::net::SocketAddr = params.listen_on.parse().map_err(|error| {
-        ServerError::Server(format!(
-            "invalid peer address {}: {error}",
-            params.listen_on
-        ))
-    })?;
+    let listen_on = params
+        .listen_on
+        .trim()
+        .parse::<std::net::SocketAddr>()
+        .ok()
+        .map(Address::new);
     let db = state.engine.db();
     let model = paired_devices::ActiveModel {
         device_id: Set(peer_device_id),
         name: Set(params.device_name.clone()),
-        listen_on: Set(Some(Address::new(listen_on))),
+        listen_on: Set(listen_on),
         device_type_id: Set(None),
         paired_at: Set(primitive_now()),
         last_sync_at: Set(None),
@@ -1012,7 +1045,6 @@ async fn claim_peer(
             OnConflict::column(paired_devices::Column::DeviceId)
                 .update_columns([
                     paired_devices::Column::Name,
-                    paired_devices::Column::ListenOn,
                     paired_devices::Column::PairedAt,
                     paired_devices::Column::Outbound,
                 ])
@@ -1022,13 +1054,17 @@ async fn claim_peer(
         .await
         .map_err(|error| ServerError::Server(format!("storing paired device: {error}")))?;
 
-    // `session_token` is not on the entity; write it through the pool.
-    livtet_data::sql::query("UPDATE paired_devices SET session_token = ? WHERE device_id = ?")
-        .bind(session_token.to_string())
-        .bind(peer_device_id.to_bytes().to_vec())
-        .execute(&state.pool)
-        .await
-        .map_err(|error| ServerError::Server(format!("storing session token: {error}")))?;
+    // `session_token` and `node_id` are not on the entity; write them through
+    // the pool. The node id is what every later dial addresses.
+    livtet_data::sql::query(
+        "UPDATE paired_devices SET session_token = ?, node_id = ? WHERE device_id = ?",
+    )
+    .bind(session_token)
+    .bind(params.node_id.clone())
+    .bind(peer_device_id.to_bytes().to_vec())
+    .execute(&state.pool)
+    .await
+    .map_err(|error| ServerError::Server(format!("storing session token: {error}")))?;
 
     requests::notify(
         &state.notifier,
@@ -1399,41 +1435,10 @@ async fn pull_device_once(
             "device was not claimed by this installation".to_string(),
         ));
     }
-    let listen_on = peer
-        .listen_on
-        .as_ref()
-        .map(ToString::to_string)
-        .ok_or_else(|| ServerError::Server("paired device has no address".to_string()))?;
-    let token: String = livtet_data::sql::query_scalar(
-        "SELECT session_token FROM paired_devices WHERE device_id = ?",
-    )
-    .bind(device_id.to_bytes().to_vec())
-    .fetch_one(&state.pool)
-    .await
-    .map_err(|error| ServerError::Server(format!("session token lookup: {error}")))?;
+    // The transport dials by node id over iroh, so no inbound port on the peer
+    // has to be reachable; a row from before that keeps the HTTP path.
+    let peer_client = crate::peer::peer_for(state, device_id).await?;
 
-    let books_dir = state
-        .config
-        .books_dir
-        .clone()
-        .ok_or_else(|| ServerError::Server("no books directory configured".to_string()))?;
-    let covers_dir = state
-        .config
-        .covers_dir
-        .clone()
-        .ok_or_else(|| ServerError::Server("no covers directory configured".to_string()))?;
-    fs_err::tokio::create_dir_all(books_dir.as_std_path())
-        .await
-        .map_err(|error| ServerError::Server(format!("books directory: {error}")))?;
-    fs_err::tokio::create_dir_all(covers_dir.as_std_path())
-        .await
-        .map_err(|error| ServerError::Server(format!("covers directory: {error}")))?;
-
-    let base = format!("http://{}", listen_on.trim_end_matches('/'));
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(60))
-        .build()
-        .map_err(|error| ServerError::Server(format!("pull client: {error}")))?;
     let cursor_key = format!("sync.cursor.{device_id}");
     let mut cursor = read_setting(state, &cursor_key)
         .await?
@@ -1443,24 +1448,8 @@ async fn pull_device_once(
     let mut conflicts = 0;
 
     loop {
-        let response = client
-            .get(format!(
-                "{base}/sync/changes?since_version={cursor}&limit=100"
-            ))
-            .header("x-livtet-session", &token)
-            .send()
-            .await
-            .map_err(|error| ServerError::Server(format!("pull changes: {error}")))?;
-        if !response.status().is_success() {
-            return Err(ServerError::Server(format!(
-                "pull changes returned HTTP {}",
-                response.status()
-            )));
-        }
-        let pull: PullResponse = response
-            .json()
-            .await
-            .map_err(|error| ServerError::Server(format!("pull changes body: {error}")))?;
+        let since_version = cursor.parse::<i64>().unwrap_or(0);
+        let pull: PullResponse = peer_client.changes(since_version, 100).await?;
         if pull.changes.is_empty() {
             if pull.has_more {
                 // A page can be empty when it held only offers for another
@@ -1507,35 +1496,42 @@ async fn pull_device_once(
         let (deferred, metadata): (Vec<_>, Vec<_>) = changes
             .into_iter()
             .partition(|change| held_ids.contains(change.entity_id.as_str()));
-        if !metadata.is_empty() {
-            let outcome = state
-                .engine
-                .apply_changes(
-                    metadata,
-                    ApplyOptions {
-                        inventory_paths: HashMap::new(),
-                    },
-                )
-                .await
-                .map_err(ServerError::from)?;
-            applied += outcome.applied;
-            conflicts += outcome.conflicts.len();
-        }
+        {
+            // The write gate is held only here: the page is already fetched, and
+            // everything below touches the database. A background pull and a
+            // reader-triggered one otherwise race for SQLite's single writer.
+            let _write = state.write_gate.lock().await;
 
-        for (change, payload) in &offers {
-            let ids = offer_row_ids(payload);
-            let held: Vec<livtet_sync::SyncChange> = deferred
-                .iter()
-                .filter(|row| ids.contains(&row.entity_id))
-                .cloned()
-                .collect();
-            if record_inbound_offer(state, change, payload, &held).await? {
-                offered += 1;
+            if !metadata.is_empty() {
+                let outcome = state
+                    .engine
+                    .apply_changes(
+                        metadata,
+                        ApplyOptions {
+                            inventory_paths: HashMap::new(),
+                        },
+                    )
+                    .await
+                    .map_err(ServerError::from)?;
+                applied += outcome.applied;
+                conflicts += outcome.conflicts.len();
             }
-        }
 
-        cursor = pull.latest_version.to_string();
-        write_setting(state, &cursor_key, &cursor).await?;
+            for (change, payload) in &offers {
+                let ids = offer_row_ids(payload);
+                let held: Vec<livtet_sync::SyncChange> = deferred
+                    .iter()
+                    .filter(|row| ids.contains(&row.entity_id))
+                    .cloned()
+                    .collect();
+                if record_inbound_offer(state, change, payload, &held).await? {
+                    offered += 1;
+                }
+            }
+
+            cursor = pull.latest_version.to_string();
+            write_setting(state, &cursor_key, &cursor).await?;
+        }
         if !pull.has_more {
             break;
         }
@@ -1654,9 +1650,7 @@ fn decode_discovery_secret(encoded: &str) -> Option<SecretKey> {
 
 /// Fetch one offered file (and its cover) into the receiver's directories.
 async fn download_offer(
-    client: &reqwest::Client,
-    base: &str,
-    token: &str,
+    peer: &crate::peer::Peer,
     payload: &serde_json::Value,
     books_dir: &camino::Utf8Path,
     covers_dir: &camino::Utf8Path,
@@ -1672,19 +1666,8 @@ async fn download_offer(
         .filter(|name| !name.is_empty())
         .unwrap_or("book");
 
-    let bytes = client
-        .get(format!("{base}/sync/files/{inventory_id}"))
-        .header("x-livtet-session", token)
-        .send()
-        .await
-        .map_err(|error| ServerError::Server(format!("download file: {error}")))?
-        .bytes()
-        .await
-        .map_err(|error| ServerError::Server(format!("download file body: {error}")))?;
     let file_path = books_dir.join(format!("{inventory_id}-{file_name}"));
-    fs_err::tokio::write(file_path.as_std_path(), &bytes)
-        .await
-        .map_err(|error| ServerError::Server(format!("write received file: {error}")))?;
+    peer.download_file(inventory_id, &file_path).await?;
 
     let mut cover_path = None;
     if payload
@@ -1692,34 +1675,20 @@ async fn download_offer(
         .and_then(serde_json::Value::as_bool)
         == Some(true)
     {
-        let response = client
-            .get(format!("{base}/sync/covers/{inventory_id}"))
-            .header("x-livtet-session", token)
-            .send()
-            .await
-            .map_err(|error| ServerError::Server(format!("download cover: {error}")))?;
-        let content_type = response
-            .headers()
-            .get(reqwest::header::CONTENT_TYPE)
-            .and_then(|value| value.to_str().ok())
-            .unwrap_or("image/png")
-            .to_string();
-        let extension = if content_type.contains("jpeg") {
-            "jpg"
-        } else if content_type.contains("webp") {
-            "webp"
-        } else {
-            "png"
-        };
-        let bytes = response
-            .bytes()
-            .await
-            .map_err(|error| ServerError::Server(format!("download cover body: {error}")))?;
-        let path = covers_dir.join(format!("{inventory_id}.{extension}"));
-        fs_err::tokio::write(path.as_std_path(), &bytes)
-            .await
-            .map_err(|error| ServerError::Server(format!("write received cover: {error}")))?;
-        cover_path = Some(path.to_string());
+        if let Some((content_type, bytes)) = peer.cover(inventory_id).await? {
+            let extension = if content_type.contains("jpeg") {
+                "jpg"
+            } else if content_type.contains("webp") {
+                "webp"
+            } else {
+                "png"
+            };
+            let path = covers_dir.join(format!("{inventory_id}.{extension}"));
+            fs_err::tokio::write(path.as_std_path(), &bytes)
+                .await
+                .map_err(|error| ServerError::Server(format!("write received cover: {error}")))?;
+            cover_path = Some(path.to_string());
+        }
     }
 
     Ok((
@@ -1845,53 +1814,6 @@ async fn record_inbound_offer(
     Ok(fresh)
 }
 
-/// An outbound peer's HTTP surface and the session token it issued here.
-async fn peer_endpoint(
-    state: &Arc<DaemonState>,
-    device_id: &str,
-) -> Result<(reqwest::Client, String, String), ServerError> {
-    use livtet_data::client_entities::paired_devices;
-
-    let id = device_id
-        .parse::<DbId>()
-        .ok()
-        .or_else(|| DbId::from_hex(device_id).ok())
-        .ok_or_else(|| ServerError::Server(format!("invalid device id: {device_id}")))?;
-    let peer = paired_devices::Entity::find_by_id(id)
-        .one(state.engine.db())
-        .await
-        .map_err(|error| ServerError::Server(format!("paired device lookup: {error}")))?
-        .ok_or_else(|| {
-            ServerError::Server("the offering device is no longer paired".to_string())
-        })?;
-    if !peer.outbound {
-        return Err(ServerError::Server(
-            "the offering device was not claimed by this installation".to_string(),
-        ));
-    }
-    let listen_on = peer
-        .listen_on
-        .as_ref()
-        .map(ToString::to_string)
-        .ok_or_else(|| ServerError::Server("paired device has no address".to_string()))?;
-    let token: String = livtet_data::sql::query_scalar(
-        "SELECT session_token FROM paired_devices WHERE device_id = ?",
-    )
-    .bind(id.to_bytes().to_vec())
-    .fetch_one(&state.pool)
-    .await
-    .map_err(|error| ServerError::Server(format!("session token lookup: {error}")))?;
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(60))
-        .build()
-        .map_err(|error| ServerError::Server(format!("offer client: {error}")))?;
-    Ok((
-        client,
-        format!("http://{}", listen_on.trim_end_matches('/')),
-        token,
-    ))
-}
-
 /// Books offered to this desktop that are still waiting on a decision.
 async fn handle_offers_list(state: &Arc<DaemonState>) -> Result<serde_json::Value, RpcFailure> {
     use livtet_data::client_entities::{inbound_offers, paired_devices};
@@ -1949,29 +1871,10 @@ async fn handle_offers_cover(
         return Ok(serde_json::Value::Null);
     }
 
-    let (client, base, token) = peer_endpoint(state, &row.from_device_id).await?;
-    let response = client
-        .get(format!("{base}/sync/covers/{}", row.inventory_id))
-        .header("x-livtet-session", &token)
-        .send()
-        .await
-        .map_err(|error| RpcFailure {
-            code: rpc::error_code::INTERNAL_ERROR,
-            message: format!("cover fetch: {error}"),
-        })?;
-    if !response.status().is_success() {
+    let peer = crate::peer::peer_by_id(state, &row.from_device_id).await?;
+    let Some((content_type, bytes)) = peer.cover(&row.inventory_id).await? else {
         return Ok(serde_json::Value::Null);
-    }
-    let content_type = response
-        .headers()
-        .get(reqwest::header::CONTENT_TYPE)
-        .and_then(|value| value.to_str().ok())
-        .unwrap_or("image/png")
-        .to_string();
-    let bytes = response.bytes().await.map_err(|error| RpcFailure {
-        code: rpc::error_code::INTERNAL_ERROR,
-        message: format!("cover body: {error}"),
-    })?;
+    };
     Ok(serde_json::json!({
         "content_type": content_type,
         "data_url": format!(
@@ -2005,9 +1908,12 @@ async fn handle_offers_decide(
         )));
     }
 
-    let (client, base, token) = peer_endpoint(state, &row.from_device_id).await?;
+    let peer = crate::peer::peer_by_id(state, &row.from_device_id).await?;
     let mut applied = 0;
     let mut conflicts = 0;
+    // Held for the local writes below, released before the peer is told: a
+    // network call must not block another reader's pull.
+    let mut write = None;
 
     if params.accepted {
         let books_dir = state.config.books_dir.clone().ok_or_else(|| RpcFailure {
@@ -2036,16 +1942,16 @@ async fn handle_offers_decide(
             "file_name": row.file_name,
             "has_cover": row.has_cover,
         });
-        let (inventory_id, paths) =
-            download_offer(&client, &base, &token, &offer, &books_dir, &covers_dir)
-                .await
-                .map_err(|error| RpcFailure {
-                    code: rpc::error_code::INTERNAL_ERROR,
-                    message: error.to_string(),
-                })?;
+        let (inventory_id, paths) = download_offer(&peer, &offer, &books_dir, &covers_dir)
+            .await
+            .map_err(|error| RpcFailure {
+                code: rpc::error_code::INTERNAL_ERROR,
+                message: error.to_string(),
+            })?;
 
         let held: Vec<livtet_sync::SyncChange> =
             serde_json::from_str(&row.deferred_changes).unwrap_or_default();
+        write = Some(state.write_gate.lock().await);
         if !held.is_empty() {
             let outcome = state
                 .engine
@@ -2086,7 +1992,9 @@ async fn handle_offers_decide(
         message: format!("could not record the decision: {error}"),
     })?;
 
-    let delivered = post_offer_decision(&client, &base, &token, &row.offer_id, params.accepted)
+    drop(write.take());
+    let delivered = peer
+        .offer_decision(&row.offer_id, params.accepted)
         .await
         .is_ok();
 
@@ -2097,30 +2005,6 @@ async fn handle_offers_decide(
         "applied": applied,
         "conflicts": conflicts,
     }))
-}
-
-/// Tell the sender what its offer became.
-async fn post_offer_decision(
-    client: &reqwest::Client,
-    base: &str,
-    token: &str,
-    offer_id: &str,
-    accepted: bool,
-) -> Result<(), ServerError> {
-    let response = client
-        .post(format!("{base}/sync/offers/{offer_id}/decision"))
-        .header("x-livtet-session", token)
-        .json(&serde_json::json!({ "accepted": accepted }))
-        .send()
-        .await
-        .map_err(|error| ServerError::Server(format!("offer decision: {error}")))?;
-    if !response.status().is_success() {
-        return Err(ServerError::Server(format!(
-            "offer decision returned HTTP {}",
-            response.status()
-        )));
-    }
-    Ok(())
 }
 
 async fn handle_devices_revoke(
@@ -2206,28 +2090,6 @@ async fn current_host_port(state: &Arc<DaemonState>) -> (String, u16) {
     }
 }
 
-/// The daemon's own `host:port`, used to tell a self-originated pairing from a
-/// remote one. `pairing.begin` listens on it; `/sync/pair` compares to it.
-/// The address another device should dial to reach this one.
-///
-/// The bound address is `0.0.0.0` whenever LAN sharing is on, which nothing can
-/// dial, so a wildcard bind asks the kernel which local address it would use to
-/// leave the machine. A loopback-only bind keeps loopback: that is genuinely
-/// where the server is.
-async fn own_endpoint(state: &Arc<DaemonState>) -> String {
-    let (host, port) = current_host_port(state).await;
-    if host != "0.0.0.0" && host != "::" {
-        return format!("{host}:{port}");
-    }
-    match std::net::UdpSocket::bind("0.0.0.0:0")
-        .and_then(|socket| socket.connect("192.0.2.1:9").map(|()| socket.local_addr()))
-        .map(|address| address.map(|address| address.ip()))
-    {
-        Ok(Ok(ip)) if !ip.is_unspecified() && !ip.is_loopback() => format!("{ip}:{port}"),
-        _ => format!("127.0.0.1:{port}"),
-    }
-}
-
 async fn self_address(state: &Arc<DaemonState>) -> String {
     let (host, port) = current_host_port(state).await;
     format!("{host}:{port}")
@@ -2283,7 +2145,7 @@ async fn shutdown_discovery(state: &Arc<DaemonState>) {
 }
 
 /// The node id to publish: the bound endpoint's, else the device id.
-async fn discovery_node_id(state: &Arc<DaemonState>) -> String {
+pub(crate) async fn discovery_node_id(state: &Arc<DaemonState>) -> String {
     state
         .discovery
         .lock()

@@ -145,6 +145,8 @@ pub enum WireError {
     Json(#[from] serde_json::Error),
     #[error("frame of {size} bytes exceeds the {MAX_FRAME_BYTES}-byte limit")]
     TooLarge { size: u32 },
+    #[error("stream: {0}")]
+    Stream(String),
 }
 
 /// Write one length-prefixed JSON frame.

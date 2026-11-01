@@ -3919,6 +3919,7 @@ dependencies = [
  "livtet-iroh",
  "livtet-sync",
  "livtet-sync-http",
+ "livtet-sync-iroh",
  "livtet-types",
  "mdns-sd",
  "poem",
