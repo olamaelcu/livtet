@@ -66,6 +66,15 @@ pub struct PairRequest {
     pub name: String,
     pub device_type: String,
     pub node_id: String,
+    /// Where the claiming device serves its own sync server, so the approving
+    /// device can dial it back.
+    ///
+    /// A pairing is mutual: both sides end up holding the same token, and the
+    /// only thing the approver cannot work out for itself is the claimer's
+    /// address — the request arrives from an ephemeral source port. Absent from
+    /// peers that predate mutual pairing, which is why it is optional.
+    #[serde(default)]
+    pub listen_on: Option<String>,
 }
 
 /// Body for [`RESOLVE_CONFLICT_PATH`].

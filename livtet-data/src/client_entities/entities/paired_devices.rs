@@ -12,8 +12,12 @@ pub struct Model {
     pub device_type_id: Option<DbId>,
     pub paired_at: time::PrimitiveDateTime,
     pub last_sync_at: Option<time::PrimitiveDateTime>,
-    /// Whether this desktop claimed the peer (and may pull from it) rather
-    /// than approving the peer's claim.
+    /// Whether this device may pull from the peer.
+    ///
+    /// Set when this device files the claim, and also when it approves one: a
+    /// pairing is mutual, so the token both sides store lets either dial the
+    /// other. A pairing approved before mutual pairing, or one whose claim
+    /// carried no address, stays `false` until the two are paired again.
     pub outbound: bool,
 }
 

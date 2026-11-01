@@ -267,7 +267,16 @@ async fn post_pair(
         .device_id()
         .parse::<DbId>()
         .map_err(|_e| Error::from_status(StatusCode::INTERNAL_SERVER_ERROR))?;
-    let listen_on = local.0.as_socket_addr().map(|addr| Address::new(*addr));
+    // The claimer's own address when it sent one — that is what makes the
+    // pairing mutual. The address this request was served on is the fallback
+    // for peers that predate mutual pairing: it is this device's address, not
+    // theirs, so approval treats it as "unknown" rather than dialling itself.
+    let listen_on = body
+        .listen_on
+        .as_deref()
+        .and_then(|endpoint| endpoint.trim().parse::<std::net::SocketAddr>().ok())
+        .map(Address::new)
+        .or_else(|| local.0.as_socket_addr().map(|addr| Address::new(*addr)));
 
     // The remote's node identity is the row key. A peer that discovery has
     // just introduced is not yet in the table, so the first request inserts

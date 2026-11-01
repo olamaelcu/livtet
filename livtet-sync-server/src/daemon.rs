@@ -146,6 +146,7 @@ pub async fn run_async(config: ServerConfig) -> Result<(), ServerError> {
     advertise(&state).await;
     spawn_pull_loop(Arc::clone(&state));
     let _ = cleanup_old_pairings(&state).await;
+    let _ = promote_mutual_pairings(&state).await;
 
     let loop_result = read_loop(&state, &out_tx).await;
     let _ = stop_server(&state).await;
@@ -765,15 +766,28 @@ async fn handle_pairing_approve(
 
     let session_token = ulid::Ulid::generate().to_string();
     let device_id = pending.device_id.unwrap_or_else(DbId::new);
+    // Only a claim that names where *it* serves can be dialled back. The
+    // fallback address is this device's own, which would mean pulling from
+    // ourselves, so it stays "unknown" and the pairing stays one-way.
+    let peer_address = pending
+        .listen_on
+        .as_ref()
+        .filter(|address| address.to_string() != self_addr)
+        .cloned();
 
     let model = paired_devices::ActiveModel {
         device_id: Set(device_id),
         name: Set(pending.device_name.clone()),
-        listen_on: Set(pending.listen_on.clone()),
+        listen_on: Set(peer_address.clone()),
         device_type_id: Set(pending.device_type_id),
         paired_at: Set(primitive_now()),
         last_sync_at: Set(None),
-        outbound: Set(false),
+        // A pairing is mutual when the claim named where the peer serves: the
+        // token is minted here and stored by both sides, so this device can
+        // pull from the peer exactly as the peer pulls from it. A claim from a
+        // peer that predates mutual pairing carries no address to dial, and
+        // stays one-way until the two are paired again.
+        outbound: Set(peer_address.is_some()),
     };
     paired_devices::Entity::insert(model)
         .on_conflict(
@@ -916,6 +930,9 @@ async fn claim_peer(
             "name": our_name,
             "device_type": "desktop",
             "node_id": our_node,
+            // Where this device serves, so the approving side can read it
+            // back: the claim arrives from an ephemeral source port.
+            "listen_on": own_endpoint(state).await,
         }))
         .send()
         .await
@@ -2178,6 +2195,26 @@ async fn current_host_port(state: &Arc<DaemonState>) -> (String, u16) {
 
 /// The daemon's own `host:port`, used to tell a self-originated pairing from a
 /// remote one. `pairing.begin` listens on it; `/sync/pair` compares to it.
+/// The address another device should dial to reach this one.
+///
+/// The bound address is `0.0.0.0` whenever LAN sharing is on, which nothing can
+/// dial, so a wildcard bind asks the kernel which local address it would use to
+/// leave the machine. A loopback-only bind keeps loopback: that is genuinely
+/// where the server is.
+async fn own_endpoint(state: &Arc<DaemonState>) -> String {
+    let (host, port) = current_host_port(state).await;
+    if host != "0.0.0.0" && host != "::" {
+        return format!("{host}:{port}");
+    }
+    match std::net::UdpSocket::bind("0.0.0.0:0")
+        .and_then(|socket| socket.connect("192.0.2.1:9").map(|()| socket.local_addr()))
+        .map(|address| address.map(|address| address.ip()))
+    {
+        Ok(Ok(ip)) if !ip.is_unspecified() && !ip.is_loopback() => format!("{ip}:{port}"),
+        _ => format!("127.0.0.1:{port}"),
+    }
+}
+
 async fn self_address(state: &Arc<DaemonState>) -> String {
     let (host, port) = current_host_port(state).await;
     format!("{host}:{port}")
@@ -2331,6 +2368,36 @@ async fn outbound_device_ids(state: &Arc<DaemonState>) -> Vec<DbId> {
             Vec::new()
         }
     }
+}
+
+/// Make pairings approved before pairing became mutual pull-capable.
+///
+/// Approval used to write `outbound = false`, which `pull_device` refuses: the
+/// device that *approved* a claim could never read the device that filed it,
+/// even though both sides already held the same token. The flag only gates
+/// pulling, so flipping it on rows that have a token grants the missing half
+/// without re-pairing anything.
+async fn promote_mutual_pairings(state: &Arc<DaemonState>) -> Result<(), ServerError> {
+    // Approval used to store the address the claim was *served* on — this
+    // device's own, and a wildcard one at that — so those rows have nothing to
+    // dial. A peer address is never `0.0.0.0`/`[::]`; anything specific is.
+    let updated = livtet_data::sql::query(
+        "UPDATE paired_devices SET outbound = 1 \
+         WHERE outbound = 0 AND session_token IS NOT NULL AND session_token != '' \
+           AND listen_on IS NOT NULL \
+           AND listen_on NOT LIKE '0.0.0.0:%' AND listen_on NOT LIKE '[::]:%'",
+    )
+    .execute(&state.pool)
+    .await
+    .map_err(|e| ServerError::Db(format!("promoting mutual pairings: {e}")))?;
+
+    if updated.rows_affected() > 0 {
+        tracing::info!(
+            devices = updated.rows_affected(),
+            "pairings approved before they were mutual now pull in both directions"
+        );
+    }
+    Ok(())
 }
 
 /// Delete pending pairings whose ticket window has closed.
