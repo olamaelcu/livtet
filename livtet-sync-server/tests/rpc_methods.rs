@@ -12,6 +12,9 @@ use camino::{Utf8Path, Utf8PathBuf};
 use fs_err as fs;
 use livtet_sync_server::rpc::{self, StdioClient};
 
+/// Deterministic 32-byte key so tests never touch the OS keyring.
+const TEST_DISCOVERY_KEY: &str = "0101010101010101010101010101010101010101010101010101010101010101";
+
 fn temp_db_path(tag: &str) -> Utf8PathBuf {
     // Concurrent tests can read the same nanosecond; a counter keeps the
     // SQLite file (and its migration run) unique within the test binary.
@@ -42,7 +45,13 @@ async fn spawn(db_path: &Utf8Path) -> StdioClient {
         "--port".to_string(),
         "0".to_string(),
     ];
-    match StdioClient::spawn(binary, &args).await {
+    match StdioClient::spawn_with_env(
+        binary,
+        &args,
+        &[("LIVTET_DISCOVERY_KEY", TEST_DISCOVERY_KEY)],
+    )
+    .await
+    {
         Ok(client) => client,
         Err(error) => {
             cleanup(db_path);

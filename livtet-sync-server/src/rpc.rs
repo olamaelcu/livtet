@@ -309,9 +309,20 @@ impl StdioClient {
         program: P,
         args: &[String],
     ) -> Result<Self, ServerError> {
+        Self::spawn_with_env(program, args, &[]).await
+    }
+
+    /// Spawn with extra environment variables, used by tests to inject a
+    /// deterministic discovery key instead of touching the OS keyring.
+    pub async fn spawn_with_env<P: AsRef<Utf8Path>>(
+        program: P,
+        args: &[String],
+        env: &[(&str, &str)],
+    ) -> Result<Self, ServerError> {
         let mut command = Command::new(program.as_ref().as_std_path());
         command
             .args(args)
+            .envs(env.iter().copied())
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null());

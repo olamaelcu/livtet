@@ -12,5 +12,5 @@ pub mod discovery;
 pub mod identity;
 
 pub use discovery::{DiscoveryError, DiscoveryService};
-pub use iroh::SecretKey;
 pub use identity::{InvalidNodeId, NodeId, PeerIdentity};
+pub use iroh::SecretKey;

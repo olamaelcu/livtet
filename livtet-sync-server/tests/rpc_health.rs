@@ -7,6 +7,9 @@ use camino::{Utf8Path, Utf8PathBuf};
 use fs_err as fs;
 use livtet_sync_server::rpc::{self, StdioClient};
 
+/// Deterministic 32-byte key so tests never touch the OS keyring.
+const TEST_DISCOVERY_KEY: &str = "0101010101010101010101010101010101010101010101010101010101010101";
+
 fn temp_db_path() -> Utf8PathBuf {
     // The wall clock alone collides: concurrent tests can read the same
     // nanosecond, and two daemons migrating one SQLite file fail with
@@ -42,7 +45,13 @@ async fn rpc_health_status_pairing_roundtrip() {
         "0".to_string(),
     ];
 
-    let mut client = match StdioClient::spawn(binary, &args).await {
+    let mut client = match StdioClient::spawn_with_env(
+        binary,
+        &args,
+        &[("LIVTET_DISCOVERY_KEY", TEST_DISCOVERY_KEY)],
+    )
+    .await
+    {
         Ok(client) => client,
         Err(error) => {
             cleanup(&db_path);
@@ -285,7 +294,13 @@ async fn pairing_approve_rejects_unclaimed_ticket() {
         "0".to_string(),
     ];
 
-    let mut client = match StdioClient::spawn(binary, &args).await {
+    let mut client = match StdioClient::spawn_with_env(
+        binary,
+        &args,
+        &[("LIVTET_DISCOVERY_KEY", TEST_DISCOVERY_KEY)],
+    )
+    .await
+    {
         Ok(client) => client,
         Err(error) => {
             cleanup(&db_path);

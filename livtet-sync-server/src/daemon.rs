@@ -65,11 +65,13 @@ pub struct DaemonState {
     pub bound: Mutex<Option<std::net::SocketAddr>>,
 }
 
-/// File beside the database holding the iroh discovery secret.
-///
-/// It is deliberately not a `client_settings` row: that table syncs to paired
-/// peers, and the secret must never leave this device.
-const DISCOVERY_KEY_FILE: &str = "discovery.key";
+/// Keyring service under which the discovery secret is stored.
+const DISCOVERY_KEYRING_SERVICE: &str = "net.olamaelcu.livtet.sync";
+/// Keyring account (item) name for the discovery secret.
+const DISCOVERY_KEYRING_ACCOUNT: &str = "discovery-node-key";
+/// Explicit key override for tests and headless debug runs; unset normally.
+#[cfg(debug_assertions)]
+const DISCOVERY_KEY_ENV: &str = "LIVTET_DISCOVERY_KEY";
 
 /// A managed embedded HTTP server with graceful shutdown.
 pub struct ServerHandle {
@@ -93,7 +95,7 @@ pub async fn run_async(config: ServerConfig) -> Result<(), ServerError> {
         livtet_data::orm::SqlxSqliteConnector::from_sqlx_sqlite_pool(pool.clone());
     let device_id = resolve_device_id(&db, config.device_id.as_deref()).await?;
     let device_name = config.device_name.clone();
-    let discovery_secret = discovery_secret_key(&config)?;
+    let discovery_secret = discovery_secret_key();
     let engine = SyncEngine::new(db, device_id.clone());
 
     let pair_waiters: PairWaiters = Arc::new(Mutex::new(HashMap::new()));
@@ -1355,62 +1357,59 @@ async fn write_setting(
     Ok(())
 }
 
-/// Where the discovery key lives, beside the SQLite file.
-fn discovery_key_path(config: &ServerConfig) -> camino::Utf8PathBuf {
-    config
-        .db_path
-        .parent()
-        .unwrap_or_else(|| camino::Utf8Path::new("."))
-        .join(DISCOVERY_KEY_FILE)
-}
-
-/// Load the discovery secret, creating and persisting one on first run.
+/// Load the discovery secret from the OS keyring, creating it on first run.
 ///
-/// The 32-byte secret determines the iroh node id, so keeping it beside the
-/// database makes this device's node id stable across restarts.
-fn discovery_secret_key(config: &ServerConfig) -> Result<SecretKey, ServerError> {
-    use std::io::{ErrorKind, Write};
-
-    let path = discovery_key_path(config);
-    if let Some(parent) = path.parent() {
-        fs_err::create_dir_all(parent)
-            .map_err(|error| ServerError::Server(format!("discovery key directory: {error}")))?;
+/// The 32-byte secret determines the iroh node id. It is never written to the
+/// data directory and never enters `client_settings`, which syncs to peers.
+/// If the keyring is unavailable, this run gets an ephemeral key: the daemon
+/// still works, but the node id changes on the next start.
+fn discovery_secret_key() -> SecretKey {
+    if let Some(secret) = discovery_secret_from_env() {
+        return secret;
     }
 
-    let open = || {
-        let mut options = std::fs::OpenOptions::new();
-        options.write(true).create_new(true);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            options.mode(0o600);
+    let entry = match keyring::Entry::new(DISCOVERY_KEYRING_SERVICE, DISCOVERY_KEYRING_ACCOUNT) {
+        Ok(entry) => entry,
+        Err(error) => {
+            tracing::warn!(%error, "OS keyring unavailable; using an ephemeral node id");
+            return SecretKey::generate();
         }
-        options.open(&path)
     };
 
-    match open() {
-        Ok(mut file) => {
-            let secret = SecretKey::generate();
-            file.write_all(&secret.to_bytes())
-                .map_err(|error| ServerError::Server(format!("discovery key write: {error}")))?;
-            Ok(secret)
+    match entry.get_password() {
+        Ok(encoded) => match decode_discovery_secret(&encoded) {
+            Some(secret) => return secret,
+            None => tracing::warn!("stored discovery key is malformed; replacing it"),
+        },
+        Err(keyring::Error::NoEntry) => {}
+        Err(error) => {
+            tracing::warn!(%error, "OS keyring read failed; trying to store a new key");
         }
-        Err(error) if error.kind() == ErrorKind::AlreadyExists => {
-            let bytes = fs_err::read(&path).map_err(|error| {
-                ServerError::Server(format!("discovery key read: {error}"))
-            })?;
-            let bytes: [u8; 32] = bytes.try_into().map_err(|bytes: Vec<u8>| {
-                ServerError::Server(format!(
-                    "discovery key has {} bytes, expected 32",
-                    bytes.len()
-                ))
-            })?;
-            Ok(SecretKey::from_bytes(&bytes))
-        }
-        Err(error) => Err(ServerError::Server(format!(
-            "discovery key create: {error}"
-        ))),
     }
+
+    let secret = SecretKey::generate();
+    let encoded = hex::encode(secret.to_bytes());
+    if let Err(error) = entry.set_password(&encoded) {
+        tracing::warn!(%error, "OS keyring write failed; using an ephemeral node id");
+    }
+    secret
+}
+
+/// Explicit override for tests and headless debug runs; never used in release.
+#[cfg(debug_assertions)]
+fn discovery_secret_from_env() -> Option<SecretKey> {
+    let encoded = std::env::var(DISCOVERY_KEY_ENV).ok()?;
+    decode_discovery_secret(&encoded)
+}
+
+#[cfg(not(debug_assertions))]
+fn discovery_secret_from_env() -> Option<SecretKey> {
+    None
+}
+
+fn decode_discovery_secret(encoded: &str) -> Option<SecretKey> {
+    let bytes: [u8; 32] = hex::decode(encoded).ok()?.try_into().ok()?;
+    Some(SecretKey::from_bytes(&bytes))
 }
 
 /// Fetch one offered file (and its cover) into the receiver's directories.
@@ -1612,14 +1611,7 @@ fn format_primitive(dt: time::PrimitiveDateTime) -> String {
 async fn discovery_identity(state: &Arc<DaemonState>, device_type: &str) -> Option<PeerIdentity> {
     let mut slot = state.discovery.lock().await;
     if slot.is_none() {
-        let secret = match discovery_secret_key(&state.config) {
-            Ok(secret) => secret,
-            Err(error) => {
-                tracing::warn!(%error, "discovery secret key unavailable");
-                return None;
-            }
-        };
-        match DiscoveryService::bind_with_secret(secret).await {
+        match DiscoveryService::bind_with_secret(discovery_secret_key()).await {
             Ok(service) => *slot = Some(Arc::new(service)),
             Err(error) => {
                 tracing::warn!(%error, "peer discovery unavailable; advertising the device id");
