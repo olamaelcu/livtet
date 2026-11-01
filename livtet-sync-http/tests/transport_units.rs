@@ -438,10 +438,7 @@ fn the_claim_limiter_caps_each_source_and_rolls_over() {
         "the third claim in the window is refused"
     );
     assert!(
-        limiter.allow_at(
-            IpAddr::from([10, 0, 0, 2]),
-            start + Duration::from_secs(2)
-        ),
+        limiter.allow_at(IpAddr::from([10, 0, 0, 2]), start + Duration::from_secs(2)),
         "another source has its own budget"
     );
     assert!(

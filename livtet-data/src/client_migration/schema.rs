@@ -93,8 +93,6 @@ pub enum InboundOffers {
     Title,
     Authors,
     FileName,
-    FileSizeBytes,
-    FileHash,
     HasCover,
     OfferedAt,
     ReceivedAt,

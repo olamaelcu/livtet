@@ -1627,9 +1627,9 @@ async fn record_inbound_offer(
 
     livtet_data::sql::query(
         "INSERT INTO inbound_offers (offer_id, from_device_id, inventory_id, edition_id, \
-             work_id, title, authors, file_name, file_size_bytes, file_hash, has_cover, \
-             offered_at, received_at, status, deferred_changes) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?) \
+             work_id, title, authors, file_name, has_cover, offered_at, received_at, \
+             status, deferred_changes) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?) \
          ON CONFLICT(offer_id) DO UPDATE SET \
              from_device_id = excluded.from_device_id, \
              inventory_id = excluded.inventory_id, \
@@ -1638,8 +1638,6 @@ async fn record_inbound_offer(
              title = excluded.title, \
              authors = excluded.authors, \
              file_name = excluded.file_name, \
-             file_size_bytes = excluded.file_size_bytes, \
-             file_hash = excluded.file_hash, \
              has_cover = excluded.has_cover, \
              offered_at = excluded.offered_at, \
              deferred_changes = excluded.deferred_changes \
@@ -1653,12 +1651,6 @@ async fn record_inbound_offer(
     .bind(title.clone())
     .bind(authors)
     .bind(text("file_name"))
-    .bind(
-        payload
-            .get("file_size_bytes")
-            .and_then(serde_json::Value::as_i64),
-    )
-    .bind(text("file_hash"))
     .bind(
         payload
             .get("has_cover")
@@ -1760,7 +1752,6 @@ async fn handle_offers_list(state: &Arc<DaemonState>) -> Result<serde_json::Valu
                 "title": row.title,
                 "authors": serde_json::from_str::<Vec<String>>(&row.authors).unwrap_or_default(),
                 "file_name": row.file_name,
-                "file_size_bytes": row.file_size_bytes,
                 "has_cover": row.has_cover,
                 "offered_at": row.offered_at,
                 "received_at": row.received_at,

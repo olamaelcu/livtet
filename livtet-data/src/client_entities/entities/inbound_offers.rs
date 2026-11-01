@@ -26,8 +26,6 @@ pub struct Model {
     /// A JSON array of author names.
     pub authors: String,
     pub file_name: Option<String>,
-    pub file_size_bytes: Option<i64>,
-    pub file_hash: Option<String>,
     pub has_cover: bool,
     /// When the sender recorded the offer.
     pub offered_at: String,

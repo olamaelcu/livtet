@@ -34,8 +34,6 @@ impl MigrationTrait for Migration {
                 .col(string(InboundOffers::Title))
                 .col(text(InboundOffers::Authors))
                 .col(string_null(InboundOffers::FileName))
-                .col(big_integer_null(InboundOffers::FileSizeBytes))
-                .col(string_null(InboundOffers::FileHash))
                 .col(boolean(InboundOffers::HasCover))
                 .col(string(InboundOffers::OfferedAt))
                 .col(string(InboundOffers::ReceivedAt))
