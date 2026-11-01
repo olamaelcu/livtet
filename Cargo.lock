@@ -3891,6 +3891,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "livtet-sync-iroh"
+version = "0.1.0"
+dependencies = [
+ "iroh",
+ "livtet-iroh",
+ "livtet-sync",
+ "livtet-types",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.19",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "livtet-sync-server"
 version = "0.2.1"
 dependencies = [

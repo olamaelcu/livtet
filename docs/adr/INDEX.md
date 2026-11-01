@@ -9,3 +9,4 @@
 | 5 | [Offers are a question the receiver answers](0005-offers-are-a-question-the-receiver-answers.md) | 2026-11-01 |
 | 6 | [Re-resolve a paired peer's address from its advertisement](0006-re-resolve-a-paired-peers-address-from-its-advertisement.md) | 2026-11-01 |
 | 7 | [Pairing is mutual](0007-pairing-is-mutual.md) | 2026-11-01 |
+| 8 | [Carry sync over iroh streams and retire livtet-sync-http](0008-sync-over-iroh-streams.md) | 2026-11-01 |

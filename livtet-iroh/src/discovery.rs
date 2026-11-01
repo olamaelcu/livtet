@@ -11,6 +11,13 @@ use iroh_mdns_address_lookup::MdnsAddressLookup;
 
 use crate::identity::{NodeId, PeerIdentity};
 
+/// The ALPN every sync stream runs under.
+///
+/// Set on the endpoint at bind time: iroh refuses incoming connections whose
+/// ALPN the endpoint does not advertise, so without it this node can dial but
+/// never be dialled — which is exactly the direction a pull-free sync needs.
+pub const SYNC_ALPN: &[u8] = b"livtet/sync/1";
+
 /// A live `iroh` endpoint plus the identity it advertises.
 pub struct DiscoveryService {
     endpoint: Endpoint,
@@ -30,6 +37,7 @@ impl DiscoveryService {
     pub async fn bind_with_secret(secret_key: SecretKey) -> Result<Self, DiscoveryError> {
         let endpoint = Endpoint::builder(presets::N0)
             .secret_key(secret_key)
+            .alpns(vec![SYNC_ALPN.to_vec()])
             .bind()
             .await
             .map_err(|error| DiscoveryError::Bind(error.to_string()))?;
