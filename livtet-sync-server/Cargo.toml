@@ -43,6 +43,7 @@ thiserror = { workspace = true }
 ulid = { workspace = true }
 time = { workspace = true }
 camino = { workspace = true }
+fs-err = { workspace = true }
 mdns-sd = "0.21"
 reqwest = { workspace = true, features = ["json", "stream", "rustls"] }
 futures-util = { workspace = true }

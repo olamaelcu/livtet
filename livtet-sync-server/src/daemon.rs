@@ -1055,7 +1055,7 @@ async fn handle_devices_offer_book(
     let Some(file_path) = inventory.file_path.as_deref() else {
         return Err(invalid_params("this edition has no file to send"));
     };
-    if !std::path::Path::new(file_path).is_file() {
+    if !camino::Utf8Path::new(file_path).is_file() {
         return Err(invalid_params("the book file is missing from disk"));
     }
 
@@ -1067,16 +1067,15 @@ async fn handle_devices_offer_book(
         "edition_id": edition_id.to_hex(),
         "work_id": edition.work_id.to_hex(),
         "to_device_id": device_id.to_string(),
-        "file_name": std::path::Path::new(file_path)
+        "file_name": camino::Utf8Path::new(file_path)
             .file_name()
-            .and_then(|name| name.to_str())
             .unwrap_or("book"),
         "file_size_bytes": inventory.file_size_bytes,
         "file_hash": inventory.file_hash,
         "has_cover": inventory
             .cover_path
             .as_deref()
-            .is_some_and(|path| std::path::Path::new(path).is_file()),
+            .is_some_and(|path| camino::Utf8Path::new(path).is_file()),
     })
     .to_string();
 
@@ -1194,10 +1193,10 @@ async fn pull_device(
         .covers_dir
         .clone()
         .ok_or_else(|| ServerError::Server("no covers directory configured".to_string()))?;
-    tokio::fs::create_dir_all(books_dir.as_std_path())
+    fs_err::tokio::create_dir_all(books_dir.as_std_path())
         .await
         .map_err(|error| ServerError::Server(format!("books directory: {error}")))?;
-    tokio::fs::create_dir_all(covers_dir.as_std_path())
+    fs_err::tokio::create_dir_all(covers_dir.as_std_path())
         .await
         .map_err(|error| ServerError::Server(format!("covers directory: {error}")))?;
 
@@ -1353,8 +1352,7 @@ async fn download_offer(
     let file_name = payload
         .get("file_name")
         .and_then(serde_json::Value::as_str)
-        .and_then(|name| std::path::Path::new(name).file_name())
-        .and_then(|name| name.to_str())
+        .and_then(|name| camino::Utf8Path::new(name).file_name())
         .filter(|name| !name.is_empty())
         .unwrap_or("book");
 
@@ -1368,7 +1366,7 @@ async fn download_offer(
         .await
         .map_err(|error| ServerError::Server(format!("download file body: {error}")))?;
     let file_path = books_dir.join(format!("{inventory_id}-{file_name}"));
-    tokio::fs::write(file_path.as_std_path(), &bytes)
+    fs_err::tokio::write(file_path.as_std_path(), &bytes)
         .await
         .map_err(|error| ServerError::Server(format!("write received file: {error}")))?;
 
@@ -1402,7 +1400,7 @@ async fn download_offer(
             .await
             .map_err(|error| ServerError::Server(format!("download cover body: {error}")))?;
         let path = covers_dir.join(format!("{inventory_id}.{extension}"));
-        tokio::fs::write(path.as_std_path(), &bytes)
+        fs_err::tokio::write(path.as_std_path(), &bytes)
             .await
             .map_err(|error| ServerError::Server(format!("write received cover: {error}")))?;
         cover_path = Some(path.to_string());

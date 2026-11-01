@@ -469,15 +469,15 @@ impl SyncEngine {
             };
 
             let local = latest_change(&txn, &change.entity_type, &change.entity_id).await?;
-            if let Some((local_version, local_payload)) = local {
-                if local_version > change.version {
-                    record_conflict(&txn, change, &local_payload).await?;
-                    let conflict = fetch_latest_conflict(&txn, change).await?;
-                    if let Some(conflict) = conflict {
-                        outcome.conflicts.push(conflict);
-                    }
-                    continue;
+            if let Some((local_version, local_payload)) = local
+                && local_version > change.version
+            {
+                record_conflict(&txn, change, &local_payload).await?;
+                let conflict = fetch_latest_conflict(&txn, change).await?;
+                if let Some(conflict) = conflict {
+                    outcome.conflicts.push(conflict);
                 }
+                continue;
             }
 
             if !matches!(change.operation.as_str(), "INSERT" | "UPDATE" | "DELETE") {
