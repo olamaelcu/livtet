@@ -436,13 +436,29 @@ pub struct ApplyOutcome {
 impl SyncEngine {
     /// Apply changes pulled from a peer to the local database.
     ///
-    /// The wire payloads are written by SQLite audit triggers, so ids arrive
-    /// as 32-char hex while [`DbId`]'s serde form is a ULID; [`normalize_ids`]
-    /// reconciles the two before deserialising each model. Applying a row
-    /// fires the local triggers, which would echo the change back to the peer:
-    /// rows written above the pre-apply version are deleted before the remote
-    /// change row is recorded.
+    /// Payloads are the audit triggers' canonical output: column names and
+    /// values, with ids as hex. Applying a row fires the local triggers, which
+    /// would echo the change back to the peer: rows written above the
+    /// pre-apply version are deleted before the remote change row is recorded.
+    ///
+    /// Foreign-key checks are suspended for the pass. Library rows imported
+    /// with FK enforcement off carry zero-length ids in optional columns
+    /// (`editions.format_id`), and the matching parent row does not exist.
     pub async fn apply_changes(
+        &self,
+        changes: Vec<SyncChange>,
+        options: ApplyOptions,
+    ) -> Result<ApplyOutcome, SyncError> {
+        let statement =
+            Statement::from_string(DatabaseBackend::Sqlite, "PRAGMA foreign_keys = OFF");
+        self.db.execute_raw(statement).await?;
+        let result = self.apply_changes_inner(changes, options).await;
+        let restore = Statement::from_string(DatabaseBackend::Sqlite, "PRAGMA foreign_keys = ON");
+        let _ = self.db.execute_raw(restore).await;
+        result
+    }
+
+    async fn apply_changes_inner(
         &self,
         changes: Vec<SyncChange>,
         options: ApplyOptions,
