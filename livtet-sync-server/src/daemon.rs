@@ -65,8 +65,11 @@ pub struct DaemonState {
     pub bound: Mutex<Option<std::net::SocketAddr>>,
 }
 
-/// Persisted iroh secret for discovery; its public key is the stable node id.
-const DISCOVERY_SECRET_KEY: &str = "sync.discovery.secret_key";
+/// File beside the database holding the iroh discovery secret.
+///
+/// It is deliberately not a `client_settings` row: that table syncs to paired
+/// peers, and the secret must never leave this device.
+const DISCOVERY_KEY_FILE: &str = "discovery.key";
 
 /// A managed embedded HTTP server with graceful shutdown.
 pub struct ServerHandle {
@@ -90,7 +93,7 @@ pub async fn run_async(config: ServerConfig) -> Result<(), ServerError> {
         livtet_data::orm::SqlxSqliteConnector::from_sqlx_sqlite_pool(pool.clone());
     let device_id = resolve_device_id(&db, config.device_id.as_deref()).await?;
     let device_name = config.device_name.clone();
-    let discovery_secret = discovery_secret_key(&pool, &db).await?;
+    let discovery_secret = discovery_secret_key(&config)?;
     let engine = SyncEngine::new(db, device_id.clone());
 
     let pair_waiters: PairWaiters = Arc::new(Mutex::new(HashMap::new()));
@@ -1315,17 +1318,10 @@ async fn pull_device(
 }
 
 async fn read_setting(state: &Arc<DaemonState>, key: &str) -> Result<Option<String>, ServerError> {
-    read_pool_setting(&state.pool, key).await
-}
-
-async fn read_pool_setting(
-    pool: &livtet_data::sql::SqlitePool,
-    key: &str,
-) -> Result<Option<String>, ServerError> {
     let value: Option<String> =
         livtet_data::sql::query_scalar("SELECT value FROM client_settings WHERE key = ?")
             .bind(key.to_string())
-            .fetch_optional(pool)
+            .fetch_optional(&state.pool)
             .await
             .map_err(|error| ServerError::Server(format!("settings read: {error}")))?;
     Ok(value)
@@ -1336,16 +1332,8 @@ async fn write_setting(
     key: &str,
     value: &str,
 ) -> Result<(), ServerError> {
-    write_db_setting(state.engine.db(), key, value).await
-}
-
-async fn write_db_setting(
-    db: &DatabaseConnection,
-    key: &str,
-    value: &str,
-) -> Result<(), ServerError> {
     use livtet_data::client_entities::client_settings;
-    use livtet_data::orm::{EntityTrait, Set, sea_query::OnConflict};
+    use livtet_data::orm::{Set, sea_query::OnConflict};
 
     let model = client_settings::ActiveModel {
         key: Set(key.to_string()),
@@ -1361,32 +1349,68 @@ async fn write_db_setting(
                 ])
                 .to_owned(),
         )
-        .exec(db)
+        .exec(state.engine.db())
         .await
         .map_err(|error| ServerError::Server(format!("settings write: {error}")))?;
     Ok(())
 }
 
+/// Where the discovery key lives, beside the SQLite file.
+fn discovery_key_path(config: &ServerConfig) -> camino::Utf8PathBuf {
+    config
+        .db_path
+        .parent()
+        .unwrap_or_else(|| camino::Utf8Path::new("."))
+        .join(DISCOVERY_KEY_FILE)
+}
+
 /// Load the discovery secret, creating and persisting one on first run.
 ///
-/// The stored value is the 32-byte secret as a JSON array, so a restart binds
-/// the same endpoint key and therefore the same node id.
-async fn discovery_secret_key(
-    pool: &livtet_data::sql::SqlitePool,
-    db: &DatabaseConnection,
-) -> Result<SecretKey, ServerError> {
-    if let Some(stored) = read_pool_setting(pool, DISCOVERY_SECRET_KEY).await? {
-        let bytes: [u8; 32] = serde_json::from_str(&stored).map_err(|error| {
-            ServerError::Server(format!("discovery secret key is invalid: {error}"))
-        })?;
-        return Ok(SecretKey::from_bytes(&bytes));
+/// The 32-byte secret determines the iroh node id, so keeping it beside the
+/// database makes this device's node id stable across restarts.
+fn discovery_secret_key(config: &ServerConfig) -> Result<SecretKey, ServerError> {
+    use std::io::{ErrorKind, Write};
+
+    let path = discovery_key_path(config);
+    if let Some(parent) = path.parent() {
+        fs_err::create_dir_all(parent)
+            .map_err(|error| ServerError::Server(format!("discovery key directory: {error}")))?;
     }
 
-    let secret = SecretKey::generate();
-    let stored = serde_json::to_string(&secret.to_bytes())
-        .map_err(|error| ServerError::Server(format!("discovery secret key: {error}")))?;
-    write_db_setting(db, DISCOVERY_SECRET_KEY, &stored).await?;
-    Ok(secret)
+    let open = || {
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        options.open(&path)
+    };
+
+    match open() {
+        Ok(mut file) => {
+            let secret = SecretKey::generate();
+            file.write_all(&secret.to_bytes())
+                .map_err(|error| ServerError::Server(format!("discovery key write: {error}")))?;
+            Ok(secret)
+        }
+        Err(error) if error.kind() == ErrorKind::AlreadyExists => {
+            let bytes = fs_err::read(&path).map_err(|error| {
+                ServerError::Server(format!("discovery key read: {error}"))
+            })?;
+            let bytes: [u8; 32] = bytes.try_into().map_err(|bytes: Vec<u8>| {
+                ServerError::Server(format!(
+                    "discovery key has {} bytes, expected 32",
+                    bytes.len()
+                ))
+            })?;
+            Ok(SecretKey::from_bytes(&bytes))
+        }
+        Err(error) => Err(ServerError::Server(format!(
+            "discovery key create: {error}"
+        ))),
+    }
 }
 
 /// Fetch one offered file (and its cover) into the receiver's directories.
@@ -1588,7 +1612,7 @@ fn format_primitive(dt: time::PrimitiveDateTime) -> String {
 async fn discovery_identity(state: &Arc<DaemonState>, device_type: &str) -> Option<PeerIdentity> {
     let mut slot = state.discovery.lock().await;
     if slot.is_none() {
-        let secret = match discovery_secret_key(&state.pool, state.engine.db()).await {
+        let secret = match discovery_secret_key(&state.config) {
             Ok(secret) => secret,
             Err(error) => {
                 tracing::warn!(%error, "discovery secret key unavailable");
