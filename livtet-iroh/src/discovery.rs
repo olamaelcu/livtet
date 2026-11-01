@@ -6,7 +6,7 @@
 //! node id resolves a current address on the LAN or, failing that, through the
 //! relay without any manual address entry.
 
-use iroh::{Endpoint, endpoint::presets};
+use iroh::{Endpoint, SecretKey, endpoint::presets};
 use iroh_mdns_address_lookup::MdnsAddressLookup;
 
 use crate::identity::{NodeId, PeerIdentity};
@@ -23,7 +23,14 @@ impl DiscoveryService {
     /// publishing continue in the background, so a slow or absent network
     /// delays peer *resolution*, never startup.
     pub async fn bind() -> Result<Self, DiscoveryError> {
-        let endpoint = Endpoint::bind(presets::N0)
+        Self::bind_with_secret(SecretKey::generate()).await
+    }
+
+    /// Bind with a caller-owned secret, so the node id survives restarts.
+    pub async fn bind_with_secret(secret_key: SecretKey) -> Result<Self, DiscoveryError> {
+        let endpoint = Endpoint::builder(presets::N0)
+            .secret_key(secret_key)
+            .bind()
             .await
             .map_err(|error| DiscoveryError::Bind(error.to_string()))?;
 

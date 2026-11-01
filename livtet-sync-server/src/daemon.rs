@@ -9,7 +9,7 @@ use livtet_data::orm::{
     ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, PaginatorTrait, QueryFilter,
     Set,
 };
-use livtet_iroh::{DiscoveryService, NodeId, PeerIdentity};
+use livtet_iroh::{DiscoveryService, NodeId, PeerIdentity, SecretKey};
 use livtet_sync::SyncEngine;
 use livtet_sync_http::routes::{CHANGES_PATH, PAIR_PATH, PULL_FULL_PATH, PUSH_PATH, SyncIdentity};
 use livtet_sync_http::{PairWaiters, make_sync_routes, set_pair_waiters};
@@ -65,6 +65,9 @@ pub struct DaemonState {
     pub bound: Mutex<Option<std::net::SocketAddr>>,
 }
 
+/// Persisted iroh secret for discovery; its public key is the stable node id.
+const DISCOVERY_SECRET_KEY: &str = "sync.discovery.secret_key";
+
 /// A managed embedded HTTP server with graceful shutdown.
 pub struct ServerHandle {
     shutdown_tx: Option<watch::Sender<bool>>,
@@ -87,6 +90,7 @@ pub async fn run_async(config: ServerConfig) -> Result<(), ServerError> {
         livtet_data::orm::SqlxSqliteConnector::from_sqlx_sqlite_pool(pool.clone());
     let device_id = resolve_device_id(&db, config.device_id.as_deref()).await?;
     let device_name = config.device_name.clone();
+    let discovery_secret = discovery_secret_key(&pool, &db).await?;
     let engine = SyncEngine::new(db, device_id.clone());
 
     let pair_waiters: PairWaiters = Arc::new(Mutex::new(HashMap::new()));
@@ -104,7 +108,7 @@ pub async fn run_async(config: ServerConfig) -> Result<(), ServerError> {
     // Bind discovery once, up front: the node id is needed both for the
     // identity route and for the mDNS TXT record. Losing the network is not
     // fatal — the daemon falls back to the device id and pairing by address.
-    let discovery = match DiscoveryService::bind().await {
+    let discovery = match DiscoveryService::bind_with_secret(discovery_secret).await {
         Ok(service) => Some(Arc::new(service)),
         Err(error) => {
             tracing::warn!(%error, "peer discovery unavailable; using the device id");
@@ -1311,10 +1315,17 @@ async fn pull_device(
 }
 
 async fn read_setting(state: &Arc<DaemonState>, key: &str) -> Result<Option<String>, ServerError> {
+    read_pool_setting(&state.pool, key).await
+}
+
+async fn read_pool_setting(
+    pool: &livtet_data::sql::SqlitePool,
+    key: &str,
+) -> Result<Option<String>, ServerError> {
     let value: Option<String> =
         livtet_data::sql::query_scalar("SELECT value FROM client_settings WHERE key = ?")
             .bind(key.to_string())
-            .fetch_optional(&state.pool)
+            .fetch_optional(pool)
             .await
             .map_err(|error| ServerError::Server(format!("settings read: {error}")))?;
     Ok(value)
@@ -1322,6 +1333,14 @@ async fn read_setting(state: &Arc<DaemonState>, key: &str) -> Result<Option<Stri
 
 async fn write_setting(
     state: &Arc<DaemonState>,
+    key: &str,
+    value: &str,
+) -> Result<(), ServerError> {
+    write_db_setting(state.engine.db(), key, value).await
+}
+
+async fn write_db_setting(
+    db: &DatabaseConnection,
     key: &str,
     value: &str,
 ) -> Result<(), ServerError> {
@@ -1342,10 +1361,32 @@ async fn write_setting(
                 ])
                 .to_owned(),
         )
-        .exec(state.engine.db())
+        .exec(db)
         .await
         .map_err(|error| ServerError::Server(format!("settings write: {error}")))?;
     Ok(())
+}
+
+/// Load the discovery secret, creating and persisting one on first run.
+///
+/// The stored value is the 32-byte secret as a JSON array, so a restart binds
+/// the same endpoint key and therefore the same node id.
+async fn discovery_secret_key(
+    pool: &livtet_data::sql::SqlitePool,
+    db: &DatabaseConnection,
+) -> Result<SecretKey, ServerError> {
+    if let Some(stored) = read_pool_setting(pool, DISCOVERY_SECRET_KEY).await? {
+        let bytes: [u8; 32] = serde_json::from_str(&stored).map_err(|error| {
+            ServerError::Server(format!("discovery secret key is invalid: {error}"))
+        })?;
+        return Ok(SecretKey::from_bytes(&bytes));
+    }
+
+    let secret = SecretKey::generate();
+    let stored = serde_json::to_string(&secret.to_bytes())
+        .map_err(|error| ServerError::Server(format!("discovery secret key: {error}")))?;
+    write_db_setting(db, DISCOVERY_SECRET_KEY, &stored).await?;
+    Ok(secret)
 }
 
 /// Fetch one offered file (and its cover) into the receiver's directories.
@@ -1547,7 +1588,14 @@ fn format_primitive(dt: time::PrimitiveDateTime) -> String {
 async fn discovery_identity(state: &Arc<DaemonState>, device_type: &str) -> Option<PeerIdentity> {
     let mut slot = state.discovery.lock().await;
     if slot.is_none() {
-        match DiscoveryService::bind().await {
+        let secret = match discovery_secret_key(&state.pool, state.engine.db()).await {
+            Ok(secret) => secret,
+            Err(error) => {
+                tracing::warn!(%error, "discovery secret key unavailable");
+                return None;
+            }
+        };
+        match DiscoveryService::bind_with_secret(secret).await {
             Ok(service) => *slot = Some(Arc::new(service)),
             Err(error) => {
                 tracing::warn!(%error, "peer discovery unavailable; advertising the device id");
