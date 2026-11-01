@@ -409,6 +409,79 @@ async fn a_pulled_offer_waits_for_the_reader_and_reports_its_decision() {
     cleanup(&root);
 }
 
+/// A pull that cannot reach the peer reports that failure and leaves the
+/// pairing row alone.
+///
+/// A failed pull re-resolves the peer from its mDNS advertisement and retries;
+/// the stub here advertises nothing, so the original error is what the caller
+/// sees and the stored address is untouched. Rewriting it on a browse that
+/// heard nothing would replace a reachable address with a guess.
+#[tokio::test]
+async fn an_unreachable_peer_keeps_its_stored_address() {
+    let root = temp_path("unreachable");
+    let books = root.join("books");
+    let covers = root.join("covers");
+    let db_path = root.join("sync.db");
+    for dir in [books.clone(), covers.clone()] {
+        fs::create_dir_all(dir.as_std_path()).expect("create temp dir");
+    }
+
+    let mut client = spawn_daemon(&db_path, &books, &covers).await;
+    // The daemon owns the database: wait for it to open and migrate before
+    // seeding a row underneath it.
+    ok_result(&mut client, rpc::method::STATUS, serde_json::json!({})).await;
+
+    // A port nothing listens on: bound to learn a free one, then released.
+    let port = std::net::TcpListener::bind("127.0.0.1:0")
+        .expect("ephemeral listener")
+        .local_addr()
+        .expect("listener address")
+        .port();
+    let dead_address = format!("127.0.0.1:{port}");
+    let peer_device = DbId::new();
+
+    livtet_data::sql::query(
+        "INSERT INTO paired_devices \
+             (device_id, name, listen_on, device_type_id, paired_at, last_sync_at, \
+              session_token, outbound) \
+         VALUES (?, 'Gone Peer', ?, NULL, datetime('now'), NULL, 'peer-token', 1)",
+    )
+    .bind(peer_device.to_bytes().to_vec())
+    .bind(dead_address.clone())
+    .execute(&pool_for(&db_path).await)
+    .await
+    .expect("seed paired device");
+
+    let response = client
+        .request(
+            rpc::method::DEVICES_PULL,
+            serde_json::json!({ "device_id": peer_device.to_string() }),
+        )
+        .await
+        .expect("pull transport");
+    let error = response.error.expect("an unreachable peer is an error");
+    assert!(
+        error.message.contains("pull changes"),
+        "the transport failure must surface, not be swallowed: {}",
+        error.message
+    );
+
+    let stored: String = livtet_data::sql::query_scalar(
+        "SELECT listen_on FROM paired_devices WHERE device_id = ?",
+    )
+    .bind(peer_device.to_bytes().to_vec())
+    .fetch_one(&pool_for(&db_path).await)
+    .await
+    .expect("stored address");
+    assert_eq!(
+        stored, dead_address,
+        "a browse that named no peer must not rewrite the address"
+    );
+
+    shutdown(&mut client).await;
+    cleanup(&root);
+}
+
 /// A pool over the daemon's own database file, for asserting on its rows.
 async fn pool_for(db_path: &Utf8Path) -> livtet_data::sql::SqlitePool {
     let options: livtet_data::sql::sqlite::SqliteConnectOptions =

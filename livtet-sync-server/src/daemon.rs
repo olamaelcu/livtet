@@ -1211,8 +1211,138 @@ async fn handle_devices_pull(
     Ok(serde_json::to_value(outcome)?)
 }
 
-/// One pull pass against an outbound peer.
+/// One pull pass against an outbound peer, with its address corrected first
+/// when the peer turns out to have moved.
+///
+/// The address a pull dials is the pairing row's, and that row is written once
+/// — when the pairing is approved. The peer's daemon, however, binds its HTTP
+/// server on every launch and advertises the port it picked over mDNS. A peer
+/// that restarted therefore keeps a pairing that no longer resolves, and every
+/// pull fails silently until the two are paired again. So a failed pull
+/// re-resolves the address from the peer's current advertisement and retries
+/// once; a peer that is simply unreachable, or a failure that was not about
+/// reaching it, is reported unchanged.
 async fn pull_device(
+    state: &Arc<DaemonState>,
+    device_id: DbId,
+    background: bool,
+) -> Result<serde_json::Value, ServerError> {
+    let error = match pull_device_once(state, device_id, background).await {
+        Ok(outcome) => return Ok(outcome),
+        Err(error) => error,
+    };
+
+    match re_resolve_peer_address(state, device_id).await {
+        Ok(true) => {
+            tracing::info!(%device_id, %error, "peer address changed; retrying the pull");
+            pull_device_once(state, device_id, background).await
+        }
+        Ok(false) => Err(error),
+        Err(browse_error) => {
+            // The pull's own failure is the one worth reporting: a browse that
+            // heard nothing is how a peer that is simply off looks.
+            tracing::debug!(%device_id, %browse_error, "could not re-resolve the peer");
+            Err(error)
+        }
+    }
+}
+
+/// Correct a paired peer's stored address from its mDNS advertisement.
+///
+/// Returns whether the row changed, which is what makes a retry worth
+/// spending. A peer that is not advertising — asleep, off the network, or on a
+/// link that drops multicast — leaves the pairing untouched.
+async fn re_resolve_peer_address(
+    state: &Arc<DaemonState>,
+    device_id: DbId,
+) -> Result<bool, ServerError> {
+    use livtet_data::client_entities::paired_devices;
+
+    let own_device_id = state.device_id.clone();
+    // `mdns-sd`'s receiver is blocking, so the window runs off the async
+    // runtime, as it does for `discovery.nearby`.
+    let peers = tokio::task::spawn_blocking(crate::mdns::browse_nearby)
+        .await
+        .map_err(|error| ServerError::Server(format!("mDNS browse task failed: {error}")))??;
+
+    let wanted = device_id.to_string();
+    let Some(peer) = peers
+        .iter()
+        .find(|peer| peer.device_id == wanted && peer.device_id != own_device_id)
+    else {
+        return Ok(false);
+    };
+    let Some(address) = preferred_address(peer) else {
+        return Ok(false);
+    };
+
+    let db = state.engine.db();
+    let Some(row) = paired_devices::Entity::find_by_id(device_id)
+        .one(db)
+        .await
+        .map_err(|error| ServerError::Server(format!("paired device lookup: {error}")))?
+    else {
+        return Ok(false);
+    };
+    if !address_changed(row.listen_on.as_ref(), &address) {
+        return Ok(false);
+    }
+
+    let mut model: paired_devices::ActiveModel = row.into();
+    model.listen_on = Set(Some(address.clone()));
+    model
+        .update(db)
+        .await
+        .map_err(|error| ServerError::Server(format!("paired device update: {error}")))?;
+    tracing::info!(%device_id, %address, "paired device address refreshed from its advertisement");
+    Ok(true)
+}
+
+/// The address to dial for an advertised peer: the first routable one it
+/// listed, else whatever it listed at all.
+///
+/// An advertisement carries every interface's address, including loopback and
+/// link-local ones a peer on another machine cannot reach. Falling back rather
+/// than giving up keeps two instances on one machine workable.
+fn preferred_address(peer: &NearbyPeer) -> Option<livtet_types::Address> {
+    let candidates: Vec<std::net::SocketAddr> = peer
+        .addresses
+        .iter()
+        .filter_map(|address| address.trim().parse::<std::net::IpAddr>().ok())
+        .map(|ip| std::net::SocketAddr::new(ip, peer.port))
+        .collect();
+    candidates
+        .iter()
+        .copied()
+        .find(is_routable)
+        .or_else(|| candidates.first().copied())
+        .map(livtet_types::Address::new)
+}
+
+/// Whether a peer could be reached at `candidate` from another machine.
+fn is_routable(candidate: &std::net::SocketAddr) -> bool {
+    let ip = candidate.ip();
+    !ip.is_loopback() && !ip.is_unspecified() && !is_link_local(ip)
+}
+
+/// Link-local addresses are scoped to one link and never reach a peer.
+fn is_link_local(ip: std::net::IpAddr) -> bool {
+    match ip {
+        std::net::IpAddr::V4(v4) => v4.is_link_local(),
+        std::net::IpAddr::V6(v6) => (v6.segments()[0] & 0xffc0) == 0xfe80,
+    }
+}
+
+/// Whether the stored address differs from the freshly resolved one.
+fn address_changed(
+    stored: Option<&livtet_types::Address>,
+    resolved: &livtet_types::Address,
+) -> bool {
+    stored.map(|address| address.0) != Some(resolved.0)
+}
+
+/// One pull pass against an outbound peer, using the address on file.
+async fn pull_device_once(
     state: &Arc<DaemonState>,
     device_id: DbId,
     background: bool,
@@ -2184,4 +2314,67 @@ async fn cleanup_old_pairings(state: &Arc<DaemonState>) -> Result<(), ServerErro
 
     tracing::info!("cleaned up old pending pairings");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{address_changed, preferred_address};
+    use crate::mdns::NearbyPeer;
+
+    fn peer(addresses: &[&str], port: u16) -> NearbyPeer {
+        NearbyPeer {
+            node_id: "node".to_string(),
+            device_id: "01M6BYRPJ5XQ4HH7R8CEZ194HY".to_string(),
+            name: "Jacky's MacBook Pro".to_string(),
+            device_type: "desktop".to_string(),
+            version: "0.2.1".to_string(),
+            hostname: "jackys-macbook-pro.local".to_string(),
+            addresses: addresses.iter().map(|address| address.to_string()).collect(),
+            port,
+        }
+    }
+
+    /// A peer advertises every interface it has. Dialling loopback or a
+    /// link-local address reaches this machine, never the peer.
+    #[test]
+    fn the_routable_address_wins_over_the_local_ones() {
+        let advertised = peer(&["127.0.0.1", "fe80::1c2b:3eff:fe4d:5a6b", "192.168.1.226"], 7710);
+
+        let chosen = preferred_address(&advertised).expect("an address to dial");
+
+        assert_eq!(chosen.to_string(), "192.168.1.226:7710");
+    }
+
+    /// Two instances on one machine still sync: the fallback is better than
+    /// refusing to try.
+    #[test]
+    fn a_loopback_only_peer_is_still_reachable() {
+        let advertised = peer(&["127.0.0.1"], 7711);
+
+        let chosen = preferred_address(&advertised).expect("an address to dial");
+
+        assert_eq!(chosen.to_string(), "127.0.0.1:7711");
+    }
+
+    #[test]
+    fn a_peer_without_addresses_offers_nothing_to_dial() {
+        assert!(preferred_address(&peer(&[], 7710)).is_none());
+    }
+
+    /// The address is only worth rewriting when it actually moved: a peer that
+    /// came back on the port it advertised before must not churn its row (and
+    /// trigger a pointless retry) on every failed pull.
+    #[test]
+    fn only_a_moved_address_counts_as_a_change() {
+        let stored: livtet_types::Address = "192.168.1.226:7710".parse().expect("stored address");
+        let same: livtet_types::Address = "192.168.1.226:7710".parse().expect("same address");
+        let moved: livtet_types::Address = "192.168.1.226:7711".parse().expect("moved address");
+
+        assert!(!address_changed(Some(&stored), &same));
+        assert!(address_changed(Some(&stored), &moved));
+        assert!(
+            address_changed(None, &moved),
+            "a pairing with no address has to take the resolved one"
+        );
+    }
 }
