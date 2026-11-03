@@ -4,10 +4,10 @@
 //! open for as long as the reader takes to approve, which must not stop the
 //! next peer from asking for changes.
 
-use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
 
+use camino::Utf8PathBuf;
 use iroh::Endpoint;
 use iroh::endpoint::{Connection, RecvStream, SendStream};
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
@@ -23,7 +23,7 @@ pub type BoxFuture<T> = Pin<Box<dyn Future<Output = T> + Send>>;
 /// memory whole.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FileBody {
-    pub path: PathBuf,
+    pub path: Utf8PathBuf,
     pub offset: u64,
     pub length: u64,
 }
@@ -44,7 +44,7 @@ impl Outcome {
     }
 
     /// An answer whose header is followed by `length` bytes of `path`.
-    pub fn file(header: FileHeader, path: PathBuf) -> Self {
+    pub fn file(header: FileHeader, path: Utf8PathBuf) -> Self {
         let body = FileBody {
             path,
             offset: header.offset,
@@ -57,7 +57,7 @@ impl Outcome {
     }
 
     /// An answer whose cover header is followed by `length` bytes of `path`.
-    pub fn cover(header: FileHeader, path: PathBuf) -> Self {
+    pub fn cover(header: FileHeader, path: Utf8PathBuf) -> Self {
         let body = FileBody {
             path,
             offset: header.offset,

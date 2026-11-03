@@ -28,13 +28,22 @@ import a single crate.
 ## Layout
 
 ```
-livtet-data          DB owner (sea-orm, sqlx, migrator, seed, error)
-livtet-types         Leaf type definitions (DbId, URN, identifiers, format metadata)
-livtet-search        Search index (Tantivy)
-livtet-core          Unison crate (data + covers + search + types)
-livtet-sync          Sync engine (server + client + change log)
-livtet-cli           CLI binary
-livtet-test-utils    Shared test helpers
+livtet-types           Leaf type definitions (DbId, URN, ISBN, identifiers, format metadata)
+livtet-temporal-quotes Deterministic greeting / empty-state quotes
+livtet-iroh            iroh node identity and peer discovery
+livtet-covers          Cover encode, cache, and store
+livtet-data            DB owner (sea-orm, sqlx, migrator, seed, error)
+livtet-search          Search index (Tantivy)
+livtet-sync            Sync domain (change log, conflicts, wire DTOs)
+livtet-sync-iroh       Sync over iroh streams (framed requests, file/cover bodies)
+livtet-sync-http       Sync transport (reqwest client, poem server, pairing)
+livtet-sync-server     Sync daemon (HTTP server + NDJSON JSON-RPC on stdio)
+livtet-core            Unison crate (data + covers + search + types)
+livtet-ffi             UniFFI surface for Android and iOS
+livtet-ruby            Magnus gem surface (paths, database open/close)
+livtet-cli-common      Shared CLI commands, context, path resolution
+livtet-cli             CLI binary
+livtet-test-utils      Shared test helpers
 ```
 
 The dependency graph is acyclic. `livtet-data` is the only crate that
@@ -43,39 +52,43 @@ them through `livtet_data::orm` and `livtet_data::sql`. `livtet-types`
 is the one sanctioned exception — it sits below `livtet-data` and uses
 sea-orm derive paths.
 
-```
-livtet-types    (leaf; direct sea-orm dep)
-   ^
-   |
-livtet-data     (DB owner)
-   ^
-   |
-livtet-search   --> livtet-data, livtet-types
-livtet-core     --> livtet-data, livtet-search, livtet-types
-
-livtet-cli      --> livtet-core, livtet-data
-
-livtet-test-utils (test helpers)
-```
+|Crate|Direct workspace dependencies|
+|---|---|
+|livtet-types|—|
+|livtet-temporal-quotes|—|
+|livtet-iroh|—|
+|livtet-data|livtet-types|
+|livtet-covers|livtet-types, livtet-data|
+|livtet-search|livtet-types, livtet-data|
+|livtet-sync|livtet-types, livtet-data|
+|livtet-sync-iroh|livtet-iroh, livtet-sync|
+|livtet-sync-http|livtet-sync, livtet-data|
+|livtet-sync-server|livtet-iroh, livtet-sync, livtet-sync-iroh, livtet-sync-http, livtet-data, livtet-types|
+|livtet-core|livtet-types, livtet-data, livtet-search, livtet-covers (optional), livtet-temporal-quotes|
+|livtet-ffi|livtet-core|
+|livtet-ruby|livtet-core, livtet-data|
+|livtet-cli-common|livtet-core, livtet-data, livtet-search, livtet-types|
+|livtet-cli|livtet-cli-common|
+|livtet-test-utils|livtet-data, livtet-search, livtet-sync, livtet-types (all optional)|
 
 ## Crate map
 
-Each crate has its own `README.md` describing its surface and
-responsibilities:
+Crates with a README: livtet-types, livtet-search, livtet-core,
+livtet-cli, livtet-ffi, livtet-ruby. The rest are documented by their
+`lib.rs` module docs.
 
-- livtet-data — DB owner; sea-orm + sqlx re-exports, migration runner,
-  seed helpers.
 - [livtet-types](livtet-types/README.md) — leaf; strong-typed `DbId`,
   `URN`, identifiers, format metadata, device types.
 - [livtet-search](livtet-search/README.md) — Tantivy index, label
   resolver, sea-orm resource lookup glue.
-- [livtet-core](livtet-core/README.md) — unison; works, editions,
-  identifiers, plugins, sync, OPDS, backup, and the user-agent /
-  cover fetcher used by the desktop and mobile apps.
+- [livtet-core](livtet-core/README.md) — unison; re-exports data,
+  covers, search, types, and temporal-quotes; owns app paths and the
+  user-agent string.
 - [livtet-cli](livtet-cli/README.md) — developer CLI. Seed demo data
   and print canonical app-data directories.
-- [livtet-test-utils](livtet-test-utils/README.md) — shared test
-  helpers used by integration tests across the workspace.
+- [livtet-ffi](livtet-ffi/README.md) — UniFFI surface for Android and
+  iOS.
+- [livtet-ruby](livtet-ruby/README.md) — Magnus gem surface.
 
 ## Conventions
 

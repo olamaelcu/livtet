@@ -31,7 +31,10 @@ impl From<SyncError> for ApiError {
 impl ResponseError for ApiError {
     fn status(&self) -> StatusCode {
         match &self.0 {
-            SyncError::UnknownEntityType { .. } => StatusCode::BAD_REQUEST,
+            SyncError::UnknownEntityType { .. }
+            | SyncError::InvalidPayload { .. }
+            | SyncError::InvalidOperation { .. }
+            | SyncError::InvalidEntityId { .. } => StatusCode::BAD_REQUEST,
             SyncError::Conflict { .. } => StatusCode::CONFLICT,
             SyncError::Db { .. } => StatusCode::INTERNAL_SERVER_ERROR,
             SyncError::Serialization { .. } | SyncError::Deserialization { .. } => {

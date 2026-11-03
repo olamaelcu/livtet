@@ -1,0 +1,35 @@
+name: Coverage
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  coverage:
+    name: Coverage (90% floor)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install mise
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          curl https://mise.run | sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          echo "MISE_DATA_DIR=$HOME/.mise" >> "$GITHUB_ENV"
+          mise install
+          eval "$(mise activate bash)" && echo "PATH=$PATH" >> "$GITHUB_ENV"
+
+      - uses: Swatinem/rust-cache@v2
+
+      # Instrumented rebuild: kept out of test.yml so it does not
+      # serialize behind the unit suite.
+      - name: Check coverage
+        run: mise run coverage-check

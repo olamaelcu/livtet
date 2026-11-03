@@ -99,16 +99,17 @@ async fn synced_entity_carries_the_kind_and_its_metadata() {
         .next()
         .expect("the seed creates works");
 
+    let expected_hex = work.id.to_hex();
+    let expected_ulid = work.id.to_string();
     let kind = SyncableEntityKind::Work(work);
-    let expected_id = kind.entity_id();
     let synced = SyncedEntity::new(kind, 42);
 
     assert_eq!(synced.version, 42);
     assert_eq!(synced.entity_type, "work");
-    assert_eq!(synced.entity_id, expected_id);
+    assert_eq!(synced.entity_id, expected_hex);
     assert_eq!(
         synced.payload.get("id").and_then(|v| v.as_str()),
-        Some(expected_id.as_str()),
+        Some(expected_ulid.as_str()),
         "the payload must be the serialised model, keyed by the same id"
     );
 }

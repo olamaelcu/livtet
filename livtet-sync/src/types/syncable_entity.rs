@@ -47,7 +47,7 @@ macro_rules! define_syncable_entities {
     (
         $(
             $(#[$variant_attr:meta])*
-            $variant:ident($model:ty) => ($entity_type:expr, $table:expr),
+            $variant:ident($model:ty, $entity:ty) => ($entity_type:expr, $table:expr),
         )+
     ) => {
         /// One variant per syncable entity model.
@@ -117,6 +117,21 @@ macro_rules! define_syncable_entities {
                 $($entity_type),+
             ];
         }
+
+        /// Materialise a pushed change by dispatching to the typed handler.
+        pub(crate) async fn dispatch_apply(
+            txn: &livtet_data::orm::DatabaseTransaction,
+            change: &crate::types::SyncChange,
+        ) -> crate::types::Result<()> {
+            match change.entity_type.as_str() {
+                $(
+                    $entity_type => crate::apply::apply_one::<$entity>(txn, $table, change).await,
+                )+
+                other => Err(crate::types::SyncError::UnknownEntityType {
+                    type_name: other.to_string(),
+                }),
+            }
+        }
     };
 }
 
@@ -138,27 +153,27 @@ use livtet_data::entities::{
 };
 
 define_syncable_entities! {
-    Work(works::Model)             => ("work", "works"),
-    Edition(editions::Model)       => ("edition", "editions"),
-    SeriesEntry(series_entries::Model) => ("series_entry", "series_entries"),
-    DigitalInventory(digital_inventory::Model) => ("digital_inventory", "digital_inventory"),
-    OwnedEdition(owned_edition::Model)       => ("owned_edition", "owned_editions"),
-    EditionLoan(editions_loans::Model)       => ("edition_loan", "editions_loans"),
-    Annotation(annotations::Model)           => ("annotation", "annotations"),
-    ReadingList(reading_lists::Model)        => ("reading_list", "reading_lists"),
-    ReadingListBook(reading_list_book::Model) => ("reading_list_book", "reading_list_book"),
-    ReadingProgress(reading_progress::Model)  => ("reading_progress", "reading_progress"),
-    WorkAuthor(work_authors::Model)          => ("work_author", "work_authors"),
-    WorkTag(work_tags::Model)                => ("work_tag", "work_tags"),
-    WorkGenre(work_genres::Model)            => ("work_genre", "work_genres"),
-    WorkSubject(work_subjects::Model)        => ("work_subject", "work_subjects"),
-    WorkPublisher(work_publishers::Model)     => ("work_publisher", "work_publishers"),
-    EditionAuthor(edition_authors::Model)     => ("edition_author", "edition_authors"),
-    EditionTag(edition_tags::Model)           => ("edition_tag", "edition_tags"),
-    EditionGenre(edition_genres::Model)       => ("edition_genre", "edition_genres"),
-    EditionSubject(edition_subjects::Model)   => ("edition_subject", "edition_subjects"),
-    EditionPublisher(edition_publishers::Model) => ("edition_publisher", "edition_publishers"),
-    EditionGroup(edition_groups::Model)      => ("edition_group", "edition_groups"),
+    Work(works::Model, works::Entity)             => ("work", "works"),
+    Edition(editions::Model, editions::Entity)       => ("edition", "editions"),
+    SeriesEntry(series_entries::Model, series_entries::Entity) => ("series_entry", "series_entries"),
+    DigitalInventory(digital_inventory::Model, digital_inventory::Entity) => ("digital_inventory", "digital_inventory"),
+    OwnedEdition(owned_edition::Model, owned_edition::Entity)       => ("owned_edition", "owned_editions"),
+    EditionLoan(editions_loans::Model, editions_loans::Entity)       => ("edition_loan", "editions_loans"),
+    Annotation(annotations::Model, annotations::Entity)           => ("annotation", "annotations"),
+    ReadingList(reading_lists::Model, reading_lists::Entity)        => ("reading_list", "reading_lists"),
+    ReadingListBook(reading_list_book::Model, reading_list_book::Entity) => ("reading_list_book", "reading_list_book"),
+    ReadingProgress(reading_progress::Model, reading_progress::Entity)  => ("reading_progress", "reading_progress"),
+    WorkAuthor(work_authors::Model, work_authors::Entity)          => ("work_author", "work_authors"),
+    WorkTag(work_tags::Model, work_tags::Entity)                => ("work_tag", "work_tags"),
+    WorkGenre(work_genres::Model, work_genres::Entity)            => ("work_genre", "work_genres"),
+    WorkSubject(work_subjects::Model, work_subjects::Entity)        => ("work_subject", "work_subjects"),
+    WorkPublisher(work_publishers::Model, work_publishers::Entity)     => ("work_publisher", "work_publishers"),
+    EditionAuthor(edition_authors::Model, edition_authors::Entity)     => ("edition_author", "edition_authors"),
+    EditionTag(edition_tags::Model, edition_tags::Entity)           => ("edition_tag", "edition_tags"),
+    EditionGenre(edition_genres::Model, edition_genres::Entity)       => ("edition_genre", "edition_genres"),
+    EditionSubject(edition_subjects::Model, edition_subjects::Entity)   => ("edition_subject", "edition_subjects"),
+    EditionPublisher(edition_publishers::Model, edition_publishers::Entity) => ("edition_publisher", "edition_publishers"),
+    EditionGroup(edition_groups::Model, edition_groups::Entity)      => ("edition_group", "edition_groups"),
 }
 
 // ─── ChangeLogEntity impls ──────────────────────────────────────────────────
@@ -236,80 +251,85 @@ impl SyncableEntityKind {
     /// Entity identifier for change-log tracking.
     ///
     /// For entities with a single `id: DbId` primary key this returns
-    /// the ULID string.  For compound-key entities it returns a JSON
-    /// object matching the `change_log` trigger format.
+    /// the 32-char lowercase hex id, matching the audit triggers.  For
+    /// compound-key entities it returns a JSON object of hex ids, also
+    /// matching the trigger format.
     pub fn entity_id(&self) -> String {
         match self {
-            Self::Work(e) => e.id.to_string(),
-            Self::Edition(e) => e.id.to_string(),
-            Self::DigitalInventory(e) => e.id.to_string(),
-            Self::OwnedEdition(e) => e.id.to_string(),
-            Self::EditionLoan(e) => e.id.to_string(),
-            Self::Annotation(e) => e.id.to_string(),
-            Self::ReadingList(e) => e.id.to_string(),
-            Self::ReadingProgress(e) => e.id.to_string(),
-            Self::EditionGroup(e) => e.id.to_string(),
+            Self::Work(e) => e.id.to_hex(),
+            Self::Edition(e) => e.id.to_hex(),
+            Self::DigitalInventory(e) => e.id.to_hex(),
+            Self::OwnedEdition(e) => e.id.to_hex(),
+            Self::EditionLoan(e) => e.id.to_hex(),
+            Self::Annotation(e) => e.id.to_hex(),
+            Self::ReadingList(e) => e.id.to_hex(),
+            Self::ReadingProgress(e) => e.id.to_hex(),
+            Self::EditionGroup(e) => e.id.to_hex(),
 
             // Composite PK: use the first PK field as the entity identifier.
-            Self::SeriesEntry(e) => e.series_id.to_string(),
+            Self::SeriesEntry(e) => serde_json::json!({
+                "series_id": e.series_id.to_hex(),
+                "edition_id": e.edition_id.to_hex(),
+            })
+            .to_string(),
 
             // Composite PK: JSON object matching the trigger format.
             Self::ReadingListBook(e) => serde_json::json!({
-                "reading_list_id": e.reading_list_id.to_string(),
-                "edition_id": e.edition_id.to_string(),
+                "reading_list_id": e.reading_list_id.to_hex(),
+                "edition_id": e.edition_id.to_hex(),
             })
             .to_string(),
 
             Self::WorkAuthor(e) => serde_json::json!({
-                "work_id": e.work_id.to_string(),
-                "author_id": e.author_id.to_string(),
+                "work_id": e.work_id.to_hex(),
+                "author_id": e.author_id.to_hex(),
                 "role": e.role,
             })
             .to_string(),
             Self::WorkTag(e) => serde_json::json!({
-                "work_id": e.work_id.to_string(),
-                "tag_id": e.tag_id.to_string(),
+                "work_id": e.work_id.to_hex(),
+                "tag_id": e.tag_id.to_hex(),
             })
             .to_string(),
             Self::WorkGenre(e) => serde_json::json!({
-                "work_id": e.work_id.to_string(),
-                "genre_id": e.genre_id.to_string(),
+                "work_id": e.work_id.to_hex(),
+                "genre_id": e.genre_id.to_hex(),
             })
             .to_string(),
             Self::WorkSubject(e) => serde_json::json!({
-                "work_id": e.work_id.to_string(),
-                "subject_id": e.subject_id.to_string(),
+                "work_id": e.work_id.to_hex(),
+                "subject_id": e.subject_id.to_hex(),
             })
             .to_string(),
             Self::WorkPublisher(e) => serde_json::json!({
-                "work_id": e.work_id.to_string(),
-                "publisher_id": e.publisher_id.to_string(),
+                "work_id": e.work_id.to_hex(),
+                "publisher_id": e.publisher_id.to_hex(),
             })
             .to_string(),
             Self::EditionAuthor(e) => serde_json::json!({
-                "edition_id": e.edition_id.to_string(),
-                "author_id": e.author_id.to_string(),
+                "edition_id": e.edition_id.to_hex(),
+                "author_id": e.author_id.to_hex(),
                 "role": e.role,
             })
             .to_string(),
             Self::EditionTag(e) => serde_json::json!({
-                "edition_id": e.edition_id.to_string(),
-                "tag_id": e.tag_id.to_string(),
+                "edition_id": e.edition_id.to_hex(),
+                "tag_id": e.tag_id.to_hex(),
             })
             .to_string(),
             Self::EditionGenre(e) => serde_json::json!({
-                "edition_id": e.edition_id.to_string(),
-                "genre_id": e.genre_id.to_string(),
+                "edition_id": e.edition_id.to_hex(),
+                "genre_id": e.genre_id.to_hex(),
             })
             .to_string(),
             Self::EditionSubject(e) => serde_json::json!({
-                "edition_id": e.edition_id.to_string(),
-                "subject_id": e.subject_id.to_string(),
+                "edition_id": e.edition_id.to_hex(),
+                "subject_id": e.subject_id.to_hex(),
             })
             .to_string(),
             Self::EditionPublisher(e) => serde_json::json!({
-                "edition_id": e.edition_id.to_string(),
-                "publisher_id": e.publisher_id.to_string(),
+                "edition_id": e.edition_id.to_hex(),
+                "publisher_id": e.publisher_id.to_hex(),
             })
             .to_string(),
         }
@@ -634,7 +654,7 @@ mod tests {
         let kind = SyncableEntityKind::Work(work.clone());
         let payload = kind.to_payload().expect("to_payload");
         let back = SyncableEntityKind::from_payload("work", &payload).expect("from_payload");
-        assert_eq!(back.entity_id(), work.id.to_string());
+        assert_eq!(back.entity_id(), work.id.to_hex());
         assert_eq!(back.table_name(), "works");
     }
 }

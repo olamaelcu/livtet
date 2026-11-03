@@ -8,9 +8,9 @@ rust-version.workspace = true
 independent = true
 
 [dependencies]
+ camino = { workspace = true }
 livtet-iroh = { workspace = true }
 livtet-sync = { workspace = true }
-livtet-types = { workspace = true }
 iroh = { version = "1", default-features = false, features = ["tls-ring"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -20,3 +20,5 @@ tracing = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt", "macros", "io-util"] }
+[lints]
+workspace = true

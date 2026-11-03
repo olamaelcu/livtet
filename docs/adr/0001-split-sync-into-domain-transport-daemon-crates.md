@@ -50,6 +50,7 @@ Split the crate along its existing seams:
 
 ### Follow-up
 
-* Session-token validation on the `/sync/*` routes (see ADR 2 for the schema).
-* `Conflict::id` is a `DbId` while the `conflicts` primary key is an `INTEGER`;
-  `list_conflicts` and `resolve_conflict` disagree and need reconciling.
+* Session-token validation on `/sync/*` is implemented in the route
+  handlers' `authorize` step: a request must carry
+  `x-livtet-session` or `Authorization: Bearer
+  <paired_devices.session_token>` belonging to a paired device.

@@ -8,6 +8,7 @@
 //! their audit triggers are created by `livtet-data`'s client migrations,
 //! and callers must run those migrations before exercising the engine.
 
+mod apply;
 pub mod engine;
 pub mod types;
 

@@ -13,6 +13,8 @@ pub mod m0007_pending_pairings_origin_addr;
 pub mod m0008_paired_devices_outbound;
 pub mod m0009_inbound_offers;
 pub mod m0010_paired_devices_node_id;
+pub mod m0011_trigger_suppression;
+pub mod m0012_change_log_identity;
 pub mod schema;
 
 pub use sea_orm_migration::MigratorTrait;
@@ -37,6 +39,8 @@ impl MigratorTrait for Migrator {
             Box::new(crate::client_migration::m0008_paired_devices_outbound::Migration),
             Box::new(crate::client_migration::m0009_inbound_offers::Migration),
             Box::new(crate::client_migration::m0010_paired_devices_node_id::Migration),
+            Box::new(crate::client_migration::m0011_trigger_suppression::Migration),
+            Box::new(crate::client_migration::m0012_change_log_identity::Migration),
         ]
     }
 }
@@ -94,5 +98,116 @@ mod tests {
         .expect("count sync triggers");
 
         assert!(count > 0, "expected sync audit triggers, got {count}");
+    }
+
+    async fn work_log_rows(pool: &sqlx::SqlitePool) -> i64 {
+        sqlx::query_scalar("SELECT count(*) FROM change_log WHERE entity_type = 'work'")
+            .fetch_one(pool)
+            .await
+            .expect("count work change-log rows")
+    }
+
+    /// Insert one `change_log` row; `device` of `Some("remote")` marks it
+    /// as a pushed change, which the partial unique index covers.
+    async fn insert_log_row(
+        pool: &sqlx::SqlitePool,
+        device: Option<&str>,
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            "INSERT INTO change_log \
+                 (entity_type, entity_id, operation, version, payload, changed_at, device_id) \
+             VALUES ('work', 'aa', 'INSERT', 1, '{}', datetime('now'), ?)",
+        )
+        .bind(device)
+        .execute(pool)
+        .await
+        .map(|_| ())
+    }
+
+    #[tokio::test]
+    async fn client_migrations_install_the_sync_apply_guard() {
+        let pool = memory_pool().await;
+        crate::migration::Migrator::run(&pool)
+            .await
+            .expect("business migrations");
+        Migrator::run(&pool).await.expect("client migrations");
+
+        let sql: String = sqlx::query_scalar(
+            "SELECT sql FROM sqlite_master \
+             WHERE type = 'trigger' AND name = 'sync_work_changelog_insert'",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("trigger definition");
+
+        assert!(
+            sql.contains("sync_apply"),
+            "the audit triggers must honour the apply flag: {sql}"
+        );
+    }
+
+    #[tokio::test]
+    async fn sync_apply_guard_suppresses_change_log() {
+        let pool = memory_pool().await;
+        crate::migration::Migrator::run(&pool)
+            .await
+            .expect("business migrations");
+        Migrator::run(&pool).await.expect("client migrations");
+
+        sqlx::query(
+            "INSERT INTO client_settings (key, value, updated_at) \
+             VALUES ('sync_apply', '1', datetime('now'))",
+        )
+        .execute(&pool)
+        .await
+        .expect("set the apply flag");
+
+        let before = work_log_rows(&pool).await;
+        sqlx::query(
+            "INSERT INTO works (id, title, created_at) VALUES (?, 'Guarded', datetime('now'))",
+        )
+        .bind(&[1u8; 16][..])
+        .execute(&pool)
+        .await
+        .expect("insert a works row with the flag set");
+        assert_eq!(
+            work_log_rows(&pool).await,
+            before,
+            "the guard must suppress the audit trigger"
+        );
+
+        sqlx::query("DELETE FROM client_settings WHERE key = 'sync_apply'")
+            .execute(&pool)
+            .await
+            .expect("clear the apply flag");
+        sqlx::query(
+            "INSERT INTO works (id, title, created_at) VALUES (?, 'Logged', datetime('now'))",
+        )
+        .bind(&[2u8; 16][..])
+        .execute(&pool)
+        .await
+        .expect("insert a works row with the flag cleared");
+        assert_eq!(work_log_rows(&pool).await, before + 1);
+    }
+
+    #[tokio::test]
+    async fn remote_change_log_identity_is_unique() {
+        let pool = memory_pool().await;
+        crate::migration::Migrator::run(&pool)
+            .await
+            .expect("business migrations");
+        Migrator::run(&pool).await.expect("client migrations");
+
+        insert_log_row(&pool, Some("remote"))
+            .await
+            .expect("first remote row");
+        let duplicate = insert_log_row(&pool, Some("remote")).await;
+        assert!(
+            duplicate.is_err(),
+            "a replayed remote change must violate the identity index"
+        );
+
+        insert_log_row(&pool, None).await.expect("first local row");
+        insert_log_row(&pool, None).await.expect("second local row");
     }
 }

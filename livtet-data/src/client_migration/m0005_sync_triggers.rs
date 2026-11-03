@@ -181,7 +181,7 @@ END
 CREATE TRIGGER IF NOT EXISTS sync_series_entry_changelog_insert AFTER INSERT ON series_entries BEGIN
     INSERT INTO change_log (entity_type, entity_id, operation, version, payload, changed_at, device_id)
     VALUES (
-        'series_entry', lower(hex(new.series_id)), 'INSERT',
+        'series_entry', lower(json_object('series_id', lower(hex(new.series_id)), 'edition_id', lower(hex(new.edition_id)))), 'INSERT',
         (SELECT COALESCE(MAX(version), 0) + 1 FROM change_log),
         json_object(
             'series_id', lower(hex(new.series_id)),
@@ -200,7 +200,7 @@ END
 CREATE TRIGGER IF NOT EXISTS sync_series_entry_changelog_update AFTER UPDATE ON series_entries BEGIN
     INSERT INTO change_log (entity_type, entity_id, operation, version, payload, changed_at, device_id)
     VALUES (
-        'series_entry', lower(hex(new.series_id)), 'UPDATE',
+        'series_entry', lower(json_object('series_id', lower(hex(new.series_id)), 'edition_id', lower(hex(new.edition_id)))), 'UPDATE',
         (SELECT COALESCE(MAX(version), 0) + 1 FROM change_log),
         json_object(
             'series_id', lower(hex(new.series_id)),
@@ -219,7 +219,7 @@ END
 CREATE TRIGGER IF NOT EXISTS sync_series_entry_changelog_delete AFTER DELETE ON series_entries BEGIN
     INSERT INTO change_log (entity_type, entity_id, operation, version, payload, changed_at, device_id)
     VALUES (
-        'series_entry', lower(hex(old.series_id)), 'DELETE',
+        'series_entry', lower(json_object('series_id', lower(hex(old.series_id)), 'edition_id', lower(hex(old.edition_id)))), 'DELETE',
         (SELECT COALESCE(MAX(version), 0) + 1 FROM change_log),
         json_object(
             'series_id', lower(hex(old.series_id)),

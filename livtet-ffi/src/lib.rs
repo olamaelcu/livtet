@@ -5,6 +5,7 @@
 //! flat DTO records defined here, plus the domain primitives that
 //! `livtet-types` exposes directly (with its `uniffi` feature).
 
+#![allow(unsafe_code)]
 uniffi::setup_scaffolding!();
 
 mod dashboard;

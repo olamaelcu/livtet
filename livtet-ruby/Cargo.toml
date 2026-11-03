@@ -14,3 +14,5 @@ magnus = "0.8"
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 camino = { workspace = true }
 fs-err = { workspace = true }
+[lints]
+workspace = true

@@ -4,15 +4,15 @@ Quick notes:
 
 - Tool dependencies are managed by [mise](https://mise.jxa.ch). See
   [mise.toml](mise.toml).
-- The workspace is a standard Cargo workspace. There is no project task
-  runner — `cargo` and `rustc` are invoked directly. `cargo` invocations
-  in this guide assume the workspace root.
+- Tasks are defined in `mise.toml`; run `mise run <task>` (or invoke
+  `cargo` directly). `cargo` invocations in this guide assume the
+  workspace root.
 - See [GETTING_STARTED.md](GETTING_STARTED.md) for setup and
   [README.md](README.md) for the workspace overview and crate map.
 
 ## New Contributor Guide
 
-This repo is a single Cargo workspace with eleven crates. The list
+This repo is a single Cargo workspace with sixteen crates. The list
 below is the shortest path from "just cloned" to "I have an idea where
 to make a change."
 
@@ -29,17 +29,22 @@ to make a change."
 ### Repo layout
 
 ```
-livtet-data          DB owner (sea-orm, sqlx, migrator, seed, error)
-livtet-types         Leaf type definitions (DbId, URN, identifiers, format metadata)
-livtet-covers        Cover subsystem (provider trait, cache, fetcher)
-livtet-search        Search index (Tantivy)
-livtet-core          Unison crate (data + covers + search + types)
-livtet-sync          Sync engine (server + client + change log)
-livtet-plugins       Plugin runtime (host, signing, archives, lua)
-livtet-plugins-lua   Lua plugin stub (merger target; not yet implemented)
-livtet-ffi           FFI surface over core (uniffi — Android, iOS)
-livtet-cli           CLI binary
-livtet-test-utils    Shared test helpers
+livtet-types           Leaf type definitions (DbId, URN, ISBN, identifiers, format metadata)
+livtet-temporal-quotes Deterministic greeting / empty-state quotes
+livtet-iroh            iroh node identity and peer discovery
+livtet-covers          Cover encode, cache, and store
+livtet-data            DB owner (sea-orm, sqlx, migrator, seed, error)
+livtet-search          Search index (Tantivy)
+livtet-sync            Sync domain (change log, conflicts, wire DTOs)
+livtet-sync-iroh       Sync over iroh streams (framed requests, file/cover bodies)
+livtet-sync-http       Sync transport (reqwest client, poem server, pairing)
+livtet-sync-server     Sync daemon (HTTP server + NDJSON JSON-RPC on stdio)
+livtet-core            Unison crate (data + covers + search + types)
+livtet-ffi             UniFFI surface for Android and iOS
+livtet-ruby            Magnus gem surface (paths, database open/close)
+livtet-cli-common      Shared CLI commands, context, path resolution
+livtet-cli             CLI binary
+livtet-test-utils      Shared test helpers
 ```
 
 The dependency graph is acyclic. `livtet-data` is the only crate that
@@ -50,11 +55,13 @@ sea-orm derive paths.
 
 ### Where to find things
 
-- Each crate has its own `README.md` explaining what it owns and what
-  depends on it. Start with [livtet-core/README.md](livtet-core/README.md)
-  for the unison crate that wires the rest together.
-- A workspace overview does not yet exist. When it does, it will live
-  at `docs/ARCHITECTURE.md`.
+- Crates with a README: livtet-types, livtet-search, livtet-core,
+  livtet-cli, livtet-ffi, livtet-ruby. The rest are documented by their
+  `lib.rs` module docs. Start with
+  [livtet-core/README.md](livtet-core/README.md) for the unison crate
+  that wires the rest together.
+- The workspace overview is [README.md](README.md); accepted decisions
+  are in [docs/adr/INDEX.md](docs/adr/INDEX.md).
 
 ### Before you open a PR
 
@@ -258,8 +265,9 @@ We use scope-prefixed commit messages (no type prefix). Format:
 
 - `<scope>` is required, lowercase, and indicates the area of the
   codebase touched. Common scopes: `livtet-data`, `livtet-core`,
-  `livtet-covers`, `livtet-search`, `livtet-sync`, `livtet-plugins`,
-  `livtet-plugins-lua`, `livtet-ffi`, `livtet-cli`, `livtet-types`,
+  `livtet-covers`, `livtet-search`, `livtet-sync`, `livtet-sync-http`,
+  `livtet-sync-server`, `livtet-temporal-quotes`, `livtet-ffi`,
+  `livtet-ruby`, `livtet-cli`, `livtet-cli-common`, `livtet-types`,
   `livtet-test-utils`. Workspace-wide scopes: `workspace`, `rust`,
   `cargo`, `mise`, `ci`, `docs`.
 - `<description>` is in sentence case, imperative mood, no trailing

@@ -9,19 +9,15 @@ independent = true
 
 [features]
 default = ["covers"]
-fake = ["dep:fake", "livtet-data/fake", "livtet-types/fake"]
+fake = ["livtet-data/fake", "livtet-types/fake"]
 covers = ["dep:livtet-covers"]
 # Forward the UniFFI derives on the types/search surfaces so a single
 # `livtet-core` dependency is enough to generate Kotlin/Swift bindings.
 uniffi = ["livtet-types/uniffi", "livtet-search/uniffi"]
 
 [dependencies]
-async-trait.workspace = true
 camino = { workspace = true }
-camino-tempfile = { workspace = true }
 dirs = { workspace = true }
-fake = { workspace = true, optional = true }
-fs-err = { workspace = true }
 livtet-data = { workspace = true }
 livtet-iroh = { workspace = true }
 livtet-covers = { workspace = true, optional = true }
@@ -29,18 +25,8 @@ livtet-search = { workspace = true }
 livtet-temporal-quotes = { workspace = true }
 livtet-types = { workspace = true }
 time = { workspace = true }
-miette = { workspace = true }
-mutants = { workspace = true }
-rand = { workspace = true }
-serde = { workspace = true }
-serde_json = { workspace = true }
-specta = { workspace = true }
-strsim = "0.11"
-strum = { workspace = true }
-thiserror = { workspace = true }
-tokio = { workspace = true }
-tracing = { workspace = true }
-ulid = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["full"] }
+[lints]
+workspace = true

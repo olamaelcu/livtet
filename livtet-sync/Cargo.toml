@@ -19,12 +19,11 @@ serde_json = { workspace = true }
 time = { workspace = true }
 thiserror = { workspace = true }
 miette = { workspace = true }
-ulid = { workspace = true }
-hex = { workspace = true }
-async-trait = { workspace = true }
 tracing = { workspace = true }
 fake = { workspace = true, optional = true }
 
 [dev-dependencies]
 livtet-test-utils = { workspace = true, features = ["sync"] }
 tokio = { workspace = true, features = ["rt", "macros"] }
+[lints]
+workspace = true

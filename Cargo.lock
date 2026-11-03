@@ -3698,38 +3698,22 @@ dependencies = [
  "tabled",
  "thiserror 2.0.19",
  "tokio",
- "tracing",
 ]
 
 [[package]]
 name = "livtet-core"
 version = "0.1.0"
 dependencies = [
- "async-trait",
  "camino",
- "camino-tempfile",
  "dirs",
- "fake",
- "fs-err",
  "livtet-covers",
  "livtet-data",
  "livtet-iroh",
  "livtet-search",
  "livtet-temporal-quotes",
  "livtet-types",
- "miette",
- "mutants",
- "rand 0.10.2",
- "serde",
- "serde_json",
- "specta",
- "strsim",
- "strum",
- "thiserror 2.0.19",
  "time",
  "tokio",
- "tracing",
- "ulid 3.0.0",
 ]
 
 [[package]]
@@ -3757,7 +3741,6 @@ name = "livtet-data"
 version = "0.1.0"
 dependencies = [
  "async-trait",
- "camino",
  "camino-tempfile",
  "fake",
  "livtet-types",
@@ -3769,13 +3752,11 @@ dependencies = [
  "serde",
  "serde_json",
  "serial_test",
- "specta",
  "sqlx",
  "strum",
  "thiserror 2.0.19",
  "time",
  "tokio",
- "tracing",
  "ulid 3.0.0",
 ]
 
@@ -3799,7 +3780,6 @@ version = "0.1.0"
 dependencies = [
  "iroh",
  "iroh-mdns-address-lookup",
- "livtet-types",
  "serde",
  "thiserror 2.0.19",
  "tracing",
@@ -3845,9 +3825,7 @@ dependencies = [
 name = "livtet-sync"
 version = "0.1.0"
 dependencies = [
- "async-trait",
  "fake",
- "hex",
  "livtet-data",
  "livtet-test-utils",
  "livtet-types",
@@ -3858,7 +3836,6 @@ dependencies = [
  "time",
  "tokio",
  "tracing",
- "ulid 3.0.0",
 ]
 
 [[package]]
@@ -3894,10 +3871,10 @@ dependencies = [
 name = "livtet-sync-iroh"
 version = "0.1.0"
 dependencies = [
+ "camino",
  "iroh",
  "livtet-iroh",
  "livtet-sync",
- "livtet-types",
  "serde",
  "serde_json",
  "thiserror 2.0.19",
@@ -3912,7 +3889,6 @@ dependencies = [
  "base64 0.22.1",
  "camino",
  "fs-err",
- "futures-util",
  "hex",
  "keyring",
  "livtet-data",
@@ -3968,11 +3944,8 @@ dependencies = [
  "hex",
  "isolang",
  "jsonschema",
- "miette",
- "mutants",
  "paste",
  "proptest",
- "rand 0.10.2",
  "rstest",
  "schemars",
  "sea-orm",

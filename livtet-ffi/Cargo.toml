@@ -37,3 +37,5 @@ required-features = ["cli"]
 livtet-core = { workspace = true, features = ["uniffi", "fake"] }
 camino-tempfile.workspace = true
 fs-err = { workspace = true }
+[lints]
+workspace = true

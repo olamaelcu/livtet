@@ -288,12 +288,37 @@ impl SyncEngine {
         // per push.
         let txn = self.db.begin().await?;
 
+        // Set the apply flag so audit triggers are suppressed during remote apply.
+        txn.execute_raw(livtet_data::orm::Statement::from_string(
+            livtet_data::orm::DatabaseBackend::Sqlite,
+            r#"INSERT INTO client_settings (key, value, updated_at) VALUES ("sync_apply","1", datetime("now")) ON CONFLICT(key) DO UPDATE SET value = "1", updated_at = datetime("now")"#,
+        ))
+        .await?;
+
         for change in &changes {
-            let table = entity_type_to_table(&change.entity_type).ok_or_else(|| {
-                SyncError::UnknownEntityType {
+            if entity_type_to_table(&change.entity_type).is_none() {
+                return Err(SyncError::UnknownEntityType {
                     type_name: change.entity_type.clone(),
-                }
-            })?;
+                });
+            }
+            let operation = change.operation.to_ascii_uppercase();
+
+            // A replayed change (same entity, version, device, operation)
+            // is already in the log and must not be applied twice.
+            let seen = livtet_data::orm::Statement::from_sql_and_values(
+                livtet_data::orm::DatabaseBackend::Sqlite,
+                "SELECT 1 FROM change_log WHERE entity_type = ? AND entity_id = ? AND version = ? AND device_id = ? AND operation = ? LIMIT 1",
+                [
+                    change.entity_type.clone().into(),
+                    change.entity_id.clone().into(),
+                    change.version.into(),
+                    change.device_id.clone().into(),
+                    operation.clone().into(),
+                ],
+            );
+            if txn.query_one_raw(seen).await?.is_some() {
+                continue;
+            }
 
             let check = livtet_data::orm::Statement::from_sql_and_values(
                 livtet_data::orm::DatabaseBackend::Sqlite,
@@ -310,7 +335,9 @@ impl SyncEngine {
                     .try_get::<String>("", "payload")
                     .unwrap_or_default();
 
-                if local_version > change.version {
+                if local_version > change.version
+                    || (local_version == change.version && local_payload != change.payload)
+                {
                     let insert_conflict = livtet_data::orm::Statement::from_sql_and_values(
                         livtet_data::orm::DatabaseBackend::Sqlite,
                         "INSERT INTO conflicts (entity_type, entity_id, local_payload, remote_payload, detected_at) \
@@ -343,31 +370,7 @@ impl SyncEngine {
                 }
             }
 
-            match change.operation.as_str() {
-                "INSERT" => {
-                    txn.execute_raw(livtet_data::orm::Statement::from_sql_and_values(
-                        livtet_data::orm::DatabaseBackend::Sqlite,
-                        format!("INSERT OR IGNORE INTO {} (id) VALUES (?)", table),
-                        [hex::decode(&change.entity_id).unwrap_or_default().into()],
-                    ))
-                    .await?;
-                }
-                "DELETE" => {
-                    txn.execute_raw(livtet_data::orm::Statement::from_sql_and_values(
-                        livtet_data::orm::DatabaseBackend::Sqlite,
-                        format!("DELETE FROM {} WHERE id = ?", table),
-                        [hex::decode(&change.entity_id).unwrap_or_default().into()],
-                    ))
-                    .await?;
-                }
-                _ => {
-                    tracing::debug!(
-                        operation = %change.operation,
-                        entity_type = %change.entity_type,
-                        "Unknown sync operation ignored during push"
-                    );
-                }
-            }
+            crate::apply::apply(&txn, change).await?;
 
             use livtet_data::client_entities::change_log;
             use livtet_data::orm::{ActiveModelTrait, Set};
@@ -384,7 +387,7 @@ impl SyncEngine {
             let log_entry = change_log::ActiveModel {
                 entity_type: Set(change.entity_type.clone()),
                 entity_id: Set(change.entity_id.clone()),
-                operation: Set(change.operation.clone()),
+                operation: Set(operation.clone()),
                 version: Set(change.version),
                 payload: Set(change.payload.clone()),
                 changed_at: Set(now.to_string()),
@@ -393,6 +396,13 @@ impl SyncEngine {
             };
             log_entry.insert(&txn).await?;
         }
+
+        // Remove the apply flag before commit; any error rolls back the whole txn.
+        txn.execute_raw(livtet_data::orm::Statement::from_string(
+            livtet_data::orm::DatabaseBackend::Sqlite,
+            r#"DELETE FROM client_settings WHERE key = "sync_apply""#,
+        ))
+        .await?;
 
         txn.commit().await?;
 

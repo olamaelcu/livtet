@@ -1,7 +1,7 @@
 [tools]
-rust = "latest"
+rust = "1.97.0"
 "github:corca-ai/nose" = "v0.20.0"
-"cargo:cargo-machete" = "0.7"
+"cargo:cargo-machete" = "0.9"
 "cargo:cargo-llvm-cov" = "0.6"
 "cargo:cargo-mutants" = "27.1"
 

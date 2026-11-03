@@ -41,3 +41,5 @@ serde_json = { workspace = true, optional = true }
 # The `fault` module's own tests reserve temp directories to make files
 # unreadable and to site a verified-absent path.
 camino-tempfile = { workspace = true }
+[lints]
+workspace = true

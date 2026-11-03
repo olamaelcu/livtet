@@ -24,3 +24,5 @@ camino-tempfile = { workspace = true }
 [[bin]]
 name = "livtet-cli"
 path = "src/main.rs"
+[lints]
+workspace = true

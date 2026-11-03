@@ -36,14 +36,11 @@ time = { workspace = true }
 ulid = { workspace = true, features = ["serde"] }
 async-trait = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread"] }
-tracing = { workspace = true }
 miette = { workspace = true }
 thiserror = { workspace = true }
 livtet-types = { workspace = true }
 fake = { workspace = true, optional = true }
 rand = { workspace = true, optional = true }
-camino = { workspace = true, optional = true }
-specta = { workspace = true, optional = true }
 
 # Required by the moved state/test_db modules:
 camino-tempfile = { workspace = true }
@@ -52,3 +49,5 @@ mutants = { workspace = true }
 [dev-dependencies]
 # Serializes tests that mutate process-global state (see state::tests).
 serial_test = "3"
+[lints]
+workspace = true

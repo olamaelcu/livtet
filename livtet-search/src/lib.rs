@@ -16,6 +16,7 @@
 //! and [`SearchIndex::delete_edition`] against an already-open index.
 //!
 //! Handles come in two flavours: [`SearchReader`] opens the index for
+#![cfg_attr(feature = "uniffi", allow(unsafe_code))]
 //! reading only and never takes Tantivy's writer lock, so any number of
 //! readers may be open on the same directory at once (in one process or
 //! several); [`SearchIndex`] adds the exclusive writer and is the only

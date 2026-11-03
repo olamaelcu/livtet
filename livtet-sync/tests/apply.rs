@@ -37,12 +37,7 @@ async fn applies_the_payload_fields_and_records_the_remote_row() {
 
     assert_eq!(outcome.applied, 1);
     assert!(outcome.conflicts.is_empty());
-    assert_eq!(
-        device
-            .count(&format!("works WHERE title = 'Applied title'"))
-            .await,
-        1
-    );
+    assert_eq!(device.count("works WHERE title = 'Applied title'").await, 1);
 
     // The remote row is recorded, and the trigger echo for it is gone.
     let remote_rows: i64 =

@@ -8,6 +8,7 @@
 
 use std::sync::Arc;
 
+use camino::Utf8PathBuf;
 use livtet_data::orm::{ConnectionTrait, DbBackend, EntityTrait, Statement};
 use livtet_sync::{SyncChange, SyncStatus};
 use livtet_sync_iroh::{FileHeader, Handler, Identity, Outcome, Request, Response};
@@ -272,7 +273,7 @@ async fn file(
             reason: "this inventory has no file".to_string(),
         });
     };
-    let metadata = match tokio::fs::metadata(&path).await {
+    let metadata = match fs_err::tokio::metadata(&path).await {
         Ok(metadata) => metadata,
         Err(_) => {
             return Outcome::reply(Response::Missing {
@@ -288,7 +289,7 @@ async fn file(
         offset,
         length: size,
     };
-    Outcome::file(header, std::path::PathBuf::from(path))
+    Outcome::file(header, Utf8PathBuf::from(path))
 }
 
 /// Serve the extracted cover for one inventory row.
@@ -305,7 +306,7 @@ async fn cover(state: &Arc<DaemonState>, token: String, inventory_id: String) ->
             reason: "this inventory has no cover".to_string(),
         });
     };
-    let metadata = match tokio::fs::metadata(&path).await {
+    let metadata = match fs_err::tokio::metadata(&path).await {
         Ok(metadata) => metadata,
         Err(_) => {
             return Outcome::reply(Response::Missing {
@@ -318,7 +319,7 @@ async fn cover(state: &Arc<DaemonState>, token: String, inventory_id: String) ->
         offset: 0,
         length: metadata.len(),
     };
-    Outcome::cover(header, std::path::PathBuf::from(path))
+    Outcome::cover(header, Utf8PathBuf::from(path))
 }
 
 /// Record a paired device's answer to an offer this desktop sent.

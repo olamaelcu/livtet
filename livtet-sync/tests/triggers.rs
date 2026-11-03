@@ -108,7 +108,7 @@ async fn composite_key_rows_are_logged_under_a_json_key() {
     let single: BTreeSet<&str> = SINGLE_KEY_TYPES.iter().copied().collect();
     for entity_type in SUPPORTED_ENTITY_TYPES
         .iter()
-        .filter(|t| !single.contains(*t) && **t != "series_entry")
+        .filter(|t| !single.contains(*t))
     {
         for row in device.logged(entity_type, "INSERT").await {
             let key: serde_json::Value = serde_json::from_str(&row.entity_id)

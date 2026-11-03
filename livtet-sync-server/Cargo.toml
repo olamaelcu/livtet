@@ -48,7 +48,6 @@ fs-err = { workspace = true }
 base64 = { workspace = true }
 mdns-sd = "0.21"
 reqwest = { workspace = true, features = ["json", "stream", "rustls"] }
-futures-util = { workspace = true }
 keyring = "4"
 hex = { workspace = true }
 

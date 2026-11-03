@@ -40,20 +40,17 @@ const LEGACY_DDL: [&str; 3] = [
     "CREATE INDEX idx_book_shelf_book ON book_shelf(book_uri)",
 ];
 
-async fn legacy_pool(name: &str) -> (SqlitePool, std::path::PathBuf) {
-    let path = std::env::temp_dir().join(format!(
-        "livtet-shelf-migration-{name}-{}.db",
-        std::process::id()
-    ));
-    let _ = std::fs::remove_file(&path);
-    let opts = SqliteConnectOptions::from_str(&format!("sqlite:{}", path.display()))
+async fn legacy_pool(name: &str) -> (SqlitePool, camino_tempfile::Utf8TempDir) {
+    let dir = camino_tempfile::Utf8TempDir::new().expect("temp dir");
+    let path = dir.path().join(format!("livtet-shelf-migration-{name}.db"));
+    let opts = SqliteConnectOptions::from_str(&format!("sqlite:{path}"))
         .expect("sqlite url")
         .create_if_missing(true);
     let pool = sqlite_pool_options()
         .connect_with(opts)
         .await
         .expect("open the fixture database");
-    (pool, path)
+    (pool, dir)
 }
 
 /// The tables exactly as the pre-migration write path left them: plain
@@ -99,7 +96,7 @@ async fn seed_legacy_shelf_tables(pool: &SqlitePool) {
 
 #[tokio::test]
 async fn legacy_shelf_tables_collapse_to_one_row_per_book() {
-    let (pool, path) = legacy_pool("collapse").await;
+    let (pool, _dir) = legacy_pool("collapse").await;
     seed_legacy_shelf_tables(&pool).await;
 
     migration::Migrator::run(&pool).await.expect("migrate up");
@@ -130,13 +127,11 @@ async fn legacy_shelf_tables_collapse_to_one_row_per_book() {
         unique_indexes, 1,
         "the migration adds the per-book constraint"
     );
-
-    let _ = std::fs::remove_file(path);
 }
 
 #[tokio::test]
 async fn a_second_row_for_the_same_book_is_rejected() {
-    let (pool, path) = legacy_pool("unique").await;
+    let (pool, _dir) = legacy_pool("unique").await;
     seed_legacy_shelf_tables(&pool).await;
     migration::Migrator::run(&pool).await.expect("migrate up");
 
@@ -153,6 +148,4 @@ async fn a_second_row_for_the_same_book_is_rejected() {
         duplicate.is_err(),
         "a book must not hold two shelving rows for one account"
     );
-
-    let _ = std::fs::remove_file(path);
 }

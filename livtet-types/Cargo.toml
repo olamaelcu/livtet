@@ -24,24 +24,23 @@ fake = { workspace = true, optional = true, features = [
   "time",
   "ulid",
 ] }
-rand.workspace = true
 strum = { workspace = true }
 schemars.workspace = true
 jsonschema.workspace = true
-miette = { workspace = true }
 paste = { workspace = true }
 tantivy-query-grammar = { version = "0.26", optional = true }
-mutants = { workspace = true, optional = true }
 async-trait.workspace = true
 isolang = { version = "2", features = ["english_names"] }
 specta-typescript = { version = "0.0.12", features = ["serde"] }
 
 [features]
-fake = ["dep:fake", "dep:mutants"]
-search = ["dep:tantivy-query-grammar", "dep:mutants"]
+fake = ["dep:fake"]
+search = ["dep:tantivy-query-grammar"]
 uniffi = ["dep:uniffi"]
 
 [dev-dependencies]
 proptest = { workspace = true }
 rstest = { workspace = true }
 tokio = { workspace = true, features = ["rt", "macros"] }
+[lints]
+workspace = true

@@ -1674,21 +1674,20 @@ async fn download_offer(
         .get("has_cover")
         .and_then(serde_json::Value::as_bool)
         == Some(true)
+        && let Some((content_type, bytes)) = peer.cover(inventory_id).await?
     {
-        if let Some((content_type, bytes)) = peer.cover(inventory_id).await? {
-            let extension = if content_type.contains("jpeg") {
-                "jpg"
-            } else if content_type.contains("webp") {
-                "webp"
-            } else {
-                "png"
-            };
-            let path = covers_dir.join(format!("{inventory_id}.{extension}"));
-            fs_err::tokio::write(path.as_std_path(), &bytes)
-                .await
-                .map_err(|error| ServerError::Server(format!("write received cover: {error}")))?;
-            cover_path = Some(path.to_string());
-        }
+        let extension = if content_type.contains("jpeg") {
+            "jpg"
+        } else if content_type.contains("webp") {
+            "webp"
+        } else {
+            "png"
+        };
+        let path = covers_dir.join(format!("{inventory_id}.{extension}"));
+        fs_err::tokio::write(path.as_std_path(), &bytes)
+            .await
+            .map_err(|error| ServerError::Server(format!("write received cover: {error}")))?;
+        cover_path = Some(path.to_string());
     }
 
     Ok((

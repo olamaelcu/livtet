@@ -22,7 +22,6 @@ thiserror = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 camino = { workspace = true }
 fs-err = { workspace = true }
-tracing = { workspace = true }
 inquire = { version = "0.9", features = ["editor"] }
 indicatif = "0.18"
 tabled = { version = "0.20", features = ["derive"] }
@@ -33,3 +32,5 @@ insta = { workspace = true }
 livtet-test-utils = { workspace = true, features = ["cli", "fault"] }
 livtet-types = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+[lints]
+workspace = true

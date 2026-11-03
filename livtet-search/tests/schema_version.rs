@@ -31,8 +31,7 @@ async fn bare_db() -> DatabaseConnection {
 #[test]
 fn open_rejects_a_mismatched_schema_version() {
     let dir = tmp();
-    std::fs::write(dir.path().join(META_FILE), br#"{"schema_version": 99}"#)
-        .expect("write sidecar");
+    fs_err::write(dir.path().join(META_FILE), br#"{"schema_version": 99}"#).expect("write sidecar");
     // `SearchIndex` is not `Debug`, so match the `Result` rather than unwrap it.
     assert!(matches!(
         SearchIndex::open(dir.path()),
@@ -43,7 +42,7 @@ fn open_rejects_a_mismatched_schema_version() {
 #[test]
 fn open_rejects_a_malformed_sidecar() {
     let dir = tmp();
-    std::fs::write(dir.path().join(META_FILE), b"{ this is not json").expect("write sidecar");
+    fs_err::write(dir.path().join(META_FILE), b"{ this is not json").expect("write sidecar");
     assert!(
         SearchIndex::open(dir.path()).is_err(),
         "a malformed sidecar must be a hard error, not a silent fallback"
@@ -53,8 +52,7 @@ fn open_rejects_a_malformed_sidecar() {
 #[tokio::test]
 async fn migrate_to_rejects_a_newer_on_disk_version() {
     let dir = tmp();
-    std::fs::write(dir.path().join(META_FILE), br#"{"schema_version": 99}"#)
-        .expect("write sidecar");
+    fs_err::write(dir.path().join(META_FILE), br#"{"schema_version": 99}"#).expect("write sidecar");
     let db = bare_db().await;
     let mut sink = |_e: ReindexEvent| {};
     let err = SearchIndex::migrate_to_with_progress(dir.path(), &db, &mut sink)

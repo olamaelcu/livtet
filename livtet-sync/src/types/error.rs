@@ -45,6 +45,27 @@ pub enum SyncError {
         entity_type: String,
         message: String,
     },
+
+    #[error("invalid payload for {entity_type}: {message}")]
+    #[diagnostic(code(livtet_sync::invalid_payload))]
+    InvalidPayload {
+        entity_type: String,
+        message: String,
+    },
+
+    #[error("invalid operation {operation} for {entity_type}")]
+    #[diagnostic(code(livtet_sync::invalid_operation))]
+    InvalidOperation {
+        entity_type: String,
+        operation: String,
+    },
+
+    #[error("invalid entity id for {entity_type}: {message}")]
+    #[diagnostic(code(livtet_sync::invalid_entity_id))]
+    InvalidEntityId {
+        entity_type: String,
+        message: String,
+    },
 }
 
 impl From<livtet_data::orm::DbErr> for SyncError {

@@ -3,6 +3,7 @@
 //! These types are used across all Livtet crates and have minimal dependencies.
 //!
 //! ## Features
+#![cfg_attr(feature = "uniffi", allow(unsafe_code))]
 //!
 //! - `search`: enables the `search` module with search/filter types
 //! - `fake`: enables `fake::Dummy` derives for testing
