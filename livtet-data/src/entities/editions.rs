@@ -19,9 +19,9 @@ pub struct Model {
     /// chapters), validated against the edition format's
     /// `FormatMetadataSchema` at the application layer.
     pub format_metadata: Option<serde_json::Value>,
-    /// Remote cover image for editions that were imported from the catalog
-    /// rather than from a file on disk. Local covers stay in
-    /// `digital_inventory.cover_path` / `edition_specific_covers`.
+    /// Remote cover image for editions imported from the catalog rather than
+    /// from a file on disk. Local covers live in `digital_inventory.cover_path`;
+    /// the `edition_covers` view exposes both.
     pub cover_image_url: Option<String>,
     pub created_at: time::PrimitiveDateTime,
     pub updated_at: Option<time::PrimitiveDateTime>,

@@ -136,7 +136,6 @@ impl LivtetStore {
             editions_loans::Entity,
             owned_edition::Entity,
             digital_inventory::Entity,
-            edition_specific_covers::Entity,
             current_work_status::Entity,
             saved_search::Entity,
             search_history::Entity,

@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 
 use livtet_core::data::entities::{
-    authors, current_work_status, digital_inventory, edition_authors, edition_identifiers,
+    authors, current_work_status, edition_covers, digital_inventory, edition_authors, edition_identifiers,
     edition_publishers, editions, formats, identifiers, languages, publishers, work_authors, works,
 };
 use livtet_core::data::orm::{
@@ -272,6 +272,26 @@ struct WorkExtras {
     primary_edition_id: Option<DbId>,
 }
 
+/// Covers for a set of editions, read from the view the schema declares.
+///
+/// The view is the single place that knows where a cover can live, so a third
+/// source later is one migration there rather than a change in every list.
+async fn cover_rows(
+    db: &DatabaseConnection,
+    edition_ids: &[DbId],
+) -> Result<HashMap<DbId, edition_covers::Model>, LivtetError> {
+    if edition_ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+    Ok(edition_covers::Entity::find()
+        .filter(edition_covers::Column::EditionId.is_in(edition_ids.to_vec()))
+        .all(db)
+        .await?
+        .into_iter()
+        .map(|row| (row.edition_id, row))
+        .collect())
+}
+
 /// Resolve covers and primary editions for a page of works in one pass.
 ///
 /// A catalog cover wins over a local one: it is the image the edition was
@@ -297,6 +317,9 @@ async fn work_extras(
         .all(db)
         .await?;
 
+    let edition_ids: Vec<DbId> = editions_of_work.iter().map(|e| e.id).collect();
+    let covers = cover_rows(db, &edition_ids).await?;
+
     for edition in &editions_of_work {
         out.entry(edition.work_id).or_insert_with(|| WorkExtras {
             cover_url: None,
@@ -304,8 +327,12 @@ async fn work_extras(
         });
         let extra = out.get_mut(&edition.work_id).expect("entry just inserted");
         if extra.cover_url.is_none() {
-            if let Some(url) = edition.cover_image_url.as_deref().filter(|u| !u.is_empty()) {
-                extra.cover_url = Some(url.to_string());
+            if let Some(row) = covers.get(&edition.id) {
+                extra.cover_url = row
+                    .cover_url
+                    .clone()
+                    .filter(|url| !url.is_empty())
+                    .or_else(|| row.cover_path.clone().filter(|path| !path.is_empty()));
             }
         }
     }
@@ -316,42 +343,6 @@ async fn work_extras(
             cover_url: None,
             primary_edition_id: None,
         });
-    }
-
-    let without_cover: HashMap<DbId, DbId> = out
-        .iter()
-        .filter(|(_, extra)| extra.cover_url.is_none())
-        .map(|(work_id, _)| (*work_id, *work_id))
-        .collect();
-    if without_cover.is_empty() {
-        return Ok(out);
-    }
-
-    let local = digital_inventory::Entity::find()
-        .filter(
-            digital_inventory::Column::EditionId.is_in(
-                editions_of_work
-                    .iter()
-                    .filter(|e| without_cover.contains_key(&e.work_id))
-                    .map(|e| e.id),
-            ),
-        )
-        .all(db)
-        .await?;
-    let edition_work: HashMap<DbId, DbId> =
-        editions_of_work.iter().map(|e| (e.id, e.work_id)).collect();
-    for row in local {
-        let Some(work_id) = edition_work.get(&row.edition_id) else {
-            continue;
-        };
-        let Some(extra) = out.get_mut(work_id) else {
-            continue;
-        };
-        if extra.cover_url.is_none() {
-            if let Some(path) = row.cover_path.filter(|p| !p.is_empty()) {
-                extra.cover_url = Some(path);
-            }
-        }
     }
 
     Ok(out)

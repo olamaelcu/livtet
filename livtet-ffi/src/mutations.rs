@@ -942,36 +942,58 @@ mod tests {
 
     #[tokio::test]
     async fn cover_url_can_be_backfilled_after_import() {
-        let (_tmp, store, edition) = seeded_store_with_edition().await;
+        let (_tmp, store, _edition) = seeded_store_with_edition().await;
 
-        let work = &store.list_works(1, 0, None, None, None).await.unwrap()[0];
-        let before = store.list_works(1, 0, None, None, None).await.unwrap();
-        assert!(before[0].cover_url.is_none(), "seeded edition has no cover");
+        // Own fixture: the seeder assigns inventory rows at random, so asserting
+        // on a seeded work made this test flaky.
+        let work = store
+            .create_work("Uncovered Work".to_string(), None, None)
+            .await
+            .unwrap();
+        let edition = store
+            .create_edition(NewEdition {
+                work_id: work.id,
+                title: Some("Uncovered".to_string()),
+                description: None,
+                published_date: None,
+                format_id: None,
+                language_id: None,
+                notes: None,
+                cover_image_url: None,
+            })
+            .await
+            .unwrap();
+
+        let cover_of = |store: std::sync::Arc<LivtetStore>| async move {
+            store
+                .list_works(100, 0, None, None, Some("Uncovered".to_string()))
+                .await
+                .unwrap()
+                .into_iter()
+                .find(|w| w.id == work.id)
+                .and_then(|w| w.cover_url)
+        };
+
+        assert!(cover_of(store.clone()).await.is_none(), "no cover yet");
 
         store
             .set_edition_cover_url(
-                edition,
+                edition.id,
                 Some("https://covers.example/backfilled.jpg".to_string()),
             )
             .await
             .unwrap();
-        let after = store.list_works(1, 0, None, None, None).await.unwrap();
         assert_eq!(
-            after[0].cover_url.as_deref(),
+            cover_of(store.clone()).await.as_deref(),
             Some("https://covers.example/backfilled.jpg")
         );
-        assert_eq!(after[0].id, work.id);
 
         // An empty URL clears it again rather than storing blank text.
         store
-            .set_edition_cover_url(edition, Some("   ".to_string()))
+            .set_edition_cover_url(edition.id, Some("   ".to_string()))
             .await
             .unwrap();
-        assert!(
-            store.list_works(1, 0, None, None, None).await.unwrap()[0]
-                .cover_url
-                .is_none()
-        );
+        assert!(cover_of(store.clone()).await.is_none());
     }
 
     #[tokio::test]
