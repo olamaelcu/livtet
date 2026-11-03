@@ -10,7 +10,7 @@ use livtet_core::data::orm::{
     ColumnTrait, DatabaseConnection, EntityTrait, Order, PaginatorTrait, QueryFilter, QueryOrder,
     QuerySelect, Select,
 };
-use livtet_core::types::{DbId, SortDirection, WorkSortBy};
+use livtet_core::types::{DbId, Identifier, IdentifierKind, SortDirection, Urn, WorkSortBy};
 
 use crate::dto::{EditionDetail, EditionFile, EditionSummary, WorkSummary, ts, ts_opt};
 use crate::error::LivtetError;
@@ -68,6 +68,67 @@ impl LivtetStore {
         };
 
         Ok(Some(edition_detail(&db, model).await?))
+    }
+
+    /// Identifiers attached to one edition, ordered by URN.
+    ///
+    /// `identifiers` rows are shared library-wide, so the same URN may
+    /// appear on several editions.
+    pub async fn list_edition_identifiers(
+        &self,
+        edition_id: DbId,
+    ) -> Result<Vec<Identifier>, LivtetError> {
+        let db = self.state.db_conn();
+
+        let links = edition_identifiers::Entity::find()
+            .filter(edition_identifiers::Column::EditionId.eq(edition_id))
+            .all(&db)
+            .await?;
+        let ids: Vec<DbId> = links.iter().map(|l| l.identifier_id).collect();
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let rows = identifiers::Entity::find()
+            .filter(identifiers::Column::Id.is_in(ids))
+            .order_by(identifiers::Column::Value, Order::Asc)
+            .all(&db)
+            .await?;
+        Ok(rows.iter().map(to_identifier).collect())
+    }
+
+    /// Editions carrying a given identifier — the dedupe hook for
+    /// imports: one ISBN that is already in the library yields the
+    /// editions that hold it.
+    pub async fn find_editions_by_identifier(
+        &self,
+        identifier: Identifier,
+    ) -> Result<Vec<EditionSummary>, LivtetError> {
+        let db = self.state.db_conn();
+
+        let Some(row) = identifiers::Entity::find()
+            .filter(identifiers::Column::Value.eq(identifier.as_urn_string()))
+            .one(&db)
+            .await?
+        else {
+            return Ok(Vec::new());
+        };
+
+        let links = edition_identifiers::Entity::find()
+            .filter(edition_identifiers::Column::IdentifierId.eq(row.id))
+            .all(&db)
+            .await?;
+        let ids: Vec<DbId> = links.iter().map(|l| l.edition_id).collect();
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let models = editions::Entity::find()
+            .filter(editions::Column::Id.is_in(ids))
+            .order_by(editions::Column::CreatedAt, Order::Desc)
+            .all(&db)
+            .await?;
+        summarize_editions(&db, models).await
     }
 
     /// Total number of works.
@@ -181,6 +242,16 @@ async fn author_names_for_edition(
         .all(db)
         .await?;
     Ok(authors.into_iter().map(|a| a.name).collect())
+}
+
+/// Rebuild an [`Identifier`] from an `identifiers` row: `kind` holds the
+/// stored scheme string and `value` the canonical URN.
+fn to_identifier(row: &identifiers::Model) -> Identifier {
+    let kind = IdentifierKind::parse(&row.kind)
+        .unwrap_or_else(|| IdentifierKind::Custom(row.kind.clone()));
+    let urn = Urn::parse(&row.value)
+        .unwrap_or_else(|_| Urn::new(row.kind.clone(), row.value.clone()));
+    Identifier { kind, urn }
 }
 
 /// Convert edition models into summaries, batching format/language/file
