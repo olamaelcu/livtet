@@ -20,6 +20,7 @@ mod quotes;
 mod reading;
 mod search;
 mod store;
+mod sync;
 mod works;
 
 pub use dto::*;
@@ -30,3 +31,4 @@ pub use maintenance::{ReindexProgress, ReindexProgressEvent};
 pub use mutations::EditionPatch;
 pub use quotes::{EmptyMessage, Greeting};
 pub use store::LivtetStore;
+pub use sync::{SyncPairingResult, pair_sync_device, sync_pairing_status};

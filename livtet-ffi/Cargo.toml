@@ -16,8 +16,11 @@ uniffi = { workspace = true, features = ["tokio"] }
 # alone; `uniffi` forwards the derives on the `types`/`search` surfaces.
 livtet-core = { workspace = true, features = ["uniffi"] }
 livtet-covers = { workspace = true }
-tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+livtet-iroh = { workspace = true }
+livtet-sync-iroh = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }
 camino.workspace = true
+hex.workspace = true
 thiserror.workspace = true
 time.workspace = true
 

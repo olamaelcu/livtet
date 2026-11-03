@@ -29,6 +29,11 @@ pub enum LivtetError {
     /// URN strings, enum names, ...).
     #[error("invalid input: {0}")]
     InvalidInput(String),
+
+    /// A sync or pairing failure: an endpoint that would not bind, a peer
+    /// that could not be dialled, or a claim the peer would not answer.
+    #[error("sync error: {0}")]
+    Sync(String),
 }
 
 impl From<CoreError> for LivtetError {
