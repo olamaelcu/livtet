@@ -137,6 +137,13 @@ impl sea_orm::TryGetable for DbId {
         // Preserve the first error so Null propagates correctly to Option<DbId>.
         let bytes_result = <Vec<u8> as sea_orm::TryGetable>::try_get_by(res, index);
         if let Ok(v) = bytes_result {
+            // Sync used to store an absent id as a zero-length blob: the
+            // change trigger writes `hex(NULL)` as `''`. Read it back as
+            // NULL so a nullable column decodes as `None` instead of
+            // poisoning the whole row with an undecodable id.
+            if v.is_empty() {
+                return Err(sea_orm::TryGetError::Null(String::from("DbId")));
+            }
             let arr: [u8; 16] = v.as_slice().try_into().map_err(|_| {
                 sea_orm::TryGetError::DbErr(sea_orm::DbErr::Custom(format!(
                     "Invalid DbId: expected 16 bytes, got {} bytes",
@@ -149,6 +156,11 @@ impl sea_orm::TryGetable for DbId {
         // Fallback: try String -- ULID base32 or hex.
         match <String as sea_orm::TryGetable>::try_get_by(res, index) {
             Ok(s) => {
+                // Same encoding as above when the column is TEXT: an empty
+                // id means the sender had no id.
+                if s.is_empty() {
+                    return Err(sea_orm::TryGetError::Null(String::from("DbId")));
+                }
                 // Try ULID string (26 chars, Crockford base32).
                 if let Ok(ulid) = Ulid::from_str(&s) {
                     return Ok(DbId(ulid));

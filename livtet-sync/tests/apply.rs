@@ -55,11 +55,21 @@ async fn applies_the_payload_fields_and_records_the_remote_row() {
 async fn applies_an_edition_whose_optional_ids_are_empty() {
     let device = Device::seeded("receiver").await;
     let (id, payload, version) = latest(&device, "edition").await;
+    let mut value: serde_json::Value = serde_json::from_str(&payload).expect("payload");
+    // What the sender's trigger writes for a NULL id: `hex(NULL)` is `''`.
+    value["format_id"] = serde_json::Value::String(String::new());
+    value["language_id"] = serde_json::Value::String(String::new());
 
     let outcome = device
         .engine
         .apply_changes(
-            vec![change("edition", &id, "UPDATE", version + 1, &payload)],
+            vec![change(
+                "edition",
+                &id,
+                "UPDATE",
+                version + 1,
+                &value.to_string(),
+            )],
             ApplyOptions::default(),
         )
         .await
@@ -67,6 +77,19 @@ async fn applies_an_edition_whose_optional_ids_are_empty() {
 
     assert_eq!(outcome.applied, 1);
     assert!(outcome.conflicts.is_empty());
+
+    // Stored as SQL NULL: a zero-length BLOB is not a `DbId` and would make
+    // every read of the edition fail.
+    let (format_null, language_null): (i64, i64) =
+        livtet_data::sql::query_as(livtet_data::sql::AssertSqlSafe(format!(
+            "SELECT format_id IS NULL, language_id IS NULL FROM editions \
+             WHERE lower(hex(id)) = '{id}'"
+        )))
+        .fetch_one(device.pool())
+        .await
+        .expect("edition row");
+
+    assert_eq!((format_null, language_null), (1, 1));
 }
 
 #[tokio::test]

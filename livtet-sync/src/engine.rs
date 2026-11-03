@@ -744,9 +744,10 @@ fn is_identifier(value: &str) -> bool {
 fn sql_value(column: &str, value: &Value) -> SqlValue {
     if is_id_column(column) {
         match value {
-            // A zero-length id is stored as an empty BLOB by the business
-            // schema (seeded formats/languages), not as text.
-            Value::String(text) if text.is_empty() => return SqlValue::Bytes(Some(Vec::new())),
+            // An absent id reaches the wire as `hex(NULL)` -> `''`. Store it
+            // as SQL NULL, not a zero-length blob: no `DbId` can decode zero
+            // bytes, so a blob there poisons every read of the row.
+            Value::String(text) if text.is_empty() => return SqlValue::Bytes(None),
             Value::String(text)
                 if text.len() == 32 && text.bytes().all(|byte| byte.is_ascii_hexdigit()) =>
             {
