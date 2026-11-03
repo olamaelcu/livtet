@@ -292,6 +292,104 @@ impl LivtetStore {
         Ok(out)
     }
 
+    /// One reading list with its editions, or `None` when the id is unknown.
+    pub async fn get_reading_list(
+        &self,
+        list_id: DbId,
+    ) -> Result<Option<ReadingList>, LivtetError> {
+        let db = self.state.db_conn();
+        let Some(list) = reading_lists::Entity::find_by_id(list_id).one(&db).await? else {
+            return Ok(None);
+        };
+        let edition_ids = list.edition_ids(&db).await?;
+        Ok(Some(ReadingList {
+            id: list.id,
+            name: list.name,
+            description: list.description,
+            edition_ids,
+            created_at: ts(&list.created_at),
+            updated_at: ts_opt(list.updated_at),
+        }))
+    }
+
+    /// Rename a list and/or reset its description. A `None` argument leaves
+    /// that field alone; an empty description clears it.
+    pub async fn update_reading_list(
+        &self,
+        list_id: DbId,
+        name: Option<String>,
+        description: Option<String>,
+    ) -> Result<ReadingList, LivtetError> {
+        let db = self.state.db_conn();
+        let list = require_list(&db, list_id).await?;
+        let mut active: reading_lists::ActiveModel = list.into();
+        if let Some(name) = name {
+            let name = name.trim().to_string();
+            if name.is_empty() {
+                return Err(LivtetError::InvalidInput(
+                    "reading list name must not be empty".to_string(),
+                ));
+            }
+            active.name = Set(name);
+        }
+        if let Some(description) = description {
+            let description = description.trim().to_string();
+            active.description = Set(if description.is_empty() {
+                None
+            } else {
+                Some(description)
+            });
+        }
+        active.updated_at = Set(Some(now_primitive()));
+        active.update(&db).await?;
+
+        self.get_reading_list(list_id)
+            .await?
+            .ok_or_else(|| LivtetError::NotFound {
+                entity: "reading_lists".to_string(),
+                id: list_id.to_string(),
+            })
+    }
+
+    /// Move an edition to `position`, closing the gap behind it and pushing
+    /// the rest down. Returns the new order.
+    ///
+    /// Positions are rewritten densely (0..n) rather than swapped, so a list
+    /// that drifted into duplicates or gaps settles on the first move.
+    pub async fn move_edition_in_list(
+        &self,
+        list_id: DbId,
+        edition_id: DbId,
+        position: u32,
+    ) -> Result<Vec<DbId>, LivtetError> {
+        let db = self.state.db_conn();
+        let list = require_list(&db, list_id).await?;
+        let mut order = list.edition_ids(&db).await?;
+        let Some(current) = order.iter().position(|id| *id == edition_id) else {
+            return Err(LivtetError::NotFound {
+                entity: "reading_list_book".to_string(),
+                id: edition_id.to_string(),
+            });
+        };
+
+        let moved = order.remove(current);
+        let target = (position as usize).min(order.len());
+        order.insert(target, moved);
+
+        for (index, id) in order.iter().enumerate() {
+            let row = reading_list_book::Entity::find()
+                .filter(reading_list_book::Column::ReadingListId.eq(list_id))
+                .filter(reading_list_book::Column::EditionId.eq(*id))
+                .one(&db)
+                .await?;
+            let Some(row) = row else { continue };
+            let mut active: reading_list_book::ActiveModel = row.into();
+            active.position = Set(index as i32);
+            active.update(&db).await?;
+        }
+        Ok(order)
+    }
+
     /// Append an edition to a reading list (position = end). No-op for
     /// a duplicate membership; fails `NotFound` for a missing list.
     pub async fn add_edition_to_list(
@@ -302,13 +400,10 @@ impl LivtetStore {
         let db = self.state.db_conn();
 
         // Fail-closed: the list must exist.
-        reading_lists::Entity::find_by_id(list_id)
-            .one(&db)
-            .await?
-            .ok_or_else(|| LivtetError::NotFound {
-                entity: "reading_lists".to_string(),
-                id: list_id.to_string(),
-            })?;
+        require_list(&db, list_id).await?;
+        // Fail-closed on the edition too: a stale id surfaces as a `NotFound`
+        // naming the edition instead of an opaque foreign-key violation.
+        crate::mutations::require_edition(&db, edition_id).await?;
 
         let members = reading_list_book::Entity::find()
             .filter(reading_list_book::Column::ReadingListId.eq(list_id))
@@ -363,6 +458,19 @@ impl LivtetStore {
             .rows_affected
             > 0)
     }
+}
+
+async fn require_list(
+    db: &livtet_core::data::orm::DatabaseConnection,
+    list_id: DbId,
+) -> Result<reading_lists::Model, LivtetError> {
+    reading_lists::Entity::find_by_id(list_id)
+        .one(db)
+        .await?
+        .ok_or_else(|| LivtetError::NotFound {
+            entity: "reading_lists".to_string(),
+            id: list_id.to_string(),
+        })
 }
 
 trait ListMemberships {
@@ -577,5 +685,98 @@ mod tests {
 
         assert!(store.delete_reading_list(list.id).await.unwrap());
         assert!(!store.delete_reading_list(list.id).await.unwrap());
+    }
+    /// A second edition under a fresh work, so a list can hold several.
+    async fn another_edition(store: &LivtetStore, title: &str) -> DbId {
+        let work = store
+            .create_work(title.to_string(), None, None)
+            .await
+            .unwrap();
+        store
+            .create_edition(crate::mutations::NewEdition {
+                work_id: work.id,
+                title: Some(title.to_string()),
+                description: None,
+                published_date: None,
+                format_id: None,
+                language_id: None,
+                notes: None,
+                cover_image_url: None,
+            })
+            .await
+            .unwrap()
+            .id
+    }
+
+    #[tokio::test]
+    async fn reading_list_lookup_rename_and_reorder() {
+        let (_tmp, store, _w, edition) = seeded_store_with_edition().await;
+        let second = another_edition(&store, "Second").await;
+        let third = another_edition(&store, "Third").await;
+
+        let list = store
+            .create_reading_list("Winter".to_string(), Some("short days".to_string()))
+            .await
+            .unwrap();
+        for ed in [edition, second, third] {
+            store.add_edition_to_list(list.id, ed).await.unwrap();
+        }
+
+        let fetched = store.get_reading_list(list.id).await.unwrap().unwrap();
+        assert_eq!(fetched.edition_ids, vec![edition, second, third]);
+        assert_eq!(fetched.description.as_deref(), Some("short days"));
+        assert!(store.get_reading_list(DbId::new()).await.unwrap().is_none());
+
+        // Move the last edition to the front; the rest close up behind it.
+        let order = store.move_edition_in_list(list.id, third, 0).await.unwrap();
+        assert_eq!(order, vec![third, edition, second]);
+        let fetched = store.get_reading_list(list.id).await.unwrap().unwrap();
+        assert_eq!(fetched.edition_ids, vec![third, edition, second]);
+
+        // A position past the end clamps to the end.
+        let order = store
+            .move_edition_in_list(list.id, third, 99)
+            .await
+            .unwrap();
+        assert_eq!(order, vec![edition, second, third]);
+
+        let renamed = store
+            .update_reading_list(
+                list.id,
+                Some(" Deep Winter ".to_string()),
+                Some(String::new()),
+            )
+            .await
+            .unwrap();
+        assert_eq!(renamed.name, "Deep Winter");
+        assert_eq!(renamed.description, None, "empty description clears it");
+        assert_eq!(renamed.edition_ids.len(), 3, "rename keeps membership");
+    }
+
+    #[tokio::test]
+    async fn reading_list_rejects_unknown_edition_and_blank_name() {
+        let (_tmp, store, _w, _edition) = seeded_store_with_edition().await;
+        let list = store
+            .create_reading_list("Odd".to_string(), None)
+            .await
+            .unwrap();
+
+        let err = store
+            .add_edition_to_list(list.id, DbId::new())
+            .await
+            .unwrap_err();
+        assert!(matches!(err, LivtetError::NotFound { .. }), "{err:?}");
+
+        let err = store
+            .update_reading_list(list.id, Some("   ".to_string()), None)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, LivtetError::InvalidInput(_)), "{err:?}");
+
+        let err = store
+            .move_edition_in_list(list.id, DbId::new(), 0)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, LivtetError::NotFound { .. }), "{err:?}");
     }
 }

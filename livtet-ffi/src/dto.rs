@@ -43,6 +43,9 @@ pub struct WorkSummary {
     pub cover_url: Option<String>,
     /// Current reading status; `None` for a work that was never shelved.
     pub status: Option<WorkStatus>,
+    /// The edition a shelf or progress entry attaches to: the work's preferred
+    /// edition, or its oldest one when no preference is recorded.
+    pub primary_edition_id: Option<DbId>,
     pub created_at: String,
     pub updated_at: Option<String>,
 }
