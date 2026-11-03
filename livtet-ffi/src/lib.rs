@@ -9,6 +9,7 @@
 uniffi::setup_scaffolding!();
 
 mod contributors;
+mod covers;
 mod dashboard;
 mod dto;
 mod error;

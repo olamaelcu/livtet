@@ -15,6 +15,7 @@ uniffi = { workspace = true, features = ["tokio"] }
 # The FFI surface reaches the whole workspace through `livtet-core`
 # alone; `uniffi` forwards the derives on the `types`/`search` surfaces.
 livtet-core = { workspace = true, features = ["uniffi"] }
+livtet-covers = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 camino.workspace = true
 thiserror.workspace = true
