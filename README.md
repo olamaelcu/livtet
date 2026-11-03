@@ -36,8 +36,7 @@ livtet-data            DB owner (sea-orm, sqlx, migrator, seed, error)
 livtet-search          Search index (Tantivy)
 livtet-sync            Sync domain (change log, conflicts, wire DTOs)
 livtet-sync-iroh       Sync over iroh streams (framed requests, file/cover bodies)
-livtet-sync-http       Sync transport (reqwest client, poem server, pairing)
-livtet-sync-server     Sync daemon (HTTP server + NDJSON JSON-RPC on stdio)
+livtet-sync-server     Sync daemon (iroh streams + NDJSON JSON-RPC on stdio)
 livtet-core            Unison crate (data + covers + search + types)
 livtet-ffi             UniFFI surface for Android and iOS
 livtet-ruby            Magnus gem surface (paths, database open/close)
@@ -62,8 +61,7 @@ sea-orm derive paths.
 |livtet-search|livtet-types, livtet-data|
 |livtet-sync|livtet-types, livtet-data|
 |livtet-sync-iroh|livtet-iroh, livtet-sync|
-|livtet-sync-http|livtet-sync, livtet-data|
-|livtet-sync-server|livtet-iroh, livtet-sync, livtet-sync-iroh, livtet-sync-http, livtet-data, livtet-types|
+|livtet-sync-server|livtet-iroh, livtet-sync, livtet-sync-iroh, livtet-data, livtet-types|
 |livtet-core|livtet-types, livtet-data, livtet-search, livtet-covers (optional), livtet-temporal-quotes|
 |livtet-ffi|livtet-core|
 |livtet-ruby|livtet-core, livtet-data|

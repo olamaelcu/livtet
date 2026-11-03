@@ -13,10 +13,6 @@ pub enum ServerError {
     #[error("database error: {0}")]
     Db(String),
 
-    /// HTTP server bind / serve failure.
-    #[error("http error: {0}")]
-    Http(String),
-
     /// JSON-RPC encode/decode failure.
     #[error("rpc error: {0}")]
     Rpc(String),

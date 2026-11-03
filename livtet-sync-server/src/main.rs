@@ -3,16 +3,19 @@
 use livtet_sync_server::ServerConfig;
 
 const USAGE: &str = "\
-livtet-sync-server — Livtet sync daemon (HTTP server + JSON-RPC over stdio)
+livtet-sync-server — Livtet sync daemon (iroh streams + JSON-RPC over stdio)
 
 USAGE:
     livtet-sync-server [OPTIONS]
 
 OPTIONS:
     --db <path>         SQLite database path (default: livtet-sync.db)
-    --host <host>       Host to bind the sync HTTP server (default: 127.0.0.1)
-    --port <port>       Port to bind; 0 picks an ephemeral port (default: 0)
+    --port <port>       UDP port for the iroh endpoint; 0 picks an ephemeral port (default: 0)
     --device-id <id>    Override the persisted device id (ULID)
+    --device-name <n>   Name advertised to nearby peers
+    --books-dir <path>  Where received book files are written
+    --covers-dir <path> Where received covers are written
+    --pull-interval-secs <n>  How often to pull from outbound peers (default: 60)
     -h, --help          Print this help
 ";
 

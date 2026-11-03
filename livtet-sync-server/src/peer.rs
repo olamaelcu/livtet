@@ -1,10 +1,9 @@
 //! How this daemon talks to one paired peer.
 //!
-//! A peer is dialled, never awaited: sync data moves over iroh streams under
-//! [`livtet_sync_iroh::SYNC_ALPN`], which need no reachable port on either side.
-//! Rows paired before the transport change have no node id, so they keep using
-//! the HTTP surface until they are paired again; that branch disappears with
-//! `livtet-sync-http`.
+//! A peer is dialled by its iroh node id: sync data moves over framed streams
+//! under [`livtet_sync_iroh::SYNC_ALPN`], so neither side needs a reachable
+//! inbound port and no address is stored on the pairing row. iroh resolves the
+//! node id to a current path on every dial.
 
 use std::sync::Arc;
 
@@ -16,89 +15,43 @@ use crate::daemon::DaemonState;
 use crate::error::ServerError;
 use livtet_sync_iroh::{Request, Response};
 
-/// One peer's live transport.
-pub enum Peer {
-    /// A framed iroh stream to the peer's node id.
-    Iroh {
-        connection: livtet_sync_iroh::Connection,
-        token: String,
-        node_id: String,
-    },
-    /// The retiring HTTP surface, for a row that predates node ids.
-    Http {
-        client: reqwest::Client,
-        base: String,
-        token: String,
-    },
+/// One peer's framed stream.
+pub struct Peer {
+    connection: livtet_sync_iroh::Connection,
+    token: String,
 }
 
 impl Peer {
-    /// Open a transport for a paired device.
-    ///
-    /// Prefers iroh whenever the row carries a node id and the endpoint is
-    /// bound: it is the only transport that works when the peer cannot accept
-    /// an inbound connection.
+    /// Dial a paired device by node id.
     pub async fn connect(
         state: &Arc<DaemonState>,
-        node_id: Option<&str>,
-        listen_on: Option<&str>,
+        node_id: &str,
         token: &str,
     ) -> Result<Peer, ServerError> {
-        let mut dial_error = None;
-        if let Some(node_id) = node_id.map(str::trim).filter(|id| !id.is_empty()) {
-            let endpoint = state
-                .discovery
-                .lock()
-                .await
-                .as_ref()
-                .map(|service| service.endpoint().clone());
-            if let Some(endpoint) = endpoint {
-                match livtet_sync_iroh::dial(&endpoint, node_id).await {
-                    Ok(connection) => {
-                        return Ok(Peer::Iroh {
-                            connection,
-                            token: token.to_string(),
-                            node_id: node_id.to_string(),
-                        });
-                    }
-                    // A peer that cannot be dialled by id may still be
-                    // reachable on its stored address (an older build, or a
-                    // relay that is down while the LAN is up), so fall through
-                    // instead of failing the pull outright.
-                    Err(error) => {
-                        tracing::debug!(%node_id, %error, "could not dial by node id");
-                        dial_error = Some(error);
-                    }
-                }
-            }
+        let node_id = node_id.trim();
+        if node_id.is_empty() {
+            return Err(ServerError::Server(
+                "the peer has no node id to dial".to_string(),
+            ));
         }
-
-        let listen_on = listen_on
-            .map(str::trim)
-            .filter(|address| !address.is_empty())
-            .ok_or_else(|| match dial_error {
-                Some(error) => ServerError::Server(format!("reach the peer: {error}")),
-                None => ServerError::Server(
-                    "the peer has neither a node id nor an address to reach it on".to_string(),
-                ),
+        let endpoint = state
+            .discovery
+            .lock()
+            .await
+            .as_ref()
+            .map(|service| service.endpoint().clone())
+            .ok_or_else(|| {
+                ServerError::Server(
+                    "peer discovery is not bound, so the peer cannot be dialled".to_string(),
+                )
             })?;
-        let client = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(120))
-            .build()
-            .map_err(|error| ServerError::Server(format!("peer client: {error}")))?;
-        Ok(Peer::Http {
-            client,
-            base: format!("http://{}", listen_on.trim_end_matches('/')),
+        let connection = livtet_sync_iroh::dial(&endpoint, node_id)
+            .await
+            .map_err(|error| ServerError::Server(format!("reach the peer: {error}")))?;
+        Ok(Peer {
+            connection,
             token: token.to_string(),
         })
-    }
-
-    /// Where this peer is reached, for logs and errors.
-    pub fn describe(&self) -> String {
-        match self {
-            Peer::Iroh { node_id, .. } => format!("iroh:{node_id}"),
-            Peer::Http { base, .. } => base.clone(),
-        }
     }
 
     /// Changes after `since_version`, addressed to this device.
@@ -107,52 +60,22 @@ impl Peer {
         since_version: i64,
         limit: i64,
     ) -> Result<PullResponse, ServerError> {
-        match self {
-            Peer::Iroh {
-                connection, token, ..
-            } => {
-                let exchange = livtet_sync_iroh::call(
-                    connection,
-                    &Request::Changes {
-                        token: token.clone(),
-                        since_version,
-                        limit: Some(limit),
-                    },
-                )
-                .await
-                .map_err(|error| ServerError::Server(format!("pull changes: {error}")))?;
-                match exchange.response {
-                    Response::Changes(pull) => Ok(pull),
-                    Response::Denied { reason } => Err(ServerError::Server(format!(
-                        "pull changes refused: {reason}"
-                    ))),
-                    other => Err(unexpected(&other, "changes")),
-                }
-            }
-            Peer::Http {
-                client,
-                base,
-                token,
-            } => {
-                let response = client
-                    .get(format!(
-                        "{base}/sync/changes?since_version={since_version}&limit={limit}"
-                    ))
-                    .header("x-livtet-session", token)
-                    .send()
-                    .await
-                    .map_err(|error| ServerError::Server(format!("pull changes: {error}")))?;
-                if !response.status().is_success() {
-                    return Err(ServerError::Server(format!(
-                        "pull changes returned HTTP {}",
-                        response.status()
-                    )));
-                }
-                response
-                    .json()
-                    .await
-                    .map_err(|error| ServerError::Server(format!("pull changes body: {error}")))
-            }
+        let exchange = livtet_sync_iroh::call(
+            &self.connection,
+            &Request::Changes {
+                token: self.token.clone(),
+                since_version,
+                limit: Some(limit),
+            },
+        )
+        .await
+        .map_err(|error| ServerError::Server(format!("pull changes: {error}")))?;
+        match exchange.response {
+            Response::Changes(pull) => Ok(pull),
+            Response::Denied { reason } => Err(ServerError::Server(format!(
+                "pull changes refused: {reason}"
+            ))),
+            other => Err(unexpected(&other, "changes")),
         }
     }
 
@@ -162,65 +85,36 @@ impl Peer {
         inventory_id: &str,
         dest: &Utf8Path,
     ) -> Result<(), ServerError> {
-        match self {
-            Peer::Iroh {
-                connection, token, ..
-            } => {
-                let exchange = livtet_sync_iroh::call(
-                    connection,
-                    &Request::File {
-                        token: token.clone(),
-                        inventory_id: inventory_id.to_string(),
-                        offset: 0,
-                        length: None,
-                    },
-                )
-                .await
-                .map_err(|error| ServerError::Server(format!("download file: {error}")))?;
-                match &exchange.response {
-                    Response::File(_) => {}
-                    Response::Denied { reason } => {
-                        return Err(ServerError::Server(format!(
-                            "download file refused: {reason}"
-                        )));
-                    }
-                    other => return Err(unexpected(other, "file")),
-                }
-                let mut stream = exchange
-                    .bytes
-                    .ok_or_else(|| ServerError::Server("file reply had no bytes".to_string()))?;
-                let mut file = fs_err::tokio::File::create(dest.as_std_path())
-                    .await
-                    .map_err(|error| {
-                        ServerError::Server(format!("write received file: {error}"))
-                    })?;
-                tokio::io::copy(&mut stream, &mut file)
-                    .await
-                    .map_err(|error| ServerError::Server(format!("receive file: {error}")))?;
-                Ok(())
+        let exchange = livtet_sync_iroh::call(
+            &self.connection,
+            &Request::File {
+                token: self.token.clone(),
+                inventory_id: inventory_id.to_string(),
+                offset: 0,
+                length: None,
+            },
+        )
+        .await
+        .map_err(|error| ServerError::Server(format!("download file: {error}")))?;
+        match &exchange.response {
+            Response::File(_) => {}
+            Response::Denied { reason } => {
+                return Err(ServerError::Server(format!(
+                    "download file refused: {reason}"
+                )));
             }
-            Peer::Http {
-                client,
-                base,
-                token,
-            } => {
-                let bytes = client
-                    .get(format!("{base}/sync/files/{inventory_id}"))
-                    .header("x-livtet-session", token)
-                    .send()
-                    .await
-                    .map_err(|error| ServerError::Server(format!("download file: {error}")))?
-                    .bytes()
-                    .await
-                    .map_err(|error| ServerError::Server(format!("download file body: {error}")))?;
-                fs_err::tokio::write(dest.as_std_path(), &bytes)
-                    .await
-                    .map_err(|error| {
-                        ServerError::Server(format!("write received file: {error}"))
-                    })?;
-                Ok(())
-            }
+            other => return Err(unexpected(other, "file")),
         }
+        let mut stream = exchange
+            .bytes
+            .ok_or_else(|| ServerError::Server("file reply had no bytes".to_string()))?;
+        let mut file = fs_err::tokio::File::create(dest.as_std_path())
+            .await
+            .map_err(|error| ServerError::Server(format!("write received file: {error}")))?;
+        tokio::io::copy(&mut stream, &mut file)
+            .await
+            .map_err(|error| ServerError::Server(format!("receive file: {error}")))?;
+        Ok(())
     }
 
     /// The extracted cover for `inventory_id`, as `(content type, bytes)`.
@@ -228,106 +122,48 @@ impl Peer {
         &self,
         inventory_id: &str,
     ) -> Result<Option<(String, Vec<u8>)>, ServerError> {
-        match self {
-            Peer::Iroh {
-                connection, token, ..
-            } => {
-                let exchange = livtet_sync_iroh::call(
-                    connection,
-                    &Request::Cover {
-                        token: token.clone(),
-                        inventory_id: inventory_id.to_string(),
-                    },
-                )
-                .await
-                .map_err(|error| ServerError::Server(format!("download cover: {error}")))?;
-                let header = match &exchange.response {
-                    Response::Cover(header) => header.clone(),
-                    Response::Missing { .. } | Response::Denied { .. } => return Ok(None),
-                    other => return Err(unexpected(other, "cover")),
-                };
-                let mut stream = exchange
-                    .bytes
-                    .ok_or_else(|| ServerError::Server("cover reply had no bytes".to_string()))?;
-                let mut bytes = Vec::with_capacity(header.length as usize);
-                tokio::io::AsyncReadExt::read_to_end(&mut stream, &mut bytes)
-                    .await
-                    .map_err(|error| ServerError::Server(format!("receive cover: {error}")))?;
-                Ok(Some((header.content_type, bytes)))
-            }
-            Peer::Http {
-                client,
-                base,
-                token,
-            } => {
-                let response = client
-                    .get(format!("{base}/sync/covers/{inventory_id}"))
-                    .header("x-livtet-session", token)
-                    .send()
-                    .await
-                    .map_err(|error| ServerError::Server(format!("download cover: {error}")))?;
-                if !response.status().is_success() {
-                    return Ok(None);
-                }
-                let content_type = response
-                    .headers()
-                    .get(reqwest::header::CONTENT_TYPE)
-                    .and_then(|value| value.to_str().ok())
-                    .unwrap_or("image/png")
-                    .to_string();
-                let bytes = response.bytes().await.map_err(|error| {
-                    ServerError::Server(format!("download cover body: {error}"))
-                })?;
-                Ok(Some((content_type, bytes.to_vec())))
-            }
-        }
+        let exchange = livtet_sync_iroh::call(
+            &self.connection,
+            &Request::Cover {
+                token: self.token.clone(),
+                inventory_id: inventory_id.to_string(),
+            },
+        )
+        .await
+        .map_err(|error| ServerError::Server(format!("download cover: {error}")))?;
+        let header = match &exchange.response {
+            Response::Cover(header) => header.clone(),
+            Response::Missing { .. } | Response::Denied { .. } => return Ok(None),
+            other => return Err(unexpected(other, "cover")),
+        };
+        let mut stream = exchange
+            .bytes
+            .ok_or_else(|| ServerError::Server("cover reply had no bytes".to_string()))?;
+        let mut bytes = Vec::with_capacity(header.length as usize);
+        tokio::io::AsyncReadExt::read_to_end(&mut stream, &mut bytes)
+            .await
+            .map_err(|error| ServerError::Server(format!("receive cover: {error}")))?;
+        Ok(Some((header.content_type, bytes)))
     }
 
     /// Tell the sender what became of an offer it made.
     pub async fn offer_decision(&self, offer_id: &str, accepted: bool) -> Result<(), ServerError> {
-        match self {
-            Peer::Iroh {
-                connection, token, ..
-            } => {
-                let exchange = livtet_sync_iroh::call(
-                    connection,
-                    &Request::OfferDecision {
-                        token: token.clone(),
-                        offer_id: offer_id.to_string(),
-                        accepted,
-                    },
-                )
-                .await
-                .map_err(|error| ServerError::Server(format!("offer decision: {error}")))?;
-                match exchange.response {
-                    Response::OfferDecided => Ok(()),
-                    Response::Denied { reason } => Err(ServerError::Server(format!(
-                        "offer decision refused: {reason}"
-                    ))),
-                    other => Err(unexpected(&other, "offer decision")),
-                }
-            }
-            Peer::Http {
-                client,
-                base,
-                token,
-            } => {
-                let response = client
-                    .post(format!("{base}/sync/offers/{offer_id}/decision"))
-                    .header("x-livtet-session", token)
-                    .json(&serde_json::json!({ "accepted": accepted }))
-                    .send()
-                    .await
-                    .map_err(|error| ServerError::Server(format!("offer decision: {error}")))?;
-                if response.status().is_success() {
-                    Ok(())
-                } else {
-                    Err(ServerError::Server(format!(
-                        "offer decision returned HTTP {}",
-                        response.status()
-                    )))
-                }
-            }
+        let exchange = livtet_sync_iroh::call(
+            &self.connection,
+            &Request::OfferDecision {
+                token: self.token.clone(),
+                offer_id: offer_id.to_string(),
+                accepted,
+            },
+        )
+        .await
+        .map_err(|error| ServerError::Server(format!("offer decision: {error}")))?;
+        match exchange.response {
+            Response::OfferDecided => Ok(()),
+            Response::Denied { reason } => Err(ServerError::Server(format!(
+                "offer decision refused: {reason}"
+            ))),
+            other => Err(unexpected(&other, "offer decision")),
         }
     }
 }
@@ -368,8 +204,7 @@ pub async fn peer_by_id(state: &Arc<DaemonState>, device_id: &str) -> Result<Pee
 /// Load the transport details for a paired device.
 ///
 /// Only an outbound row can be dialled: its session token was issued by the
-/// peer, so it authenticates there. An approval row holds a token this device
-/// issued, which the peer's server does not accept.
+/// peer, so it authenticates there. The row's node id is the address.
 pub async fn peer_for(state: &Arc<DaemonState>, device_id: DbId) -> Result<Peer, ServerError> {
     use livtet_data::client_entities::paired_devices;
     use livtet_data::orm::EntityTrait;
@@ -397,7 +232,6 @@ pub async fn peer_for(state: &Arc<DaemonState>, device_id: DbId) -> Result<Peer,
             .fetch_one(&state.pool)
             .await
             .unwrap_or(None);
-    let listen_on = row.listen_on.as_ref().map(ToString::to_string);
 
-    Peer::connect(state, node_id.as_deref(), listen_on.as_deref(), &token).await
+    Peer::connect(state, node_id.as_deref().unwrap_or_default(), &token).await
 }

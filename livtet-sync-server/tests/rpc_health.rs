@@ -6,6 +6,7 @@ use std::time::Duration;
 use camino::{Utf8Path, Utf8PathBuf};
 use fs_err as fs;
 use livtet_sync_server::rpc::{self, StdioClient};
+use livtet_types::{DbId, PairingStatus};
 
 /// Deterministic 32-byte key so tests never touch the OS keyring.
 const TEST_DISCOVERY_KEY: &str = "0101010101010101010101010101010101010101010101010101010101010101";
@@ -68,8 +69,20 @@ async fn rpc_health_status_pairing_roundtrip() {
     let health = health.result.expect("health result");
     assert_eq!(health["status"].as_str(), Some("ok"));
     assert!(health["version"].as_str().is_some());
-    assert_eq!(health["server_running"].as_bool(), Some(true));
-    assert!(health["port"].as_u64().unwrap_or(0) > 0);
+    assert!(
+        health["node_id"]
+            .as_str()
+            .is_some_and(|value| !value.is_empty()),
+        "health must name the node peers dial: {health}"
+    );
+    assert!(
+        health["port"].as_u64().is_some(),
+        "health reports the endpoint port: {health}"
+    );
+    assert!(
+        health.get("server_running").is_none(),
+        "the HTTP server is gone: {health}"
+    );
 
     // `status`
     let status = client
@@ -78,26 +91,21 @@ async fn rpc_health_status_pairing_roundtrip() {
         .expect("status response");
     assert!(status.error.is_none(), "status error: {:?}", status.error);
     let status = status.result.expect("status result");
+    let device_id = status["device_id"]
+        .as_str()
+        .expect("device_id must be a non-empty string");
+    assert!(!device_id.is_empty());
     assert!(
-        status["device_id"]
+        status["node_id"]
             .as_str()
-            .map(|value| !value.is_empty())
-            .unwrap_or(false),
-        "device_id must be a non-empty string: {status}"
+            .is_some_and(|value| !value.is_empty()),
+        "status must name the node peers dial: {status}"
     );
-    assert_eq!(status["server_running"].as_bool(), Some(true));
-    assert!(status["port"].as_u64().unwrap_or(0) > 0);
-
-    // `requests.recent`
-    let recent = client
-        .request(
-            rpc::method::REQUESTS_RECENT,
-            serde_json::json!({ "limit": 10 }),
-        )
-        .await
-        .expect("requests.recent response");
-    assert!(recent.error.is_none(), "recent error: {:?}", recent.error);
-    assert!(recent.result.expect("recent result").is_array());
+    assert!(status["port"].as_u64().is_some());
+    assert!(
+        status.get("server_running").is_none() && status.get("host").is_none(),
+        "no HTTP lifecycle fields remain: {status}"
+    );
 
     // `pairing.begin`
     let begin = client
@@ -111,6 +119,10 @@ async fn rpc_health_status_pairing_roundtrip() {
     assert!(
         begin["token"].is_null() && begin["uri"].is_null(),
         "the identity contract mints no token or pairing URI: {begin}"
+    );
+    assert!(
+        begin["listen_on"].is_null(),
+        "there is no HTTP endpoint to advertise: {begin}"
     );
     assert_eq!(
         begin["identity"]["node_id"].as_str(),
@@ -147,53 +159,11 @@ async fn rpc_health_status_pairing_roundtrip() {
         "unclaimed ticket must not be counted as a pending pairing: {status}"
     );
 
-    // A pair request from the loopback address shares the server's IP, so its
-    // origin normalizes to the server's own `ip:port` and stays hidden.
-    let host = status["host"].as_str().expect("host").to_string();
-    let port = status["port"].as_u64().expect("port");
-    let pair_url = format!("http://{host}:{port}{}", livtet_sync_http::PAIR_PATH);
-    let response = reqwest::Client::new()
-        .post(&pair_url)
-        .json(&serde_json::json!({
-            "device_id": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
-            "name": "Remote Phone",
-            "device_type": "android",
-            "node_id": node_id,
-        }))
-        .send()
-        .await
-        .expect("pair POST");
-    assert!(
-        response.status().is_success(),
-        "pair POST failed: {}",
-        response.status()
-    );
-
-    let list = client
-        .request(rpc::method::PAIRING_LIST, serde_json::json!({}))
-        .await
-        .expect("pairing.list response");
-    let list = list.result.expect("list result");
-    let entries = list.as_array().expect("list result is an array");
-    assert!(
-        !entries
-            .iter()
-            .any(|entry| entry["node_id"].as_str() == Some(node_id.as_str())),
-        "a request from the server's own IP must be excluded: {list}"
-    );
-
-    let status = client
-        .request(rpc::method::STATUS, serde_json::json!({}))
-        .await
-        .expect("status response");
-    let status = status.result.expect("status result");
-    assert_eq!(
-        status["pending_pairing_count"].as_i64(),
-        Some(0),
-        "a request from the server's own IP must not be counted: {status}"
-    );
-
-    // A request from another host is a real pairing: it is listed and counted.
+    // A claim that arrived over iroh has no socket origin; it is the row the
+    // accept loop writes before holding the stream for a decision.
+    let remote_node_id = "aa11bb22cc33dd44ee55ff6677889900aabbccddeeff00112233445566778899";
+    let remote_device_id: DbId = "01ARZ3NDEKTSV4RRFFQ69G5FAV".parse().expect("device id");
+    let local_device_id: DbId = device_id.parse().expect("local device id");
     let pool = livtet_data::sql::sqlite::SqlitePoolOptions::new()
         .connect_with(
             livtet_data::sql::sqlite::SqliteConnectOptions::new()
@@ -202,12 +172,21 @@ async fn rpc_health_status_pairing_roundtrip() {
         )
         .await
         .expect("open db");
-    livtet_data::sql::query("UPDATE pending_pairings SET origin_addr = ? WHERE token = ?")
-        .bind(format!("10.0.0.5:{port}"))
-        .bind(node_id.clone())
-        .execute(&pool)
-        .await
-        .expect("stamp remote origin");
+    livtet_data::sql::query(
+        "INSERT INTO pending_pairings \
+             (token, desktop_id, listen_on, status_id, device_name, device_type_id, \
+              device_id, origin_addr, created_at, expires_at) \
+         VALUES (?, ?, NULL, ?, 'Remote Phone', NULL, ?, NULL, datetime('now'), \
+                 datetime('now', '+5 minutes'))",
+    )
+    .bind(remote_node_id)
+    .bind(local_device_id.to_bytes().to_vec())
+    .bind(DbId::from(PairingStatus::Pending).to_bytes().to_vec())
+    .bind(remote_device_id.to_bytes().to_vec())
+    .execute(&pool)
+    .await
+    .expect("seed an iroh claim");
+    pool.close().await;
 
     let list = client
         .request(rpc::method::PAIRING_LIST, serde_json::json!({}))
@@ -218,8 +197,8 @@ async fn rpc_health_status_pairing_roundtrip() {
     assert!(
         entries
             .iter()
-            .any(|entry| entry["node_id"].as_str() == Some(node_id.as_str())),
-        "remote-origin pairing missing from pairing.list: {list}"
+            .any(|entry| entry["node_id"].as_str() == Some(remote_node_id)),
+        "an iroh claim must be listed: {list}"
     );
 
     let status = client
@@ -230,40 +209,7 @@ async fn rpc_health_status_pairing_roundtrip() {
     assert_eq!(
         status["pending_pairing_count"].as_i64(),
         Some(1),
-        "remote-origin pairing must be counted: {status}"
-    );
-
-    // Stamping the server's own address drops it back out of the list.
-    livtet_data::sql::query("UPDATE pending_pairings SET origin_addr = ? WHERE token = ?")
-        .bind(format!("{host}:{port}"))
-        .bind(node_id.clone())
-        .execute(&pool)
-        .await
-        .expect("stamp self origin");
-    pool.close().await;
-
-    let list = client
-        .request(rpc::method::PAIRING_LIST, serde_json::json!({}))
-        .await
-        .expect("pairing.list response");
-    let list = list.result.expect("list result");
-    let entries = list.as_array().expect("list result is an array");
-    assert!(
-        !entries
-            .iter()
-            .any(|entry| entry["node_id"].as_str() == Some(node_id.as_str())),
-        "self-originated pairing must be excluded: {list}"
-    );
-
-    let status = client
-        .request(rpc::method::STATUS, serde_json::json!({}))
-        .await
-        .expect("status response");
-    let status = status.result.expect("status result");
-    assert_eq!(
-        status["pending_pairing_count"].as_i64(),
-        Some(0),
-        "self-originated pairing must not be counted: {status}"
+        "an iroh claim must be counted: {status}"
     );
 
     // `shutdown`

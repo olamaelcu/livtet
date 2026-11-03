@@ -9,7 +9,6 @@ members = [
   "livtet-temporal-quotes",
   "livtet-data",
   "livtet-sync",
-  "livtet-sync-http",
   "livtet-sync-iroh",
   "livtet-sync-server",
   "livtet-search",
@@ -39,7 +38,6 @@ livtet-iroh = { path = "livtet-iroh" }
 livtet-cli-common = { path = "livtet-cli-common" }
 livtet-data = { path = "livtet-data" }
 livtet-sync = { path = "livtet-sync" }
-livtet-sync-http = { path = "livtet-sync-http" }
 livtet-sync-iroh = { path = "livtet-sync-iroh" }
 livtet-sync-server = { path = "livtet-sync-server" }
 livtet-ffi = { path = "livtet-ffi" }
@@ -85,9 +83,7 @@ toml = { version = "1.1" }
 blurhash = "0.2.3"
 image = "0.25.10"
 
-# HTTP
 livtet-covers = { path = "livtet-covers" }
-reqwest = { version = "0.13", default-features = false }
 
 # o11y
 tracing = "0.1"

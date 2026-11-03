@@ -8,6 +8,17 @@ Accepted. Supersedes the transport half of [1](0001-split-sync-into-domain-trans
 and the address handling of [6](0006-re-resolve-a-paired-peers-address-from-its-advertisement.md),
 including the `listen_on` that [7](0007-pairing-is-mutual.md) adds to the claim.
 
+Implemented. `livtet/sync/1` is the only sync transport: the `poem` server,
+the `reqwest` client crate, the `server.start`/`server.stop`/`requests.recent`
+RPCs, the HTTP request log and its counters are gone. Pairing fan-out and
+offer-decision delivery live in `livtet-sync-server::pairing`, owned by the
+daemon rather than a process-global registry. Two details landed differently
+from the Decision below: the transport-agnostic DTO/client layer was not kept
+(nothing consumed it after the cutover), and `--host`/`--lan` were retired
+while `--port` now selects the iroh endpoint's UDP port. mDNS still advertises
+`_livtet-sync._tcp` for app discovery; its SRV port is informational and is
+never dialled as an HTTP surface.
+
 ## Context
 
 Sync data travels over plain HTTP. `livtet-sync-http` serves `/sync/*` from a
@@ -88,10 +99,10 @@ Sync moves onto iroh request/response streams and `livtet-sync-http` is deleted.
 - **The approval window is now a live connection.** A pairing claim that waits
   minutes for a human must survive QUIC idle timeouts; the claimant needs to
   keep the stream (or reconnect) rather than treat a closed stream as a refusal.
-- **Anything outside this workspace that speaks `/sync/*` breaks.** The
-  `_livtet-sync._tcp` record exists partly for the iOS (`NWBrowser`) and Android
-  (`NsdManager`) clients; those clients must move to the framed protocol before
-  the HTTP surface is removed.
+- **Anything outside this workspace that speaks `/sync/*` broke when the
+  surface was removed.** The `_livtet-sync._tcp` record exists partly for the
+  iOS (`NWBrowser`) and Android (`NsdManager`) clients; those clients must move
+  to the framed protocol.
 - iroh 1.x is now on the critical path for data, not just discovery, so an
   upstream breaking change is a sync outage rather than a discovery degradation.
 
@@ -108,5 +119,9 @@ Sync moves onto iroh request/response streams and `livtet-sync-http` is deleted.
    workspace.
 5. Desktop: drop the firewall hint and the HTTP probes, regenerate bindings.
 
-Until step 4 the firewall hint in the desktop stays: it is the only thing that
-makes a firewalled peer work today.
+Steps 2–4 are implemented in this workspace; step 5 lives in the desktop
+checkout. Step 1's generic `SyncHttpClient` / `SyncSession` / request DTOs were
+deleted with the crate instead of moving into `livtet-sync`: the framed
+protocol has its own wire types and no caller remained. The desktop's firewall
+hint can go with step 5: it existed to make an inbound HTTP port reachable, and
+no side opens one now.

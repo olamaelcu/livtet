@@ -25,9 +25,7 @@ pub mod method {
     pub const HEALTH: &str = "health";
     /// Aggregate daemon/server status.
     pub const STATUS: &str = "status";
-    /// Recently served HTTP requests.
-    pub const REQUESTS_RECENT: &str = "requests.recent";
-    /// Start a new pairing session (mint a token + `livtet://` URI).
+    /// Publish this device's pairing identity.
     pub const PAIRING_BEGIN: &str = "pairing.begin";
     /// List outstanding pending pairings.
     pub const PAIRING_LIST: &str = "pairing.list";
@@ -39,7 +37,7 @@ pub mod method {
     pub const PAIRING_APPROVE: &str = "pairing.approve";
     /// Reject a pending pairing.
     pub const PAIRING_REJECT: &str = "pairing.reject";
-    /// Claim a peer's pairing surface and wait for its approval.
+    /// Dial a peer and wait for its approval on the same stream.
     pub const PAIRING_CLAIM: &str = "pairing.claim";
     /// List paired devices.
     pub const DEVICES_LIST: &str = "devices.list";
@@ -59,35 +57,19 @@ pub mod method {
     pub const CONFLICTS_LIST: &str = "conflicts.list";
     /// Resolve a sync conflict.
     pub const CONFLICTS_RESOLVE: &str = "conflicts.resolve";
-    /// Start the embedded HTTP server.
-    pub const SERVER_START: &str = "server.start";
-    /// Stop the embedded HTTP server.
-    pub const SERVER_STOP: &str = "server.stop";
     /// Stop the server and exit the daemon loop.
     pub const SHUTDOWN: &str = "shutdown";
 
-    /// Notification: a remote device requested pairing (`POST /sync/pair`).
+    /// Notification: a remote device filed a pairing claim.
     pub const NOTIFY_PAIRING_REQUESTED: &str = "pairing.requested";
     /// Notification: this device's own claim was approved and stored.
     pub const NOTIFY_PAIRING_CLAIMED: &str = "pairing.claimed";
-    /// Notification: the server served an HTTP request.
-    pub const NOTIFY_REQUEST_RECEIVED: &str = "request.received";
-    /// Notification: a sync push/pull completed.
-    pub const NOTIFY_SYNC_COMPLETED: &str = "sync.completed";
     /// Notification: a pull from a paired device applied changes here.
-    ///
-    /// Distinct from [`NOTIFY_SYNC_COMPLETED`], which reports a request this
-    /// device *served*: this one means the local catalog grew, so a UI showing
-    /// it has something new to read.
     pub const NOTIFY_SYNC_PULLED: &str = "sync.pulled";
     /// Notification: a paired device offered a book this desktop should ask about.
     pub const NOTIFY_OFFER_RECEIVED: &str = "offer.received";
     /// Notification: a paired device answered an offer this desktop sent.
     pub const NOTIFY_OFFER_DECIDED: &str = "offer.decided";
-    /// Notification: the embedded HTTP server started.
-    pub const NOTIFY_SERVER_STARTED: &str = "server.started";
-    /// Notification: the embedded HTTP server stopped.
-    pub const NOTIFY_SERVER_STOPPED: &str = "server.stopped";
 }
 
 /// JSON-RPC 2.0 error codes.
@@ -222,8 +204,6 @@ pub struct OfferBookParams {
 /// Parameters for [`method::PAIRING_CLAIM`].
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PairingClaimParams {
-    /// Peer's advertised HTTP endpoint, `host:port`.
-    pub listen_on: String,
     /// Peer node id from discovery, used as the pairing key.
     pub node_id: String,
     /// Friendly name the peer showed in discovery.
@@ -252,13 +232,6 @@ pub struct ResolveParams {
     pub resolution: String,
     #[serde(default)]
     pub merged_payload: Option<String>,
-}
-
-/// Parameters for [`method::REQUESTS_RECENT`].
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct RecentParams {
-    #[serde(default)]
-    pub limit: Option<usize>,
 }
 
 /// Decode a single NDJSON line into a [`RpcMessage`].

@@ -2,14 +2,14 @@
 //!
 //! The iOS and Android clients browse `_livtet-sync._tcp` (`NWBrowser` and
 //! `NsdManager` respectively) and read the peer's node id from the TXT record.
-//! The SRV record carries the HTTP port, so a discovered peer is immediately
-//! reachable for `POST /sync/pair`. The desktop does the same browse on request
-//! (`discovery.nearby`) to populate its nearby-device list.
+//! Pairing dials that node id over iroh, so the SRV port is informational only:
+//! nothing opens an HTTP connection to it. The desktop does the same browse on
+//! request (`discovery.nearby`) to populate its nearby-device list.
 //!
 //! This is deliberately separate from iroh's own mDNS address lookup
 //! (`livtet-iroh`): iroh publishes node-id → address records for QUIC
 //! connections and resolves a known id, while this record tells the *apps*
-//! which peers exist and where the HTTP pairing surface is.
+//! which peers exist and what their node id and display name are.
 
 use std::collections::HashMap;
 use std::net::IpAddr;
@@ -72,10 +72,11 @@ impl Advertiser {
     /// `device_name` is the display name peers read from the TXT record; a
     /// `None` or blank value falls back to [`friendly_name`].
     ///
-    /// `ip` is the address the HTTP server actually bound. An unspecified
-    /// address (`0.0.0.0`) switches the record to "all interface addresses";
-    /// a loopback address is published as-is, which is only reachable from the
-    /// same machine (or an iOS simulator sharing its network stack).
+    /// `ip` is an address the iroh endpoint bound; `port` is its UDP port. An
+    /// unspecified address (`0.0.0.0`) switches the record to "all interface
+    /// addresses"; a loopback address is published as-is, which is only
+    /// reachable from the same machine (or an iOS simulator sharing its
+    /// network stack). Neither is dialled as an HTTP surface.
     pub fn start(
         node_id: &str,
         device_id: &str,
@@ -110,8 +111,9 @@ impl Advertiser {
 
 /// One peer heard advertising `_livtet-sync._tcp` on the local network.
 ///
-/// Everything here comes from the advertisement: the node id is the pairing
-/// key, and the addresses + port are what `POST /sync/pair` would be sent to.
+/// Everything here comes from the advertisement: the node id is the pairing key
+/// and the only thing a dial needs. The addresses and port describe the SRV
+/// record for display; they are not an HTTP endpoint.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct NearbyPeer {
     /// Node id from the TXT record; the value a pairing key is made of.
@@ -128,7 +130,7 @@ pub struct NearbyPeer {
     pub hostname: String,
     /// Reachable addresses in stable order (IPv4 and IPv6, as advertised).
     pub addresses: Vec<String>,
-    /// Port the peer's HTTP pairing surface listens on.
+    /// UDP port from the SRV record; informational, never dialled directly.
     pub port: u16,
 }
 
@@ -292,7 +294,7 @@ mod tests {
     }
 
     #[test]
-    fn record_carries_the_node_identity_and_http_port() {
+    fn record_carries_the_node_identity_and_endpoint_port() {
         let info = service_info(
             "aa11bb22cc33dd44ee55ff6677889900",
             "01ARZ3NDEKTSV4RRFFQ69G5FAV",

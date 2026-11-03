@@ -2,90 +2,101 @@
 //! holds the rows that describe it; the reader's decision is what downloads
 //! the file, applies those rows, and tells the sender.
 //!
-//! The peer is a stub HTTP server rather than a second daemon: what matters
+//! The peer is a stub iroh endpoint rather than a second daemon: what matters
 //! here is this daemon's half of the protocol — the rows it records, the file
-//! it fetches, and the message it posts back.
+//! it fetches, and the decision it sends back.
 
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use camino::{Utf8Path, Utf8PathBuf};
 use fs_err as fs;
+use livtet_iroh::{DiscoveryService, SecretKey};
 use livtet_sync::{PullResponse, SyncChange};
+use livtet_sync_iroh::{FileHeader, Handler, Outcome, Request, Response};
 use livtet_sync_server::rpc::{self, StdioClient};
 use livtet_types::DbId;
-use poem::{
-    EndpointExt, Route, Server, get, handler,
-    http::StatusCode,
-    post,
-    web::{Data, Json, Path},
-};
 
 const TEST_DISCOVERY_KEY: &str = "0101010101010101010101010101010101010101010101010101010101010101";
 
 /// What the stub peer served and what the daemon told it.
 #[derive(Default)]
 struct PeerState {
-    /// The page every `/sync/changes` call returns.
+    /// The page every changes call returns.
     changes: Mutex<Vec<SyncChange>>,
-    /// `(offer_id, accepted)` for every decision the daemon posted.
+    /// `(offer_id, accepted)` for every decision the daemon sent.
     decisions: Mutex<Vec<(String, bool)>>,
 }
 
-#[handler]
-async fn peer_changes(Data(state): Data<&Arc<PeerState>>) -> Json<PullResponse> {
-    let response = PullResponse {
-        changes: state.changes.lock().expect("changes lock").clone(),
-        has_more: false,
-        latest_version: 100,
-    };
-    Json(response)
+/// A stub peer: the node id the daemon dials, its state, and the live endpoint.
+struct StubPeer {
+    node_id: String,
+    state: Arc<PeerState>,
+    /// Kept alive for the test; dropping it closes the endpoint.
+    _service: DiscoveryService,
 }
 
-#[handler]
-async fn peer_file(Path(_inventory_id): Path<String>) -> poem::Response {
-    poem::Response::builder()
-        .status(StatusCode::OK)
-        .header("Content-Type", "application/epub+zip")
-        .body(b"offered-book-bytes".to_vec())
-}
-
-#[handler]
-async fn peer_decision(
-    Path(offer_id): Path<String>,
-    Data(state): Data<&Arc<PeerState>>,
-    Json(body): Json<serde_json::Value>,
-) -> Json<serde_json::Value> {
-    let accepted = body
-        .get("accepted")
-        .and_then(serde_json::Value::as_bool)
-        .unwrap_or(false);
-    state
-        .decisions
-        .lock()
-        .expect("decisions lock")
-        .push((offer_id, accepted));
-    Json(serde_json::json!({ "ok": true }))
-}
-
-/// Start the stub peer and return its address and shared state.
-async fn start_peer() -> (String, Arc<PeerState>) {
+/// Start the stub peer and return its node id and shared state.
+async fn start_peer() -> StubPeer {
     let state = Arc::new(PeerState::default());
-    let app = Route::new()
-        .at("/sync/changes", get(peer_changes))
-        .at("/sync/files/:inventory_id", get(peer_file))
-        .at("/sync/offers/:offer_id/decision", post(peer_decision))
-        .with(poem::middleware::AddData::new(state.clone()));
+    let file = temp_path("peer-book");
+    fs::write(&file, b"offered-book-bytes").expect("write offered book");
 
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+    let service = DiscoveryService::bind_with_secret(SecretKey::generate())
         .await
-        .expect("bind stub peer");
-    let addr = listener.local_addr().expect("stub peer address");
-    let acceptor = poem::listener::TcpAcceptor::from_tokio(listener).expect("stub acceptor");
-    tokio::spawn(async move {
-        let _ = Server::new_with_acceptor(acceptor).run(app).await;
+        .expect("stub endpoint");
+    let node_id = service.node_id().0;
+
+    let handler: Handler = Arc::new({
+        let state = Arc::clone(&state);
+        move |request: Request, _remote: String| {
+            let state = Arc::clone(&state);
+            let file = file.clone();
+            Box::pin(async move {
+                match request {
+                    Request::Changes { .. } => Outcome::reply(Response::Changes(PullResponse {
+                        changes: state.changes.lock().expect("changes lock").clone(),
+                        has_more: false,
+                        latest_version: 100,
+                    })),
+                    Request::File { .. } => {
+                        let length = fs::metadata(&file).map(|meta| meta.len()).unwrap_or(0);
+                        Outcome::file(
+                            FileHeader {
+                                content_type: "application/epub+zip".to_string(),
+                                offset: 0,
+                                length,
+                            },
+                            file,
+                        )
+                    }
+                    Request::Cover { .. } => Outcome::reply(Response::Missing {
+                        reason: "no cover".to_string(),
+                    }),
+                    Request::OfferDecision {
+                        offer_id, accepted, ..
+                    } => {
+                        state
+                            .decisions
+                            .lock()
+                            .expect("decisions lock")
+                            .push((offer_id, accepted));
+                        Outcome::reply(Response::OfferDecided)
+                    }
+                    other => Outcome::reply(Response::Denied {
+                        reason: format!("unexpected request {other:?}"),
+                    }),
+                }
+            })
+        }
     });
-    (addr.to_string(), state)
+    livtet_sync_iroh::spawn_server(service.endpoint().clone(), handler);
+
+    StubPeer {
+        node_id,
+        state,
+        _service: service,
+    }
 }
 
 fn temp_path(tag: &str) -> Utf8PathBuf {
@@ -221,6 +232,27 @@ struct OfferSeed<'a> {
     edition: DbId,
 }
 
+/// Pair `device_id` with the stub, naming the node id a dial uses.
+async fn seed_paired_device(
+    pool: &livtet_data::sql::SqlitePool,
+    device_id: DbId,
+    node_id: Option<&str>,
+    token: &str,
+) {
+    livtet_data::sql::query(
+        "INSERT INTO paired_devices \
+             (device_id, name, listen_on, device_type_id, paired_at, last_sync_at, \
+              session_token, node_id, outbound) \
+         VALUES (?, 'Peer', NULL, NULL, datetime('now'), NULL, ?, ?, 1)",
+    )
+    .bind(device_id.to_bytes().to_vec())
+    .bind(token)
+    .bind(node_id.map(str::to_string))
+    .execute(pool)
+    .await
+    .expect("seed paired device");
+}
+
 /// The whole lifecycle: pull, list, decline one offer, accept the other.
 #[tokio::test]
 async fn a_pulled_offer_waits_for_the_reader_and_reports_its_decision() {
@@ -232,7 +264,7 @@ async fn a_pulled_offer_waits_for_the_reader_and_reports_its_decision() {
         fs::create_dir_all(dir.as_std_path()).expect("create temp dir");
     }
 
-    let (peer_addr, peer) = start_peer().await;
+    let peer = start_peer().await;
     let mut client = spawn_daemon(&db_path, &books, &covers).await;
 
     let status = ok_result(&mut client, rpc::method::STATUS, serde_json::json!({})).await;
@@ -271,20 +303,16 @@ async fn a_pulled_offer_waits_for_the_reader_and_reports_its_decision() {
     }));
 
     // The stub serves one page; the daemon records both offers from it.
-    *peer.changes.lock().expect("changes lock") = changes;
+    *peer.state.changes.lock().expect("changes lock") = changes;
 
     // The peer must be a paired, outbound device with a token this side holds.
-    livtet_data::sql::query(
-        "INSERT INTO paired_devices \
-             (device_id, name, listen_on, device_type_id, paired_at, last_sync_at, \
-              session_token, outbound) \
-         VALUES (?, 'Peer', ?, NULL, datetime('now'), NULL, 'peer-token', 1)",
+    seed_paired_device(
+        &pool_for(&db_path).await,
+        peer_device,
+        Some(&peer.node_id),
+        "peer-token",
     )
-    .bind(peer_device.to_bytes().to_vec())
-    .bind(peer_addr.clone())
-    .execute(&pool_for(&db_path).await)
-    .await
-    .expect("seed paired device");
+    .await;
 
     // A device this side claimed is the only kind that can be pulled from, and
     // the desktop needs the flag to tell the two listings apart.
@@ -384,6 +412,7 @@ async fn a_pulled_offer_waits_for_the_reader_and_reports_its_decision() {
     assert_eq!(contents, b"offered-book-bytes");
 
     let decided: Vec<(String, bool)> = peer
+        .state
         .decisions
         .lock()
         .expect("decisions lock")
@@ -423,16 +452,11 @@ async fn a_pulled_offer_waits_for_the_reader_and_reports_its_decision() {
     cleanup(&root);
 }
 
-/// A pull that cannot reach the peer reports that failure and leaves the
-/// pairing row alone.
-///
-/// A failed pull re-resolves the peer from its mDNS advertisement and retries;
-/// the stub here advertises nothing, so the original error is what the caller
-/// sees and the stored address is untouched. Rewriting it on a browse that
-/// heard nothing would replace a reachable address with a guess.
+/// A paired row with no node id has no address to dial: the pull says so
+/// rather than trying a stored socket address.
 #[tokio::test]
-async fn an_unreachable_peer_keeps_its_stored_address() {
-    let root = temp_path("unreachable");
+async fn a_peer_without_a_node_id_cannot_be_pulled() {
+    let root = temp_path("no-node-id");
     let books = root.join("books");
     let covers = root.join("covers");
     let db_path = root.join("sync.db");
@@ -445,26 +469,8 @@ async fn an_unreachable_peer_keeps_its_stored_address() {
     // seeding a row underneath it.
     ok_result(&mut client, rpc::method::STATUS, serde_json::json!({})).await;
 
-    // A port nothing listens on: bound to learn a free one, then released.
-    let port = std::net::TcpListener::bind("127.0.0.1:0")
-        .expect("ephemeral listener")
-        .local_addr()
-        .expect("listener address")
-        .port();
-    let dead_address = format!("127.0.0.1:{port}");
     let peer_device = DbId::new();
-
-    livtet_data::sql::query(
-        "INSERT INTO paired_devices \
-             (device_id, name, listen_on, device_type_id, paired_at, last_sync_at, \
-              session_token, outbound) \
-         VALUES (?, 'Gone Peer', ?, NULL, datetime('now'), NULL, 'peer-token', 1)",
-    )
-    .bind(peer_device.to_bytes().to_vec())
-    .bind(dead_address.clone())
-    .execute(&pool_for(&db_path).await)
-    .await
-    .expect("seed paired device");
+    seed_paired_device(&pool_for(&db_path).await, peer_device, None, "peer-token").await;
 
     let response = client
         .request(
@@ -473,22 +479,13 @@ async fn an_unreachable_peer_keeps_its_stored_address() {
         )
         .await
         .expect("pull transport");
-    let error = response.error.expect("an unreachable peer is an error");
+    let error = response
+        .error
+        .expect("a peer without a node id is an error");
     assert!(
-        error.message.contains("pull changes"),
-        "the transport failure must surface, not be swallowed: {}",
+        error.message.contains("no node id"),
+        "the refusal must name the missing address: {}",
         error.message
-    );
-
-    let stored: String =
-        livtet_data::sql::query_scalar("SELECT listen_on FROM paired_devices WHERE device_id = ?")
-            .bind(peer_device.to_bytes().to_vec())
-            .fetch_one(&pool_for(&db_path).await)
-            .await
-            .expect("stored address");
-    assert_eq!(
-        stored, dead_address,
-        "a browse that named no peer must not rewrite the address"
     );
 
     shutdown(&mut client).await;
@@ -507,7 +504,7 @@ async fn a_pull_that_applies_changes_tells_the_parent() {
         fs::create_dir_all(dir.as_std_path()).expect("create temp dir");
     }
 
-    let (peer_addr, peer) = start_peer().await;
+    let peer = start_peer().await;
     let mut client = spawn_daemon(&db_path, &books, &covers).await;
 
     let status = ok_result(&mut client, rpc::method::STATUS, serde_json::json!({})).await;
@@ -516,7 +513,7 @@ async fn a_pull_that_applies_changes_tells_the_parent() {
     // A plain catalog row: no offer, so the pull applies it immediately.
     let peer_device = DbId::new();
     let work = DbId::new();
-    *peer.changes.lock().expect("changes lock") = vec![SyncChange {
+    *peer.state.changes.lock().expect("changes lock") = vec![SyncChange {
         id: 1,
         entity_type: "work".to_string(),
         entity_id: work.to_hex(),
@@ -532,17 +529,13 @@ async fn a_pull_that_applies_changes_tells_the_parent() {
         device_id: peer_device.to_string(),
     }];
 
-    livtet_data::sql::query(
-        "INSERT INTO paired_devices \
-             (device_id, name, listen_on, device_type_id, paired_at, last_sync_at, \
-              session_token, outbound) \
-         VALUES (?, 'Peer', ?, NULL, datetime('now'), NULL, 'peer-token', 1)",
+    seed_paired_device(
+        &pool_for(&db_path).await,
+        peer_device,
+        Some(&peer.node_id),
+        "peer-token",
     )
-    .bind(peer_device.to_bytes().to_vec())
-    .bind(peer_addr.clone())
-    .execute(&pool_for(&db_path).await)
-    .await
-    .expect("seed paired device");
+    .await;
 
     let pulled = ok_result(
         &mut client,
@@ -552,8 +545,7 @@ async fn a_pull_that_applies_changes_tells_the_parent() {
     .await;
     assert_eq!(pulled["applied"].as_u64(), Some(1), "the row applied");
 
-    // Whatever else arrived first (the server announcing itself), the pull's
-    // notification has to be among them.
+    // Whatever else arrived first, the pull's notification has to be among them.
     let deadline = std::time::Instant::now() + Duration::from_secs(5);
     let mut reported = None;
     while std::time::Instant::now() < deadline && reported.is_none() {

@@ -12,7 +12,7 @@ Quick notes:
 
 ## New Contributor Guide
 
-This repo is a single Cargo workspace with sixteen crates. The list
+This repo is a single Cargo workspace with fifteen crates. The list
 below is the shortest path from "just cloned" to "I have an idea where
 to make a change."
 
@@ -37,8 +37,7 @@ livtet-data            DB owner (sea-orm, sqlx, migrator, seed, error)
 livtet-search          Search index (Tantivy)
 livtet-sync            Sync domain (change log, conflicts, wire DTOs)
 livtet-sync-iroh       Sync over iroh streams (framed requests, file/cover bodies)
-livtet-sync-http       Sync transport (reqwest client, poem server, pairing)
-livtet-sync-server     Sync daemon (HTTP server + NDJSON JSON-RPC on stdio)
+livtet-sync-server     Sync daemon (iroh streams + NDJSON JSON-RPC on stdio)
 livtet-core            Unison crate (data + covers + search + types)
 livtet-ffi             UniFFI surface for Android and iOS
 livtet-ruby            Magnus gem surface (paths, database open/close)
@@ -265,7 +264,7 @@ We use scope-prefixed commit messages (no type prefix). Format:
 
 - `<scope>` is required, lowercase, and indicates the area of the
   codebase touched. Common scopes: `livtet-data`, `livtet-core`,
-  `livtet-covers`, `livtet-search`, `livtet-sync`, `livtet-sync-http`,
+  `livtet-covers`, `livtet-search`, `livtet-sync`,
   `livtet-sync-server`, `livtet-temporal-quotes`, `livtet-ffi`,
   `livtet-ruby`, `livtet-cli`, `livtet-cli-common`, `livtet-types`,
   `livtet-test-utils`. Workspace-wide scopes: `workspace`, `rust`,

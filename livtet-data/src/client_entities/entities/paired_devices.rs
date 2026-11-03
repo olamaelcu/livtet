@@ -16,8 +16,8 @@ pub struct Model {
     ///
     /// Set when this device files the claim, and also when it approves one: a
     /// pairing is mutual, so the token both sides store lets either dial the
-    /// other. A pairing approved before mutual pairing, or one whose claim
-    /// carried no address, stays `false` until the two are paired again.
+    /// other by node id. A row whose claim predates node ids stays `false`
+    /// because it has no address to dial.
     pub outbound: bool,
 }
 

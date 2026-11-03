@@ -1,13 +1,12 @@
-//! The daemon's pure pieces: argument parsing, error rendering, the request
-//! ring buffer, and JSON-RPC framing.
+//! The daemon's pure pieces: argument parsing, error rendering, the
+//! notification sink, and JSON-RPC framing.
 //!
 //! `rpc_health.rs` covers the daemon end to end over a real stdio pipe;
 //! these cover the decisions that test cannot reach from outside.
 
 use livtet_sync_server::{
-    RequestRecord, RpcMessage, RpcResponse, ServerConfig, ServerError, encode_notification,
-    encode_request, encode_response, error_code, new_request_log, parse_message, recent_requests,
-    record_request,
+    RpcMessage, RpcResponse, ServerConfig, ServerError, encode_notification, encode_request,
+    encode_response, error_code, parse_message,
 };
 
 fn args(items: &[&str]) -> impl Iterator<Item = String> + use<> {
@@ -24,7 +23,6 @@ fn args(items: &[&str]) -> impl Iterator<Item = String> + use<> {
 fn no_arguments_yields_the_documented_defaults() {
     let config = ServerConfig::from_args(args(&[])).expect("defaults");
     assert_eq!(config.db_path, "livtet-sync.db");
-    assert_eq!(config.host, "127.0.0.1");
     assert_eq!(config.port, 0, "0 asks the OS for an ephemeral port");
     assert_eq!(config.device_id, None);
 }
@@ -34,8 +32,6 @@ fn every_flag_is_parsed() {
     let config = ServerConfig::from_args(args(&[
         "--db",
         "/tmp/x.db",
-        "--host",
-        "0.0.0.0",
         "--port",
         "3121",
         "--device-id",
@@ -43,23 +39,14 @@ fn every_flag_is_parsed() {
     ]))
     .expect("full argument list");
     assert_eq!(config.db_path, "/tmp/x.db");
-    assert_eq!(config.host, "0.0.0.0");
     assert_eq!(config.port, 3121);
     assert_eq!(config.device_id.as_deref(), Some("dev-7"));
-}
-
-/// `--lan` is the shorthand for a LAN-reachable bind; the routes it exposes
-/// are session-gated.
-#[test]
-fn lan_flag_binds_every_interface() {
-    let config = ServerConfig::from_args(args(&["--lan"])).expect("--lan");
-    assert_eq!(config.host, "0.0.0.0");
 }
 
 /// A flag whose value is missing must not silently fall back to the default.
 #[test]
 fn a_flag_without_its_value_is_an_error_naming_the_flag() {
-    for flag in ["--db", "--host", "--port", "--device-id"] {
+    for flag in ["--db", "--port", "--device-id"] {
         let err =
             ServerConfig::from_args(args(&[flag])).expect_err("a dangling flag must not parse");
         let message = err.to_string();
@@ -69,22 +56,6 @@ fn a_flag_without_its_value_is_an_error_naming_the_flag() {
         );
         assert!(matches!(err, ServerError::Config(_)), "got {err:?}");
     }
-}
-
-#[test]
-fn a_non_numeric_port_is_rejected_and_echoed() {
-    let err = ServerConfig::from_args(args(&["--port", "http"])).expect_err("not a port");
-    let message = err.to_string();
-    assert!(
-        message.contains("http"),
-        "must echo the bad value: {message}"
-    );
-    // 65536 overflows u16 and must be caught the same way.
-    assert!(ServerConfig::from_args(args(&["--port", "65536"])).is_err());
-    assert!(
-        ServerConfig::from_args(args(&["--port", "65535"])).is_ok(),
-        "the top of the u16 range is valid"
-    );
 }
 
 #[test]
@@ -103,7 +74,6 @@ fn each_error_variant_renders_with_its_own_prefix() {
             "io error: broken pipe",
         ),
         (ServerError::Db("locked".into()), "database error: locked"),
-        (ServerError::Http("bind".into()), "http error: bind"),
         (ServerError::Rpc("bad frame".into()), "rpc error: bad frame"),
         (ServerError::Config("nope".into()), "config error: nope"),
         (ServerError::Server("down".into()), "server error: down"),
@@ -139,62 +109,7 @@ struct ServerConfigShape {
     unused: i32,
 }
 
-// ─── requests: the bounded ring buffer ──────────────────────────────────────
-
-fn record_at(n: usize) -> RequestRecord {
-    RequestRecord {
-        method: "GET".to_string(),
-        path: format!("/sync/{n}"),
-        status: 200,
-        at: "2026-01-01T00:00:00Z".to_string(),
-        device_id: Some(format!("dev-{n}")),
-    }
-}
-
-#[test]
-fn recent_returns_newest_first_and_honours_the_limit() {
-    let log = new_request_log(8);
-    for n in 0..4 {
-        record_request(&log, 8, record_at(n));
-    }
-
-    let newest = recent_requests(&log, 2);
-    assert_eq!(newest.len(), 2);
-    assert_eq!(newest[0].path, "/sync/3", "newest first");
-    assert_eq!(newest[1].path, "/sync/2");
-
-    assert_eq!(
-        recent_requests(&log, 99).len(),
-        4,
-        "limit may exceed the log"
-    );
-    assert!(recent_requests(&log, 0).is_empty());
-}
-
-/// The log is bounded, so an old request must be evicted rather than growing
-/// the buffer without limit in a long-running daemon.
-#[test]
-fn the_log_evicts_the_oldest_once_full() {
-    let cap = 3;
-    let log = new_request_log(cap);
-    for n in 0..5 {
-        record_request(&log, cap, record_at(n));
-    }
-
-    let all = recent_requests(&log, 99);
-    assert_eq!(all.len(), cap, "the buffer must not grow past its cap");
-    let paths: Vec<&str> = all.iter().map(|r| r.path.as_str()).collect();
-    assert_eq!(
-        paths,
-        vec!["/sync/4", "/sync/3", "/sync/2"],
-        "the three newest survive"
-    );
-}
-
-#[test]
-fn an_empty_log_reports_nothing() {
-    assert!(recent_requests(&new_request_log(4), 10).is_empty());
-}
+// ─── notifications ──────────────────────────────────────────────────────────
 
 #[test]
 fn notify_fires_through_the_sink() {
@@ -206,15 +121,11 @@ fn notify_fires_through_the_sink() {
             sink.lock().unwrap().push((method.to_string(), params));
         });
 
-    livtet_sync_server::requests::notify(
-        &notifier,
-        "request.received",
-        serde_json::json!({"a": 1}),
-    );
+    livtet_sync_server::notify(&notifier, "sync.pulled", serde_json::json!({"a": 1}));
 
     let seen = seen.lock().unwrap();
     assert_eq!(seen.len(), 1);
-    assert_eq!(seen[0].0, "request.received");
+    assert_eq!(seen[0].0, "sync.pulled");
     assert_eq!(seen[0].1, serde_json::json!({"a": 1}));
 }
 
@@ -234,9 +145,9 @@ fn parse_message_classifies_by_method_and_id() {
     }
 
     let notification =
-        parse_message(r#"{"jsonrpc":"2.0","method":"request.received"}"#).expect("notification");
+        parse_message(r#"{"jsonrpc":"2.0","method":"sync.pulled"}"#).expect("notification");
     match notification {
-        RpcMessage::Notification(n) => assert_eq!(n.method, "request.received"),
+        RpcMessage::Notification(n) => assert_eq!(n.method, "sync.pulled"),
         other => panic!("expected a notification, got {other:?}"),
     }
 
@@ -303,7 +214,7 @@ fn encoded_frames_round_trip_through_the_parser() {
         RpcMessage::Request(_)
     ));
 
-    let notification = encode_notification("request.received", serde_json::json!({"path": "/x"}));
+    let notification = encode_notification("sync.pulled", serde_json::json!({"applied": 1}));
     assert!(matches!(
         parse_message(&notification).expect("notification round trip"),
         RpcMessage::Notification(_)

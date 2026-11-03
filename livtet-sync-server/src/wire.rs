@@ -1,9 +1,8 @@
 //! The iroh-facing side of sync: framed requests answered from the local engine.
 //!
-//! These are the same operations the HTTP routes served, with the transport
-//! swapped: a token that arrived in a header now arrives in the frame, and the
+//! A token that once arrived in a header now arrives in the frame, and the
 //! caller's identity is the QUIC connection's remote node id rather than a
-//! socket address. Everything below the dispatch is unchanged — the engine owns
+//! socket address. Everything below the dispatch belongs to the engine:
 //! `pull_changes`, `apply_changes`, the conflict list, and the file paths.
 
 use std::sync::Arc;
@@ -355,7 +354,7 @@ async fn offer_decision(
         return Err("the offer is addressed to another device".to_string());
     }
 
-    (state.offer_sink)(livtet_sync_http::OfferDecision {
+    (state.offer_sink)(crate::pairing::OfferDecision {
         offer_id: offer_id.to_string(),
         device_id: device_id.to_string(),
         accepted,
@@ -456,20 +455,28 @@ async fn pair(
         });
     }
 
-    // The claim secret proves the waiter is the device that filed this claim;
-    // the approval fans the decision out on the matching broadcast.
+    // The approval fans the decision out on the matching broadcast.
     let claim = ulid::Ulid::generate().to_string();
     let (sender, mut receiver) = tokio::sync::broadcast::channel(1);
     {
         let mut waiters = state.pair_waiters.lock().await;
         waiters.insert(
             node.0.clone(),
-            livtet_sync_http::pairing::PairingWaiter {
+            crate::pairing::PairingWaiter {
                 claim: claim.clone(),
                 sender,
             },
         );
     }
+    crate::requests::notify(
+        &state.notifier,
+        crate::rpc::method::NOTIFY_PAIRING_REQUESTED,
+        serde_json::json!({
+            "node_id": node.0.clone(),
+            "device_id": &device_id,
+            "name": &name,
+        }),
+    );
     tracing::info!(
         device = %device_id,
         name = %name,

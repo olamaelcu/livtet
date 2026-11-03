@@ -20,11 +20,9 @@ path = "src/main.rs"
 [dependencies]
 livtet-iroh = { workspace = true }
 livtet-sync = { workspace = true }
-livtet-sync-http = { workspace = true, features = ["poem"] }
 livtet-sync-iroh = { workspace = true }
 livtet-data = { workspace = true }
 livtet-types = { workspace = true }
-poem = { version = "3.1", default-features = false, features = ["server"] }
 tokio = { workspace = true, features = [
   "rt-multi-thread",
   "macros",
@@ -47,7 +45,6 @@ camino = { workspace = true }
 fs-err = { workspace = true }
 base64 = { workspace = true }
 mdns-sd = "0.21"
-reqwest = { workspace = true, features = ["json", "stream", "rustls"] }
 keyring = "4"
 hex = { workspace = true }
 
@@ -61,6 +58,3 @@ tokio = { workspace = true, features = [
   "io-std",
 ] }
 fs-err = { workspace = true }
-# `iroh-relay` selects `rustls-no-provider` on this same `reqwest`; the
-# `rustls` feature picks the provider so test clients can be constructed.
-reqwest = { workspace = true, features = ["json", "rustls"] }

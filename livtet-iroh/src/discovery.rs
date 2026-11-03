@@ -35,9 +35,28 @@ impl DiscoveryService {
 
     /// Bind with a caller-owned secret, so the node id survives restarts.
     pub async fn bind_with_secret(secret_key: SecretKey) -> Result<Self, DiscoveryError> {
-        let endpoint = Endpoint::builder(presets::N0)
+        Self::bind_with_secret_and_port(secret_key, None).await
+    }
+
+    /// Bind with a caller-owned secret on a chosen UDP port.
+    ///
+    /// `None` leaves iroh's default sockets alone (an ephemeral port). `Some`
+    /// binds the unspecified IPv4 address on that port, so the daemon's
+    /// `--port 0` still asks the OS for a free port and a fixed one is
+    /// reachable where the operator expects it.
+    pub async fn bind_with_secret_and_port(
+        secret_key: SecretKey,
+        port: Option<u16>,
+    ) -> Result<Self, DiscoveryError> {
+        let mut builder = Endpoint::builder(presets::N0)
             .secret_key(secret_key)
-            .alpns(vec![SYNC_ALPN.to_vec()])
+            .alpns(vec![SYNC_ALPN.to_vec()]);
+        if let Some(port) = port {
+            builder = builder
+                .bind_addr(std::net::SocketAddr::from(([0, 0, 0, 0], port)))
+                .map_err(|error| DiscoveryError::Bind(error.to_string()))?;
+        }
+        let endpoint = builder
             .bind()
             .await
             .map_err(|error| DiscoveryError::Bind(error.to_string()))?;
@@ -78,6 +97,24 @@ impl DiscoveryService {
     /// The bound endpoint, for code that wants to dial or accept connections.
     pub fn endpoint(&self) -> &Endpoint {
         &self.endpoint
+    }
+
+    /// Every socket the endpoint bound.
+    pub fn bound_sockets(&self) -> Vec<std::net::SocketAddr> {
+        self.endpoint.bound_sockets()
+    }
+
+    /// The UDP port the endpoint is listening on, preferring IPv4.
+    ///
+    /// `None` when iroh bound no socket, which lets callers fall back to the
+    /// configured port.
+    pub fn bound_port(&self) -> Option<u16> {
+        let sockets = self.bound_sockets();
+        sockets
+            .iter()
+            .find(|addr| addr.is_ipv4())
+            .or_else(|| sockets.first())
+            .map(std::net::SocketAddr::port)
     }
 
     /// Stop advertising and release the socket.

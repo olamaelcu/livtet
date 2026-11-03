@@ -1,7 +1,7 @@
 //! Framed sync protocol over `iroh` streams.
 //!
-//! This replaces the HTTP transport (`livtet-sync-http`) that made the receiver
-//! open a TCP connection to the sender. Every operation here runs on a
+//! This replaces the retired HTTP transport, which made the receiver open a
+//! TCP connection to the sender. Every operation here runs on a
 //! bidirectional QUIC stream under [`livtet_iroh::SYNC_ALPN`], dialled by node
 //! id, so a peer behind a firewall, CGNAT, or an isolated access point is
 //! reachable through a direct path, a hole-punched one, or the relay — never by

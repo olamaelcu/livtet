@@ -1,16 +1,17 @@
-//! The RPC methods `rpc_health.rs` does not reach: server start/stop,
-//! pairing rejection, device revocation, conflict listing and resolution,
-//! and how the dispatcher answers a method or a params object it cannot use.
+//! The RPC methods `rpc_health.rs` does not reach: pairing approval and
+//! rejection over iroh claims, device revocation, conflict listing and
+//! resolution, and how the dispatcher answers a method or a params object it
+//! cannot use.
 //!
-//! One daemon serves the whole file — spawning the binary per test is the
-//! expensive part, and none of these leave state that affects the others
-//! except the server start/stop pair, which restores itself.
+//! One daemon serves most of the file — spawning the binary per test is the
+//! expensive part, and none of these leave state that affects the others.
 
 use std::time::Duration;
 
 use camino::{Utf8Path, Utf8PathBuf};
 use fs_err as fs;
 use livtet_sync_server::rpc::{self, StdioClient};
+use livtet_types::{DbId, PairingStatus};
 
 /// Deterministic 32-byte key so tests never touch the OS keyring.
 const TEST_DISCOVERY_KEY: &str = "0101010101010101010101010101010101010101010101010101010101010101";
@@ -105,13 +106,6 @@ async fn error_code(client: &mut StdioClient, method: &str, params: serde_json::
         .code
 }
 
-async fn server_running(client: &mut StdioClient) -> bool {
-    let status = ok_result(client, rpc::method::STATUS, serde_json::json!({})).await;
-    status["server_running"]
-        .as_bool()
-        .expect("status reports server_running")
-}
-
 /// Ask the daemon to exit, then wait for it.
 ///
 /// Always end a daemon this way rather than with `kill`. The daemon is a
@@ -131,135 +125,41 @@ async fn shutdown(client: &mut StdioClient) {
     let _ = tokio::time::timeout(Duration::from_secs(5), client.wait()).await;
 }
 
-#[tokio::test]
-async fn server_start_and_stop_are_reflected_in_status() {
-    let db_path = temp_db_path("start-stop");
-    let mut client = spawn(&db_path).await;
-
-    assert!(
-        server_running(&mut client).await,
-        "boots with the server up"
-    );
-
-    let stopped = ok_result(&mut client, rpc::method::SERVER_STOP, serde_json::json!({})).await;
-    assert_eq!(stopped["ok"].as_bool(), Some(true));
-    assert!(
-        !server_running(&mut client).await,
-        "status must reflect the stop"
-    );
-
-    // Stopping an already-stopped server is not an error.
-    let again = ok_result(&mut client, rpc::method::SERVER_STOP, serde_json::json!({})).await;
-    assert_eq!(again["ok"].as_bool(), Some(true));
-
-    let started = ok_result(
-        &mut client,
-        rpc::method::SERVER_START,
-        serde_json::json!({}),
-    )
-    .await;
-    assert_eq!(started["ok"].as_bool(), Some(true));
-    assert_eq!(
-        started.get("already_running").and_then(|v| v.as_bool()),
-        None,
-        "a real start must not claim it was already running"
-    );
-    assert!(server_running(&mut client).await);
-
-    // A second start is a no-op that says so, rather than rebinding the port.
-    let redundant = ok_result(
-        &mut client,
-        rpc::method::SERVER_START,
-        serde_json::json!({}),
-    )
-    .await;
-    assert_eq!(redundant["already_running"].as_bool(), Some(true));
-
-    shutdown(&mut client).await;
-    cleanup(&db_path);
+/// A pool over the daemon's own database file, for seeding and asserting rows.
+async fn pool_for(db_path: &Utf8Path) -> livtet_data::sql::SqlitePool {
+    let options: livtet_data::sql::sqlite::SqliteConnectOptions =
+        db_path.to_string().parse().expect("sqlite connect options");
+    livtet_data::sql::sqlite::SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect_with(options)
+        .await
+        .expect("open daemon database")
 }
 
-/// The identity published by `pairing.begin` is not itself a claim, so
-/// rejecting it fails; only a request a remote device actually filed can be
-/// rejected.
-#[tokio::test]
-async fn pairing_reject_requires_a_remote_claim() {
-    let db_path = temp_db_path("reject");
-    let mut client = spawn(&db_path).await;
-
-    let status = ok_result(&mut client, rpc::method::STATUS, serde_json::json!({})).await;
-    let host = status["host"].as_str().expect("host").to_string();
-    let port = status["port"].as_u64().expect("port");
-
-    let begin = ok_result(
-        &mut client,
-        rpc::method::PAIRING_BEGIN,
-        serde_json::json!({}),
+/// Write the row the iroh accept loop creates when a peer files a claim.
+///
+/// It carries no socket origin and no stored address: the connection's node id
+/// is the identity, and the pairing key.
+async fn seed_claim(
+    pool: &livtet_data::sql::SqlitePool,
+    node_id: &str,
+    device_id: DbId,
+    desktop_id: DbId,
+) {
+    livtet_data::sql::query(
+        "INSERT INTO pending_pairings \
+             (token, desktop_id, listen_on, status_id, device_name, device_type_id, \
+              device_id, origin_addr, created_at, expires_at) \
+         VALUES (?, ?, NULL, ?, 'Remote Phone', NULL, ?, NULL, datetime('now'), \
+                 datetime('now', '+5 minutes'))",
     )
-    .await;
-    let local_node_id = begin["node_id"].as_str().expect("node_id").to_string();
-
-    // No pending row exists for the locally published identity.
-    assert_eq!(
-        error_code(
-            &mut client,
-            rpc::method::PAIRING_REJECT,
-            serde_json::json!({ "token": local_node_id }),
-        )
-        .await,
-        rpc::error_code::INVALID_PARAMS
-    );
-
-    // A real remote claim is rejectable.
-    let remote_node_id = "aa11bb22cc33dd44ee55ff6677889900aabbccddeeff00112233445566778899";
-    let response = reqwest::Client::new()
-        .post(format!(
-            "http://{host}:{port}{}",
-            livtet_sync_http::PAIR_PATH
-        ))
-        .json(&serde_json::json!({
-            "device_id": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
-            "name": "Remote Phone",
-            "device_type": "android",
-            "node_id": remote_node_id,
-        }))
-        .send()
-        .await
-        .expect("pair POST");
-    assert!(
-        response.status().is_success(),
-        "pair POST: {}",
-        response.status()
-    );
-
-    // The claim arrived over loopback, so stamp another host's address to
-    // stand in for a device on the network.
-    let pool = livtet_data::sql::sqlite::SqlitePoolOptions::new()
-        .connect_with(
-            livtet_data::sql::sqlite::SqliteConnectOptions::new()
-                .filename(&db_path)
-                .create_if_missing(false),
-        )
-        .await
-        .expect("open db");
-    livtet_data::sql::query("UPDATE pending_pairings SET origin_addr = ? WHERE token = ?")
-        .bind(format!("10.0.0.5:{port}"))
-        .bind(remote_node_id)
-        .execute(&pool)
-        .await
-        .expect("stamp a remote origin");
-    pool.close().await;
-
-    let rejected = ok_result(
-        &mut client,
-        rpc::method::PAIRING_REJECT,
-        serde_json::json!({ "token": remote_node_id }),
-    )
-    .await;
-    assert_eq!(rejected["ok"].as_bool(), Some(true));
-
-    shutdown(&mut client).await;
-    cleanup(&db_path);
+    .bind(node_id)
+    .bind(desktop_id.to_bytes().to_vec())
+    .bind(DbId::from(PairingStatus::Pending).to_bytes().to_vec())
+    .bind(device_id.to_bytes().to_vec())
+    .execute(pool)
+    .await
+    .expect("seed an iroh claim");
 }
 
 #[tokio::test]
@@ -368,6 +268,15 @@ async fn the_dispatcher_rejects_unknown_methods_and_unusable_params() {
         rpc::error_code::METHOD_NOT_FOUND
     );
 
+    // The HTTP lifecycle is gone, not merely unhandled.
+    for method in ["server.start", "server.stop", "requests.recent"] {
+        assert_eq!(
+            error_code(&mut client, method, serde_json::json!({})).await,
+            rpc::error_code::METHOD_NOT_FOUND,
+            "{method} must no longer exist"
+        );
+    }
+
     // A method that needs params, called without the field it needs.
     assert_eq!(
         error_code(
@@ -429,270 +338,95 @@ async fn typed_params_take_the_same_path_as_a_json_value() {
     cleanup(&db_path);
 }
 
-/// A claim from a peer that predates mutual pairing carries no address to dial,
-/// so approval must leave that row one-way rather than pointing it at this
-/// device's own address — a pull would then read its own change log back.
+/// The identity published by `pairing.begin` is not itself a claim, so
+/// rejecting it fails; only a request a remote device actually filed can be
+/// rejected.
 #[tokio::test]
-async fn a_claim_without_an_address_stays_one_way() {
-    let db_path = temp_db_path("pair-legacy");
+async fn pairing_reject_requires_a_remote_claim() {
+    let db_path = temp_db_path("reject");
     let mut client = spawn(&db_path).await;
 
     let status = ok_result(&mut client, rpc::method::STATUS, serde_json::json!({})).await;
-    let host = status["host"].as_str().expect("host").to_string();
-    let port = status["port"].as_u64().expect("port");
+    let local_device_id: DbId = status["device_id"]
+        .as_str()
+        .expect("device_id")
+        .parse()
+        .expect("local device id");
 
-    let remote_node_id = "bb22cc33dd44ee55ff6677889900aabbccddeeff00112233445566778899aa";
-    let remote_device_id = "01ARZ3NDEKTSV4RRFFQ69G5FAW";
-    reqwest::Client::new()
-        .post(format!(
-            "http://{host}:{port}{}",
-            livtet_sync_http::PAIR_PATH
-        ))
-        .json(&serde_json::json!({
-            "device_id": remote_device_id,
-            "name": "Old Peer",
-            "device_type": "android",
-            "node_id": remote_node_id,
-        }))
-        .send()
-        .await
-        .expect("pair POST");
-
-    let pool = livtet_data::sql::sqlite::SqlitePoolOptions::new()
-        .connect_with(
-            livtet_data::sql::sqlite::SqliteConnectOptions::new()
-                .filename(&db_path)
-                .create_if_missing(false),
-        )
-        .await
-        .expect("open db");
-    livtet_data::sql::query("UPDATE pending_pairings SET origin_addr = ? WHERE token = ?")
-        .bind(format!("10.0.0.7:{port}"))
-        .bind(remote_node_id)
-        .execute(&pool)
-        .await
-        .expect("stamp a remote origin");
-
-    ok_result(
+    let begin = ok_result(
         &mut client,
-        rpc::method::PAIRING_APPROVE,
-        serde_json::json!({ "token": remote_node_id }),
-    )
-    .await;
-
-    let stored: (i64, Option<String>) =
-        livtet_data::sql::query_as("SELECT outbound, listen_on FROM paired_devices LIMIT 1")
-            .fetch_one(&pool)
-            .await
-            .expect("read the pairing back");
-    assert_eq!(stored.0, 0, "no address to dial means no pull");
-    assert_eq!(
-        stored.1, None,
-        "this device's own address must never be stored as the peer's"
-    );
-
-    let pull = client
-        .request(
-            rpc::method::DEVICES_PULL,
-            serde_json::json!({ "device_id": remote_device_id }),
-        )
-        .await
-        .expect("pull transport");
-    let error = pull
-        .error
-        .expect("a one-way pairing cannot be pulled")
-        .message;
-    assert!(
-        error.contains("not claimed"),
-        "the refusal must name the direction, not the network: {error}"
-    );
-
-    shutdown(&mut client).await;
-}
-
-/// Pairings approved before they were mutual get their missing half on the next
-/// start: the token is already held by both sides, and only the flag gated it.
-#[tokio::test]
-async fn starting_up_promotes_legacy_pairings_but_not_wildcard_addresses() {
-    let db_path = temp_db_path("promote");
-    let mut client = spawn(&db_path).await;
-    // Wait for the daemon to open and migrate the database before seeding.
-    ok_result(&mut client, rpc::method::STATUS, serde_json::json!({})).await;
-
-    let pool = livtet_data::sql::sqlite::SqlitePoolOptions::new()
-        .connect_with(
-            livtet_data::sql::sqlite::SqliteConnectOptions::new()
-                .filename(&db_path)
-                .create_if_missing(false),
-        )
-        .await
-        .expect("open db");
-
-    let peer = livtet_types::DbId::new().to_bytes().to_vec();
-    let own = livtet_types::DbId::new().to_bytes().to_vec();
-    for (id, name, address, token) in [
-        (
-            peer.clone(),
-            "Legacy Peer",
-            "203.0.113.20:7710".to_string(),
-            "legacy-token-peer",
-        ),
-        (
-            own.clone(),
-            "Wildcard Address",
-            // What approval used to store: the address the claim was served
-            // on, which is this device's own wildcard bind.
-            "0.0.0.0:7710".to_string(),
-            "legacy-token-own",
-        ),
-    ] {
-        livtet_data::sql::query(
-            "INSERT INTO paired_devices (device_id, name, listen_on, device_type_id, \
-                 paired_at, last_sync_at, session_token, outbound) \
-             VALUES (?, ?, ?, NULL, datetime('now'), NULL, ?, 0)",
-        )
-        .bind(id)
-        .bind(name)
-        .bind(address)
-        .bind(token)
-        .execute(&pool)
-        .await
-        .expect("seed a legacy pairing");
-    }
-
-    shutdown(&mut client).await;
-    let mut restarted = spawn(&db_path).await;
-    ok_result(&mut restarted, rpc::method::STATUS, serde_json::json!({})).await;
-
-    let promoted: i64 =
-        livtet_data::sql::query_scalar("SELECT outbound FROM paired_devices WHERE device_id = ?")
-            .bind(peer)
-            .fetch_one(&pool)
-            .await
-            .expect("read the promoted row");
-    assert_eq!(promoted, 1, "a real peer address is enough to pull");
-
-    let untouched: i64 =
-        livtet_data::sql::query_scalar("SELECT outbound FROM paired_devices WHERE device_id = ?")
-            .bind(own)
-            .fetch_one(&pool)
-            .await
-            .expect("read the self-addressed row");
-    assert_eq!(
-        untouched, 0,
-        "a wildcard address is this device's own, not a peer to dial"
-    );
-
-    shutdown(&mut restarted).await;
-}
-
-/// The daemon pushes notifications as well as answering requests. Which one
-/// arrives first depends on timing, so this asserts the shape of whatever
-/// comes rather than demanding a particular event.
-#[tokio::test]
-async fn the_daemon_emits_well_formed_notifications() {
-    let db_path = temp_db_path("notify");
-    let mut client = spawn(&db_path).await;
-
-    // Restarting the server is guaranteed to emit started/stopped events.
-    let _ = ok_result(&mut client, rpc::method::SERVER_STOP, serde_json::json!({})).await;
-    let _ = ok_result(
-        &mut client,
-        rpc::method::SERVER_START,
+        rpc::method::PAIRING_BEGIN,
         serde_json::json!({}),
     )
     .await;
+    let local_node_id = begin["node_id"].as_str().expect("node_id").to_string();
 
-    let known = [
-        rpc::method::NOTIFY_PAIRING_REQUESTED,
-        rpc::method::NOTIFY_REQUEST_RECEIVED,
-        rpc::method::NOTIFY_SYNC_COMPLETED,
-        rpc::method::NOTIFY_SYNC_PULLED,
-        rpc::method::NOTIFY_SERVER_STARTED,
-        rpc::method::NOTIFY_SERVER_STOPPED,
-    ];
-
-    let notification = client
-        .next_notification(Duration::from_secs(5))
-        .await
-        .expect("the daemon must emit at least one notification");
-    assert_eq!(notification.jsonrpc, "2.0");
-    assert!(
-        known.contains(&notification.method.as_str()),
-        "undeclared notification method {:?}",
-        notification.method
+    // No pending row exists for the locally published identity.
+    assert_eq!(
+        error_code(
+            &mut client,
+            rpc::method::PAIRING_REJECT,
+            serde_json::json!({ "token": local_node_id }),
+        )
+        .await,
+        rpc::error_code::INVALID_PARAMS
     );
+
+    // A claim filed over iroh is rejectable: the connection authenticates the
+    // node id, so no socket origin is recorded or checked.
+    let remote_node_id = "aa11bb22cc33dd44ee55ff6677889900aabbccddeeff00112233445566778899";
+    let remote_device_id = DbId::new();
+    let pool = pool_for(&db_path).await;
+    seed_claim(&pool, remote_node_id, remote_device_id, local_device_id).await;
+
+    let rejected = ok_result(
+        &mut client,
+        rpc::method::PAIRING_REJECT,
+        serde_json::json!({ "token": remote_node_id }),
+    )
+    .await;
+    assert_eq!(rejected["ok"].as_bool(), Some(true));
+
+    let status_id: Vec<u8> =
+        livtet_data::sql::query_scalar("SELECT status_id FROM pending_pairings WHERE token = ?")
+            .bind(remote_node_id)
+            .fetch_one(&pool)
+            .await
+            .expect("read the rejected row");
+    assert_eq!(
+        status_id,
+        DbId::from(PairingStatus::Rejected).to_bytes().to_vec(),
+        "the pending row is marked rejected"
+    );
+    pool.close().await;
 
     shutdown(&mut client).await;
     cleanup(&db_path);
 }
 
-/// The whole pairing handshake, through to a paired device.
+/// The whole pairing handshake, through to a mutual paired device.
 ///
-/// `rpc_health.rs` and the rejection test above only ever drive
-/// `pairing.approve` to failure, because a ticket this daemon minted has no
-/// remote origin and a claim from loopback shares the daemon's own address —
-/// both of which `handle_pairing_approve` fails closed on. Getting to the
-/// success path needs a claim stamped with an address that is not the
-/// daemon's, which is what the SQL below simulates. Nothing else in the
-/// suite reaches the device insert, the session-token persist, or the
-/// transition of the pending row to Approved.
+/// The claim row is exactly what the iroh accept loop writes: keyed by the
+/// remote node id, with no socket origin and no stored address. Approval must
+/// mint the token, record the node id, and make the pairing pullable — the
+/// node id is the only address there is.
 #[tokio::test]
-async fn approving_a_remote_claim_pairs_the_device() {
+async fn approving_an_iroh_claim_pairs_the_device() {
     let db_path = temp_db_path("approve");
     let mut client = spawn(&db_path).await;
 
     let status = ok_result(&mut client, rpc::method::STATUS, serde_json::json!({})).await;
-    let host = status["host"].as_str().expect("host").to_string();
-    let port = status["port"].as_u64().expect("port");
+    let local_device_id: DbId = status["device_id"]
+        .as_str()
+        .expect("device_id")
+        .parse()
+        .expect("local device id");
 
-    // The claim is keyed by the *remote* node identity. Reusing the daemon's
-    // own identity here would fail closed, correctly.
+    // The claim is keyed by the *remote* node identity.
     let remote_node_id = "aa11bb22cc33dd44ee55ff6677889900aabbccddeeff00112233445566778899";
-
-    // A remote device claims it over HTTP, which fills in its name, type and
-    // device id.
-    let remote_device_id = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
-    let response = reqwest::Client::new()
-        .post(format!(
-            "http://{host}:{port}{}",
-            livtet_sync_http::PAIR_PATH
-        ))
-        .json(&serde_json::json!({
-            "device_id": remote_device_id,
-            "name": "Remote Phone",
-            "device_type": "android",
-            "node_id": remote_node_id,
-            // The claimer says where it serves; that is what makes the pairing
-            // mutual. A closed port: only the address has to be stored.
-            "listen_on": "203.0.113.9:7710",
-        }))
-        .send()
-        .await
-        .expect("pair POST");
-    assert!(
-        response.status().is_success(),
-        "pair POST: {}",
-        response.status()
-    );
-
-    // The claim came from loopback, so its origin is the daemon's own
-    // address and approval would still refuse. Stamp a different origin to
-    // stand in for a claim from another host.
-    let pool = livtet_data::sql::sqlite::SqlitePoolOptions::new()
-        .connect_with(
-            livtet_data::sql::sqlite::SqliteConnectOptions::new()
-                .filename(&db_path)
-                .create_if_missing(false),
-        )
-        .await
-        .expect("open db");
-    livtet_data::sql::query("UPDATE pending_pairings SET origin_addr = ? WHERE token = ?")
-        .bind(format!("10.0.0.5:{port}"))
-        .bind(remote_node_id)
-        .execute(&pool)
-        .await
-        .expect("stamp a remote origin");
+    let remote_device_id: DbId = "01ARZ3NDEKTSV4RRFFQ69G5FAV".parse().expect("device id");
+    let pool = pool_for(&db_path).await;
+    seed_claim(&pool, remote_node_id, remote_device_id, local_device_id).await;
 
     let approved = ok_result(
         &mut client,
@@ -708,7 +442,7 @@ async fn approving_a_remote_claim_pairs_the_device() {
     );
     assert_eq!(
         approved["device_id"].as_str(),
-        Some(remote_device_id),
+        Some(remote_device_id.to_string().as_str()),
         "the claimed device id carries through to the pairing"
     );
 
@@ -721,67 +455,56 @@ async fn approving_a_remote_claim_pairs_the_device() {
     .await;
     let entries = devices.as_array().expect("devices array");
     assert_eq!(entries.len(), 1, "exactly one device paired: {devices}");
-    assert_eq!(entries[0]["device_id"].as_str(), Some(remote_device_id));
+    assert_eq!(
+        entries[0]["device_id"].as_str(),
+        Some(remote_device_id.to_string().as_str())
+    );
     assert_eq!(entries[0]["name"].as_str(), Some("Remote Phone"));
-    // A pairing is mutual (ADR 7): this side may pull from the device that
-    // filed the claim as well, so the row is listed as pullable. The flag now
-    // answers "may I read it?" rather than "did I file the claim?".
     assert_eq!(
         entries[0]["outbound"],
         serde_json::Value::Bool(true),
-        "an approved device is pullable too: {devices}"
+        "an approved iroh claim is mutual and pullable: {devices}"
     );
-
-    // The session token is persisted, not just returned — the remote device
-    // authenticates later requests with it.
-    let stored: String =
-        livtet_data::sql::query_scalar("SELECT session_token FROM paired_devices LIMIT 1")
-            .fetch_one(&pool)
-            .await
-            .expect("read back the session token");
-    assert_eq!(stored, session_token);
-
-    // A pairing approved here is mutual: this device may dial the claimer, and
-    // the address it dials is the claimer's own, not this device's.
-    let stored: (i64, Option<String>) =
-        livtet_data::sql::query_as("SELECT outbound, listen_on FROM paired_devices LIMIT 1")
-            .fetch_one(&pool)
-            .await
-            .expect("read back the mutual pairing");
-    assert_eq!(
-        stored.0, 1,
-        "approving a claim must make the pairing mutual"
-    );
-    assert_eq!(
-        stored.1.as_deref(),
-        Some("203.0.113.9:7710"),
-        "the stored address is the claimer's, not this device's own"
-    );
-
-    // ...which is what lets the pull reach it. The address is unroutable here,
-    // so the failure is the transport talking — not `not claimed`.
-    let pull = client
-        .request(
-            rpc::method::DEVICES_PULL,
-            serde_json::json!({ "device_id": remote_device_id }),
-        )
-        .await
-        .expect("pull transport");
-    let error = pull.error.expect("an unroutable peer is an error").message;
     assert!(
-        error.contains("pull changes"),
-        "approval must leave the peer pullable: {error}"
+        entries[0].get("listen_on").is_none(),
+        "there is no stored HTTP address to report: {devices}"
+    );
+
+    // The session token and node id are persisted, not just returned: the node
+    // id is what every later dial addresses.
+    let (stored_token, stored_node, outbound, listen_on): (
+        String,
+        Option<String>,
+        i64,
+        Option<String>,
+    ) = livtet_data::sql::query_as(
+        "SELECT session_token, node_id, outbound, listen_on \
+         FROM paired_devices WHERE device_id = ?",
+    )
+    .bind(remote_device_id.to_bytes().to_vec())
+    .fetch_one(&pool)
+    .await
+    .expect("read back the pairing");
+    assert_eq!(stored_token, session_token);
+    assert_eq!(stored_node.as_deref(), Some(remote_node_id));
+    assert_eq!(outbound, 1, "an approved claim is mutual");
+    assert_eq!(
+        listen_on, None,
+        "the node id is the address; no socket address is stored"
     );
 
     // Approving the same ticket twice must not pair a second device: the
-    // pending row is Approved now, and the upsert keys on device_id.
+    // upsert keys on device_id.
     let second = ok_result(
         &mut client,
         rpc::method::PAIRING_APPROVE,
         serde_json::json!({ "token": remote_node_id }),
     )
     .await;
-    assert_eq!(second["device_id"].as_str(), Some(remote_device_id));
+    assert_eq!(
+        second["device_id"].as_str(),
+        Some(remote_device_id.to_string().as_str())
+    );
     let devices = ok_result(
         &mut client,
         rpc::method::DEVICES_LIST,
@@ -799,7 +522,7 @@ async fn approving_a_remote_claim_pairs_the_device() {
     let revoked = ok_result(
         &mut client,
         rpc::method::DEVICES_REVOKE,
-        serde_json::json!({ "device_id": remote_device_id }),
+        serde_json::json!({ "device_id": remote_device_id.to_string() }),
     )
     .await;
     assert_eq!(revoked["removed"].as_u64(), Some(1));
@@ -816,6 +539,70 @@ async fn approving_a_remote_claim_pairs_the_device() {
     cleanup(&db_path);
 }
 
+/// Pairings that already name a node id get their missing half on the next
+/// start: the token is already held by both sides, and only the flag gated it.
+/// A row with no node id has nothing to dial and stays one-way.
+#[tokio::test]
+async fn starting_up_promotes_pairings_with_a_node_id() {
+    let db_path = temp_db_path("promote");
+    let mut client = spawn(&db_path).await;
+    // Wait for the daemon to open and migrate the database before seeding.
+    ok_result(&mut client, rpc::method::STATUS, serde_json::json!({})).await;
+
+    let pool = pool_for(&db_path).await;
+
+    let peer = DbId::new().to_bytes().to_vec();
+    let legacy = DbId::new().to_bytes().to_vec();
+    for (id, name, node_id, token) in [
+        (
+            peer.clone(),
+            "Node Peer",
+            Some("aa11bb22cc33dd44ee55ff6677889900aabbccddeeff00112233445566778899"),
+            "legacy-token-peer",
+        ),
+        (legacy.clone(), "Address Only", None, "legacy-token-own"),
+    ] {
+        livtet_data::sql::query(
+            "INSERT INTO paired_devices (device_id, name, listen_on, device_type_id, \
+                 paired_at, last_sync_at, session_token, node_id, outbound) \
+             VALUES (?, ?, NULL, NULL, datetime('now'), NULL, ?, ?, 0)",
+        )
+        .bind(id)
+        .bind(name)
+        .bind(token)
+        .bind(node_id)
+        .execute(&pool)
+        .await
+        .expect("seed a legacy pairing");
+    }
+
+    shutdown(&mut client).await;
+    let mut restarted = spawn(&db_path).await;
+    ok_result(&mut restarted, rpc::method::STATUS, serde_json::json!({})).await;
+
+    let promoted: i64 =
+        livtet_data::sql::query_scalar("SELECT outbound FROM paired_devices WHERE device_id = ?")
+            .bind(peer)
+            .fetch_one(&pool)
+            .await
+            .expect("read the promoted row");
+    assert_eq!(promoted, 1, "a node id is enough to pull");
+
+    let untouched: i64 =
+        livtet_data::sql::query_scalar("SELECT outbound FROM paired_devices WHERE device_id = ?")
+            .bind(legacy)
+            .fetch_one(&pool)
+            .await
+            .expect("read the address-only row");
+    assert_eq!(
+        untouched, 0,
+        "a row without a node id has no address to dial"
+    );
+
+    pool.close().await;
+    shutdown(&mut restarted).await;
+}
+
 /// `kill` is the escape hatch for a daemon that will not answer `shutdown`.
 /// It is deliberately the only test that uses it: a SIGKILLed child never
 /// flushes its coverage profile, so every other test here exits cleanly.
@@ -825,7 +612,8 @@ async fn kill_terminates_a_daemon_that_is_not_asked_nicely() {
     let mut client = spawn(&db_path).await;
 
     // Confirm it is alive and answering before killing it.
-    assert!(server_running(&mut client).await);
+    let health = ok_result(&mut client, rpc::method::HEALTH, serde_json::json!({})).await;
+    assert_eq!(health["status"].as_str(), Some("ok"));
 
     client.kill();
     // `wait` must return once the child is gone rather than hanging.

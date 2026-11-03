@@ -1,9 +1,8 @@
-//! The sync server daemon: SQLite + embedded sync HTTP server + stdio RPC loop.
+//! The sync server daemon: SQLite + iroh sync endpoint + stdio RPC loop.
 
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use livtet_data::orm::{
@@ -12,22 +11,18 @@ use livtet_data::orm::{
 };
 use livtet_iroh::{DiscoveryService, NodeId, PeerIdentity, SecretKey};
 use livtet_sync::SyncEngine;
-use livtet_sync_http::routes::{CHANGES_PATH, PAIR_PATH, PULL_FULL_PATH, PUSH_PATH, SyncIdentity};
-use livtet_sync_http::{PairWaiters, make_sync_routes_with_sink, set_pair_waiters};
 use livtet_types::{DbId, PairingStatus};
-use poem::{Endpoint, EndpointExt, Server};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::sync::{Mutex, RwLock, mpsc, watch};
+use tokio::sync::{Mutex, mpsc};
 
 use crate::config::ServerConfig;
 use crate::error::ServerError;
 use crate::mdns::{Advertiser, NearbyPeer, browse_nearby};
-use crate::requests::{
-    self, Notifier, REQUEST_LOG_CAP, RequestLog, RequestRecord, new_request_log,
-};
+use crate::pairing::{OfferDecisionSink, PairWaiters};
+use crate::requests::{self, Notifier};
 use crate::rpc::{
     self, DeviceNameParams, DeviceParams, OfferBookParams, OfferDecisionParams, OfferParams,
-    PairingBeginParams, PairingClaimParams, RecentParams, ResolveParams, TokenParams,
+    PairingBeginParams, PairingClaimParams, ResolveParams, TokenParams,
 };
 
 /// Shared, long-lived daemon state.
@@ -44,20 +39,14 @@ pub struct DaemonState {
     /// Name advertised to nearby peers; `None` falls back to one generated
     /// from the device id. Mutation re-registers the mDNS record.
     pub device_name: Mutex<Option<String>>,
-    /// Ring buffer of recently served requests.
-    pub request_log: RequestLog,
     /// Sink for outgoing JSON-RPC notifications.
     pub notifier: Notifier,
     /// When the daemon started.
     pub started_at: time::OffsetDateTime,
-    /// Count of HTTP requests served since startup.
-    pub requests_served: Arc<AtomicU64>,
-    /// Timestamp of the most recent HTTP request.
-    pub last_request_at: Arc<std::sync::Mutex<Option<String>>>,
-    /// Broadcast registry shared with `livtet-sync-http`'s pairing routes.
+    /// Outstanding pairing claims, keyed by the claimant's node id.
     pub pair_waiters: PairWaiters,
     /// How an answered offer reaches the desktop, whichever transport carried it.
-    pub offer_sink: livtet_sync_http::OfferDecisionSink,
+    pub offer_sink: OfferDecisionSink,
     /// Serialises this daemon's own writes.
     ///
     /// RPCs now run concurrently, so a background pull and a reader-triggered
@@ -66,12 +55,8 @@ pub struct DaemonState {
     pub write_gate: tokio::sync::Mutex<()>,
     /// The `iroh` discovery endpoint, bound at startup when the network allows.
     pub discovery: Mutex<Option<Arc<DiscoveryService>>>,
-    /// The mDNS advertisement of the HTTP pairing surface, while the server runs.
+    /// The mDNS discovery advertisement, while the daemon runs.
     pub advertiser: Mutex<Option<Advertiser>>,
-    /// The running HTTP server handle, if any.
-    pub server: Mutex<Option<ServerHandle>>,
-    /// The address the HTTP server is actually bound to.
-    pub bound: Mutex<Option<std::net::SocketAddr>>,
 }
 
 /// Keyring service under which the discovery secret is stored.
@@ -82,13 +67,7 @@ const DISCOVERY_KEYRING_ACCOUNT: &str = "discovery-node-key";
 #[cfg(debug_assertions)]
 const DISCOVERY_KEY_ENV: &str = "LIVTET_DISCOVERY_KEY";
 
-/// A managed embedded HTTP server with graceful shutdown.
-pub struct ServerHandle {
-    shutdown_tx: Option<watch::Sender<bool>>,
-    join: Option<tokio::task::JoinHandle<()>>,
-}
-
-/// Connect + migrate the database, start the HTTP server, and run the stdio
+/// Connect + migrate the database, bind the sync endpoint, and run the stdio
 /// RPC loop until the parent sends `shutdown` or closes stdin.
 pub async fn run_async(config: ServerConfig) -> Result<(), ServerError> {
     let db_url = config.db_path.to_string();
@@ -108,7 +87,6 @@ pub async fn run_async(config: ServerConfig) -> Result<(), ServerError> {
     let engine = SyncEngine::new(db, device_id.clone());
 
     let pair_waiters: PairWaiters = Arc::new(Mutex::new(HashMap::new()));
-    set_pair_waiters(pair_waiters.clone());
 
     let (out_tx, out_rx) = mpsc::unbounded_channel::<String>();
     let notifier: Notifier = {
@@ -122,7 +100,7 @@ pub async fn run_async(config: ServerConfig) -> Result<(), ServerError> {
     // Bind discovery once, up front: the node id is needed both for the
     // identity route and for the mDNS TXT record. Losing the network is not
     // fatal — the daemon falls back to the device id and pairing by address.
-    let discovery = match DiscoveryService::bind_with_secret(discovery_secret).await {
+    let discovery = match bind_discovery(&config, discovery_secret).await {
         Ok(service) => Some(Arc::new(service)),
         Err(error) => {
             tracing::warn!(%error, "peer discovery unavailable; using the device id");
@@ -134,7 +112,7 @@ pub async fn run_async(config: ServerConfig) -> Result<(), ServerError> {
     // other side of the stdio control channel: the sink is the seam, and both
     // transports route through it.
     let decision_notifier = notifier.clone();
-    let offer_sink: livtet_sync_http::OfferDecisionSink = Arc::new(move |decision| {
+    let offer_sink: OfferDecisionSink = Arc::new(move |decision| {
         requests::notify(
             &decision_notifier,
             rpc::method::NOTIFY_OFFER_DECIDED,
@@ -152,23 +130,17 @@ pub async fn run_async(config: ServerConfig) -> Result<(), ServerError> {
         engine,
         device_id,
         device_name: Mutex::new(device_name),
-        request_log: new_request_log(REQUEST_LOG_CAP),
         notifier,
         started_at: time::OffsetDateTime::now_utc(),
-        requests_served: Arc::new(AtomicU64::new(0)),
-        last_request_at: Arc::new(std::sync::Mutex::new(None)),
         pair_waiters,
         offer_sink,
         write_gate: tokio::sync::Mutex::new(()),
         discovery: Mutex::new(discovery),
         advertiser: Mutex::new(None),
-        server: Mutex::new(None),
-        bound: Mutex::new(None),
     });
 
     let writer = tokio::spawn(writer_task(out_rx));
 
-    start_server(&state).await?;
     advertise(&state).await;
 
     // The framed transport runs on the discovery endpoint that is already
@@ -188,7 +160,7 @@ pub async fn run_async(config: ServerConfig) -> Result<(), ServerError> {
     let _ = promote_mutual_pairings(&state).await;
 
     let loop_result = read_loop(&state, &out_tx).await;
-    let _ = stop_server(&state).await;
+    stop_advertiser(&state).await;
     shutdown_discovery(&state).await;
 
     // The notifier holds a clone of the sender, so closing our handle closes
@@ -234,157 +206,29 @@ async fn resolve_device_id(
     Ok(generated)
 }
 
-/// Bind the embedded sync HTTP server (port `0` → ephemeral) and spawn it.
-pub async fn start_server(state: &Arc<DaemonState>) -> Result<(), ServerError> {
-    if state.server.lock().await.is_some() {
-        return Err(ServerError::Server("server already running".to_string()));
-    }
-
-    let bind_addr = format!("{}:{}", state.config.host, state.config.port);
-    let listener = tokio::net::TcpListener::bind(bind_addr.as_str())
-        .await
-        .map_err(|e| ServerError::Server(format!("failed to bind {bind_addr}: {e}")))?;
-    let local = listener
-        .local_addr()
-        .map_err(|e| ServerError::Server(format!("failed to read local addr: {e}")))?;
-    let acceptor = poem::listener::TcpAcceptor::from_tokio(listener)
-        .map_err(|e| ServerError::Server(format!("failed to build acceptor: {e}")))?;
-
-    let engine = Arc::new(RwLock::new(state.engine.clone()));
-    let pair_waiters = state.pair_waiters.clone();
-    let log = state.request_log.clone();
-    let notifier = state.notifier.clone();
-    let served = state.requests_served.clone();
-    let last = state.last_request_at.clone();
-
-    let identity = SyncIdentity {
-        node_id: discovery_node_id(state).await,
-        device_id: state.device_id.clone(),
-    };
-
-    let offer_sink = state.offer_sink.clone();
-
-    let app = make_sync_routes_with_sink(engine, pair_waiters, identity, offer_sink)
-        .around(move |endpoint, req| {
-            let log = log.clone();
-            let notifier = notifier.clone();
-            let served = served.clone();
-            let last = last.clone();
-            async move {
-                let http_method = req.method().to_string();
-                let path = req.uri().path().to_string();
-                let device_id = req
-                    .headers()
-                    .get("x-device-id")
-                    .and_then(|value| value.to_str().ok())
-                    .map(|value| value.to_string());
-
-                let response = endpoint.get_response(req).await;
-                let status = response.status().as_u16();
-                let at = now_string();
-
-                let is_pair_request = http_method == "POST" && path == PAIR_PATH;
-                let is_sync_data =
-                    path == PUSH_PATH || path == CHANGES_PATH || path == PULL_FULL_PATH;
-
-                requests::record(
-                    &log,
-                    REQUEST_LOG_CAP,
-                    RequestRecord {
-                        method: http_method.clone(),
-                        path: path.clone(),
-                        status,
-                        at: at.clone(),
-                        device_id,
-                    },
-                );
-                let _ = served.fetch_add(1, Ordering::Relaxed);
-                if let Ok(mut guard) = last.lock() {
-                    *guard = Some(at.clone());
-                }
-
-                requests::notify(
-                    &notifier,
-                    rpc::method::NOTIFY_REQUEST_RECEIVED,
-                    serde_json::json!({
-                        "method": http_method.clone(),
-                        "path": path.clone(),
-                        "status": status,
-                        "at": at,
-                    }),
-                );
-                if is_pair_request {
-                    requests::notify(
-                        &notifier,
-                        rpc::method::NOTIFY_PAIRING_REQUESTED,
-                        serde_json::json!({ "path": path }),
-                    );
-                } else if is_sync_data {
-                    requests::notify(
-                        &notifier,
-                        rpc::method::NOTIFY_SYNC_COMPLETED,
-                        serde_json::json!({ "path": path, "status": status }),
-                    );
-                }
-
-                Ok(response)
-            }
-        })
-        .boxed();
-
-    let (shutdown_tx, mut shutdown_rx) = watch::channel(false);
-    let join = tokio::spawn(async move {
-        let signal = async move {
-            while shutdown_rx.changed().await.is_ok() {
-                if *shutdown_rx.borrow() {
-                    break;
-                }
-            }
-        };
-        if let Err(error) = Server::new_with_acceptor(acceptor)
-            .name("livtet-sync-server")
-            .run_with_graceful_shutdown(app, signal, Some(Duration::from_secs(5)))
-            .await
-        {
-            tracing::error!(error = %error, "embedded sync http server error");
-        }
-    });
-
-    *state.server.lock().await = Some(ServerHandle {
-        shutdown_tx: Some(shutdown_tx),
-        join: Some(join),
-    });
-    *state.bound.lock().await = Some(local);
-
-    requests::notify(
-        &state.notifier,
-        rpc::method::NOTIFY_SERVER_STARTED,
-        serde_json::json!({ "host": state.config.host, "port": local.port() }),
-    );
-    tracing::info!(addr = %local, "embedded sync http server started");
-    Ok(())
+/// Bind the iroh endpoint on the configured UDP port.
+///
+/// Port `0` asks the OS for an ephemeral port. A failed bind is not fatal: the
+/// caller logs it and keeps serving the RPC loop without a sync endpoint.
+async fn bind_discovery(
+    config: &ServerConfig,
+    secret: SecretKey,
+) -> Result<DiscoveryService, livtet_iroh::DiscoveryError> {
+    DiscoveryService::bind_with_secret_and_port(secret, Some(config.port)).await
 }
 
-/// Signal the embedded HTTP server to stop and await its task.
-pub async fn stop_server(state: &Arc<DaemonState>) -> Result<(), ServerError> {
-    let handle = state.server.lock().await.take();
-    if let Some(mut handle) = handle {
-        if let Some(tx) = handle.shutdown_tx.take() {
-            let _ = tx.send(true);
-        }
-        if let Some(join) = handle.join.take() {
-            let _ = join.await;
-        }
-        *state.bound.lock().await = None;
-        requests::notify(
-            &state.notifier,
-            rpc::method::NOTIFY_SERVER_STOPPED,
-            serde_json::json!({}),
-        );
-        tracing::info!("embedded sync http server stopped");
-    }
-    stop_advertiser(state).await;
-    Ok(())
+/// The UDP port the iroh endpoint actually bound.
+///
+/// Falls back to the configured port when discovery is unbound, so status stays
+/// meaningful on a machine where the endpoint could not start.
+async fn endpoint_port(state: &Arc<DaemonState>) -> u16 {
+    state
+        .discovery
+        .lock()
+        .await
+        .as_ref()
+        .and_then(|service| service.bound_port())
+        .unwrap_or(state.config.port)
 }
 
 /// Drain encoded NDJSON lines to stdout.
@@ -541,9 +385,6 @@ async fn dispatch(
     match request.method.as_str() {
         rpc::method::HEALTH => finish(&request, handle_health(state).await),
         rpc::method::STATUS => finish(&request, handle_status(state).await),
-        rpc::method::REQUESTS_RECENT => {
-            finish(&request, handle_requests_recent(&request, state).await)
-        }
         rpc::method::PAIRING_BEGIN => finish(&request, handle_pairing_begin(&request, state).await),
         rpc::method::PAIRING_LIST => finish(&request, handle_pairing_list(state).await),
         rpc::method::DISCOVERY_NEARBY => finish(&request, handle_discovery_nearby(state).await),
@@ -572,8 +413,6 @@ async fn dispatch(
         rpc::method::CONFLICTS_RESOLVE => {
             finish(&request, handle_conflicts_resolve(&request, state).await)
         }
-        rpc::method::SERVER_START => finish(&request, handle_server_start(state).await),
-        rpc::method::SERVER_STOP => finish(&request, handle_server_stop(state).await),
         rpc::method::SHUTDOWN => finish(&request, handle_shutdown(state).await),
         other => rpc::RpcResponse::error(
             request.id.clone(),
@@ -584,25 +423,15 @@ async fn dispatch(
 }
 
 async fn handle_health(state: &Arc<DaemonState>) -> Result<serde_json::Value, RpcFailure> {
-    let running = state.server.lock().await.is_some();
     let uptime = (time::OffsetDateTime::now_utc() - state.started_at).whole_seconds();
     Ok(serde_json::json!({
         "status": "ok",
         "version": env!("CARGO_PKG_VERSION"),
         "pid": std::process::id(),
         "uptime_secs": uptime,
-        "server_running": running,
-        "port": current_port(state).await,
+        "node_id": discovery_node_id(state).await,
+        "port": endpoint_port(state).await,
     }))
-}
-
-/// Whether a pending row is a real remote claim.
-///
-/// A row with no socket origin arrived over iroh, where the connection's node
-/// id is the identity and cannot be spoofed; a row whose origin is this
-/// device's own address is this machine talking to itself, and is not a peer.
-fn is_remote_claim(origin: Option<&livtet_types::Address>, self_addr: &str) -> bool {
-    origin.is_none_or(|addr| addr.to_string() != self_addr)
 }
 
 async fn handle_status(state: &Arc<DaemonState>) -> Result<serde_json::Value, RpcFailure> {
@@ -612,47 +441,20 @@ async fn handle_status(state: &Arc<DaemonState>) -> Result<serde_json::Value, Rp
     let latest_version = state.engine.get_latest_version().await?;
     let paired_device_count = paired_devices::Entity::find().count(db).await?;
 
-    // A pending pairing counts only when it is a real remote claim; see
-    // `is_remote_claim`. The table holds a handful of rows, so filtering in
-    // Rust keeps the rule in one place instead of in two queries.
-    let self_addr = self_address(state).await;
     let pending_pairing_count = pending_pairings::Entity::find()
         .filter(pending_pairings::Column::StatusId.eq(DbId::from(PairingStatus::Pending)))
         .filter(pending_pairings::Column::ExpiresAt.gt(primitive_now()))
-        .all(db)
-        .await?
-        .into_iter()
-        .filter(|row| is_remote_claim(row.origin_addr.as_ref(), &self_addr))
-        .count();
-
-    let running = state.server.lock().await.is_some();
-    let last_request_at = state
-        .last_request_at
-        .lock()
-        .ok()
-        .and_then(|guard| guard.clone());
+        .count(db)
+        .await?;
 
     Ok(serde_json::json!({
         "device_id": state.device_id,
-        "server_running": running,
-        "host": state.config.host,
-        "port": current_port(state).await,
+        "node_id": discovery_node_id(state).await,
+        "port": endpoint_port(state).await,
         "latest_version": latest_version,
         "paired_device_count": paired_device_count,
         "pending_pairing_count": pending_pairing_count,
-        "requests_served": state.requests_served.load(Ordering::Relaxed),
-        "last_request_at": last_request_at,
     }))
-}
-
-async fn handle_requests_recent(
-    request: &rpc::RpcRequest,
-    state: &Arc<DaemonState>,
-) -> Result<serde_json::Value, RpcFailure> {
-    let params: RecentParams = parse_params(request)?;
-    let limit = params.limit.unwrap_or(50).min(REQUEST_LOG_CAP);
-    let records = requests::recent(&state.request_log, limit);
-    Ok(serde_json::to_value(records)?)
 }
 
 async fn handle_pairing_begin(
@@ -665,23 +467,20 @@ async fn handle_pairing_begin(
     let expires = now + time::Duration::seconds(ttl);
 
     // The ticket is this device's own node identity: discovery advertisements
-    // carry it, and remote peers send it back on `/sync/pair`. No token is
-    // minted and no `pending_pairings` row is created here — rows only exist
-    // for requests that actually arrived from another device.
+    // carry it, and remote peers dial it to file a claim. No token is minted
+    // and no `pending_pairings` row is created here — rows only exist for
+    // requests that actually arrived from another device.
     let device_type = params.device_type.unwrap_or_else(|| "unknown".to_string());
     let identity = match discovery_identity(state, &device_type).await {
         Some(identity) => identity,
-        // Without a bound endpoint there is nothing for peers to discover;
-        // pairing still works for callers that were given the address and
-        // device id directly, so publish the device id rather than failing.
+        // Without a bound endpoint there is nothing for peers to discover, so
+        // publish the device id rather than failing the move.
         None => PeerIdentity {
             node_id: NodeId(state.device_id.clone()),
             name: state.device_id.clone(),
             device_type,
         },
     };
-
-    let (host, port) = current_host_port(state).await;
 
     Ok(serde_json::json!({
         "node_id": identity.node_id.0,
@@ -690,7 +489,6 @@ async fn handle_pairing_begin(
             "name": identity.name,
             "device_type": identity.device_type,
         },
-        "listen_on": format!("{host}:{port}"),
         "expires_at": format_offset(expires),
     }))
 }
@@ -698,17 +496,11 @@ async fn handle_pairing_begin(
 async fn handle_pairing_list(state: &Arc<DaemonState>) -> Result<serde_json::Value, RpcFailure> {
     use livtet_data::client_entities::pending_pairings;
 
-    // A claim that arrived over iroh carries no socket origin and is admitted;
-    // one whose origin is this device's own address is not a peer.
-    let self_addr = self_address(state).await;
     let rows: Vec<_> = pending_pairings::Entity::find()
         .filter(pending_pairings::Column::StatusId.eq(DbId::from(PairingStatus::Pending)))
         .filter(pending_pairings::Column::ExpiresAt.gt(primitive_now()))
         .all(state.engine.db())
-        .await?
-        .into_iter()
-        .filter(|row| is_remote_claim(row.origin_addr.as_ref(), &self_addr))
-        .collect();
+        .await?;
 
     let list: Vec<serde_json::Value> = rows
         .iter()
@@ -716,7 +508,6 @@ async fn handle_pairing_list(state: &Arc<DaemonState>) -> Result<serde_json::Val
             serde_json::json!({
                 "node_id": row.token,
                 "desktop_id": row.desktop_id.to_string(),
-                "listen_on": row.listen_on.as_ref().map(|addr| addr.to_string()),
                 "status_id": row.status_id.map(|id| id.to_string()),
                 "device_name": row.device_name,
                 "device_type_id": row.device_type_id.map(|id| id.to_string()),
@@ -774,11 +565,8 @@ async fn handle_discovery_rename(
         .map(str::to_string);
     *state.device_name.lock().await = name.clone();
 
-    let serving = state.server.lock().await.is_some();
-    if serving {
-        stop_advertiser(state).await;
-        advertise(state).await;
-    }
+    stop_advertiser(state).await;
+    advertise(state).await;
 
     Ok(serde_json::json!({ "name": name }))
 }
@@ -798,51 +586,22 @@ async fn handle_pairing_approve(
         .await?
         .ok_or_else(|| invalid_params(format!("unknown pairing node id: {}", params.token)))?;
 
-    // Fail closed: only a request that originated elsewhere is a pairing.
-    // `pending.token` holds the remote node identity; a request carrying our
-    // own identity, or one recorded without an origin, is not a peer.
-    let self_addr = self_address(state).await;
     let pending_node_id = pending.token.clone();
-    // A claim filed over iroh has no socket origin — the connection's node id
-    // is the identity, and a peer cannot forge it. A claim that carries an
-    // origin (the HTTP transport) must not be this device talking to itself.
-    if pending_node_id == state.device_id
-        || pending
-            .origin_addr
-            .as_ref()
-            .is_some_and(|addr| addr.to_string() == self_addr)
-    {
-        return Err(invalid_params(format!(
-            "pairing node id did not originate from a remote device: {pending_node_id}"
-        )));
-    }
 
     let session_token = ulid::Ulid::generate().to_string();
     let device_id = pending.device_id.unwrap_or_else(DbId::new);
-    // Only a claim that names where *it* serves can be dialled back. The
-    // fallback address is this device's own, which would mean pulling from
-    // ourselves, so it stays "unknown" and the pairing stays one-way.
-    let peer_address = pending
-        .listen_on
-        .as_ref()
-        .filter(|address| address.to_string() != self_addr)
-        .cloned();
-
-    // A claim over iroh carries no socket origin: the connection's node id is
-    // the identity, and it is what the row dials later.
-    let claimed_over_iroh = pending.origin_addr.is_none();
     let model = paired_devices::ActiveModel {
         device_id: Set(device_id),
         name: Set(pending.device_name.clone()),
-        listen_on: Set(peer_address.clone()),
+        // The peer's node id is its address; there is no HTTP endpoint to
+        // store. Legacy rows keep whatever they recorded.
+        listen_on: Set(None),
         device_type_id: Set(pending.device_type_id),
         paired_at: Set(primitive_now()),
         last_sync_at: Set(None),
-        // A pairing is mutual when the peer can be dialled: it named where it
-        // serves, or it claimed over iroh, where the node id — the pairing key
-        // itself — is the address. A claim that arrived over HTTP with no
-        // address comes from a peer too old to speak iroh, and stays one-way.
-        outbound: Set(peer_address.is_some() || claimed_over_iroh),
+        // A pairing is mutual: both sides hold the same token, and the node id
+        // recorded below is enough to dial the claimant.
+        outbound: Set(true),
     };
     paired_devices::Entity::insert(model)
         .on_conflict(
@@ -875,8 +634,13 @@ async fn handle_pairing_approve(
     pending_model.status_id = Set(Some(DbId::from(PairingStatus::Approved)));
     pending_model.update(db).await?;
 
-    let _ = livtet_sync_http::apply_pairing_decision(&pending_node_id, "approved", &session_token)
-        .await;
+    let _ = crate::pairing::apply_pairing_decision(
+        &state.pair_waiters,
+        &pending_node_id,
+        "approved",
+        &session_token,
+    )
+    .await;
 
     Ok(serde_json::json!({
         "device_id": device_id.to_string(),
@@ -898,27 +662,19 @@ async fn handle_pairing_reject(
         .await?
         .ok_or_else(|| invalid_params(format!("unknown pairing node id: {}", params.token)))?;
 
-    // Fail closed: `pending.token` holds the remote node identity. Rejecting a
-    // request that carries our own identity, or one with no recorded origin,
-    // would be acting on something this device did not receive from a peer.
-    let self_addr = self_address(state).await;
     let pending_node_id = pending.token.clone();
-    if pending_node_id == state.device_id
-        || pending
-            .origin_addr
-            .as_ref()
-            .is_none_or(|addr| addr.to_string() == self_addr)
-    {
-        return Err(invalid_params(format!(
-            "pairing node id did not originate from a remote device: {pending_node_id}"
-        )));
-    }
 
     let mut model: pending_pairings::ActiveModel = pending.into();
     model.status_id = Set(Some(DbId::from(PairingStatus::Rejected)));
     model.update(db).await?;
 
-    let _ = livtet_sync_http::apply_pairing_decision(&pending_node_id, "rejected", "").await;
+    let _ = crate::pairing::apply_pairing_decision(
+        &state.pair_waiters,
+        &pending_node_id,
+        "rejected",
+        "",
+    )
+    .await;
 
     Ok(serde_json::json!({ "ok": true }))
 }
@@ -939,8 +695,8 @@ async fn handle_pairing_claim(
     Ok(serde_json::json!({ "status": "pending" }))
 }
 
-/// Claim a discovered peer, follow its decision stream, and store the token it
-/// issues us as an outbound paired device.
+/// Claim a discovered peer, wait for its decision on the same stream, and
+/// store the token it issues us as an outbound paired device.
 async fn claim_peer(
     state: &Arc<DaemonState>,
     params: PairingClaimParams,
@@ -948,7 +704,6 @@ async fn claim_peer(
     use livtet_data::client_entities::paired_devices;
     use livtet_data::orm::{EntityTrait, Set, sea_query::OnConflict};
     use livtet_sync_iroh::{Request, Response};
-    use livtet_types::Address;
 
     // Pairing is dialled by node id, so the claimant needs no reachable port
     // and the approver's address never enters the exchange.
@@ -1024,17 +779,12 @@ async fn claim_peer(
         }
     };
 
-    let listen_on = params
-        .listen_on
-        .trim()
-        .parse::<std::net::SocketAddr>()
-        .ok()
-        .map(Address::new);
     let db = state.engine.db();
     let model = paired_devices::ActiveModel {
         device_id: Set(peer_device_id),
         name: Set(params.device_name.clone()),
-        listen_on: Set(listen_on),
+        // The peer's node id is the address; nothing listens on a stored one.
+        listen_on: Set(None),
         device_type_id: Set(None),
         paired_at: Set(primitive_now()),
         last_sync_at: Set(None),
@@ -1072,7 +822,7 @@ async fn claim_peer(
         serde_json::json!({
             "device_id": peer_device_id.to_string(),
             "name": params.device_name,
-            "listen_on": params.listen_on,
+            "node_id": params.node_id,
         }),
     );
 
@@ -1095,7 +845,6 @@ async fn handle_devices_list(state: &Arc<DaemonState>) -> Result<serde_json::Val
             serde_json::json!({
                 "device_id": row.device_id.to_string(),
                 "name": row.name,
-                "listen_on": row.listen_on.as_ref().map(|addr| addr.to_string()),
                 "device_type_id": row.device_type_id.map(|id| id.to_string()),
                 "paired_at": format_primitive(row.paired_at),
                 "last_sync_at": row.last_sync_at.map(format_primitive),
@@ -1283,138 +1032,22 @@ async fn handle_devices_pull(
     Ok(serde_json::to_value(outcome)?)
 }
 
-/// One pull pass against an outbound peer, with its address corrected first
-/// when the peer turns out to have moved.
+/// One pull pass against an outbound peer.
 ///
-/// The address a pull dials is the pairing row's, and that row is written once
-/// — when the pairing is approved. The peer's daemon, however, binds its HTTP
-/// server on every launch and advertises the port it picked over mDNS. A peer
-/// that restarted therefore keeps a pairing that no longer resolves, and every
-/// pull fails silently until the two are paired again. So a failed pull
-/// re-resolves the address from the peer's current advertisement and retries
-/// once; a peer that is simply unreachable, or a failure that was not about
-/// reaching it, is reported unchanged.
+/// The transport dials the peer's node id, which iroh resolves on every call,
+/// so there is no stored address to correct or retry.
 async fn pull_device(
     state: &Arc<DaemonState>,
     device_id: DbId,
     background: bool,
 ) -> Result<serde_json::Value, ServerError> {
-    let outcome = match pull_device_once(state, device_id, background).await {
-        Ok(outcome) => outcome,
-        Err(error) => match re_resolve_peer_address(state, device_id).await {
-            Ok(true) => {
-                tracing::info!(%device_id, %error, "peer address changed; retrying the pull");
-                pull_device_once(state, device_id, background).await?
-            }
-            Ok(false) => return Err(error),
-            Err(browse_error) => {
-                // The pull's own failure is the one worth reporting: a browse
-                // that heard nothing is how a peer that is simply off looks.
-                tracing::debug!(%device_id, %browse_error, "could not re-resolve the peer");
-                return Err(error);
-            }
-        },
-    };
+    let outcome = pull_device_once(state, device_id, background).await?;
 
     report_pulled(state, device_id, &outcome);
     Ok(outcome)
 }
 
-/// Correct a paired peer's stored address from its mDNS advertisement.
-///
-/// Returns whether the row changed, which is what makes a retry worth
-/// spending. A peer that is not advertising — asleep, off the network, or on a
-/// link that drops multicast — leaves the pairing untouched.
-async fn re_resolve_peer_address(
-    state: &Arc<DaemonState>,
-    device_id: DbId,
-) -> Result<bool, ServerError> {
-    use livtet_data::client_entities::paired_devices;
-
-    let own_device_id = state.device_id.clone();
-    // `mdns-sd`'s receiver is blocking, so the window runs off the async
-    // runtime, as it does for `discovery.nearby`.
-    let peers = tokio::task::spawn_blocking(crate::mdns::browse_nearby)
-        .await
-        .map_err(|error| ServerError::Server(format!("mDNS browse task failed: {error}")))??;
-
-    let wanted = device_id.to_string();
-    let Some(peer) = peers
-        .iter()
-        .find(|peer| peer.device_id == wanted && peer.device_id != own_device_id)
-    else {
-        return Ok(false);
-    };
-    let Some(address) = preferred_address(peer) else {
-        return Ok(false);
-    };
-
-    let db = state.engine.db();
-    let Some(row) = paired_devices::Entity::find_by_id(device_id)
-        .one(db)
-        .await
-        .map_err(|error| ServerError::Server(format!("paired device lookup: {error}")))?
-    else {
-        return Ok(false);
-    };
-    if !address_changed(row.listen_on.as_ref(), &address) {
-        return Ok(false);
-    }
-
-    let mut model: paired_devices::ActiveModel = row.into();
-    model.listen_on = Set(Some(address.clone()));
-    model
-        .update(db)
-        .await
-        .map_err(|error| ServerError::Server(format!("paired device update: {error}")))?;
-    tracing::info!(%device_id, %address, "paired device address refreshed from its advertisement");
-    Ok(true)
-}
-
-/// The address to dial for an advertised peer: the first routable one it
-/// listed, else whatever it listed at all.
-///
-/// An advertisement carries every interface's address, including loopback and
-/// link-local ones a peer on another machine cannot reach. Falling back rather
-/// than giving up keeps two instances on one machine workable.
-fn preferred_address(peer: &NearbyPeer) -> Option<livtet_types::Address> {
-    let candidates: Vec<std::net::SocketAddr> = peer
-        .addresses
-        .iter()
-        .filter_map(|address| address.trim().parse::<std::net::IpAddr>().ok())
-        .map(|ip| std::net::SocketAddr::new(ip, peer.port))
-        .collect();
-    candidates
-        .iter()
-        .copied()
-        .find(is_routable)
-        .or_else(|| candidates.first().copied())
-        .map(livtet_types::Address::new)
-}
-
-/// Whether a peer could be reached at `candidate` from another machine.
-fn is_routable(candidate: &std::net::SocketAddr) -> bool {
-    let ip = candidate.ip();
-    !ip.is_loopback() && !ip.is_unspecified() && !is_link_local(ip)
-}
-
-/// Link-local addresses are scoped to one link and never reach a peer.
-fn is_link_local(ip: std::net::IpAddr) -> bool {
-    match ip {
-        std::net::IpAddr::V4(v4) => v4.is_link_local(),
-        std::net::IpAddr::V6(v6) => (v6.segments()[0] & 0xffc0) == 0xfe80,
-    }
-}
-
-/// Whether the stored address differs from the freshly resolved one.
-fn address_changed(
-    stored: Option<&livtet_types::Address>,
-    resolved: &livtet_types::Address,
-) -> bool {
-    stored.map(|address| address.0) != Some(resolved.0)
-}
-
-/// One pull pass against an outbound peer, using the address on file.
+/// One pull pass against an outbound peer, dialling its node id.
 async fn pull_device_once(
     state: &Arc<DaemonState>,
     device_id: DbId,
@@ -1436,7 +1069,7 @@ async fn pull_device_once(
         ));
     }
     // The transport dials by node id over iroh, so no inbound port on the peer
-    // has to be reachable; a row from before that keeps the HTTP path.
+    // has to be reachable.
     let peer_client = crate::peer::peer_for(state, device_id).await?;
 
     let cursor_key = format!("sync.cursor.{device_id}");
@@ -2060,42 +1693,10 @@ async fn handle_conflicts_resolve(
     Ok(serde_json::json!({ "ok": resolved }))
 }
 
-async fn handle_server_start(state: &Arc<DaemonState>) -> Result<serde_json::Value, RpcFailure> {
-    if state.server.lock().await.is_some() {
-        return Ok(serde_json::json!({ "ok": true, "already_running": true }));
-    }
-    start_server(state).await?;
-    Ok(serde_json::json!({ "ok": true }))
-}
-
-async fn handle_server_stop(state: &Arc<DaemonState>) -> Result<serde_json::Value, RpcFailure> {
-    stop_server(state).await?;
-    Ok(serde_json::json!({ "ok": true }))
-}
-
 async fn handle_shutdown(state: &Arc<DaemonState>) -> Result<serde_json::Value, RpcFailure> {
-    stop_server(state).await?;
+    stop_advertiser(state).await;
     shutdown_discovery(state).await;
     Ok(serde_json::json!({ "ok": true }))
-}
-
-async fn current_port(state: &Arc<DaemonState>) -> u16 {
-    match *state.bound.lock().await {
-        Some(addr) => addr.port(),
-        None => state.config.port,
-    }
-}
-
-async fn current_host_port(state: &Arc<DaemonState>) -> (String, u16) {
-    match *state.bound.lock().await {
-        Some(addr) => (addr.ip().to_string(), addr.port()),
-        None => (state.config.host.clone(), state.config.port),
-    }
-}
-
-async fn self_address(state: &Arc<DaemonState>) -> String {
-    let (host, port) = current_host_port(state).await;
-    format!("{host}:{port}")
 }
 
 fn primitive_now() -> time::PrimitiveDateTime {
@@ -2123,12 +1724,17 @@ fn format_primitive(dt: time::PrimitiveDateTime) -> String {
         .unwrap_or_default()
 }
 /// Bind the discovery endpoint on first use and return the identity to
-/// advertise. A failed bind is not fatal: the daemon logs it and pairing falls
-/// back to explicit addresses.
+/// advertise. A failed bind is not fatal: the daemon logs it and pairing is
+/// unavailable until the endpoint can bind.
 async fn discovery_identity(state: &Arc<DaemonState>, device_type: &str) -> Option<PeerIdentity> {
     let mut slot = state.discovery.lock().await;
     if slot.is_none() {
-        match DiscoveryService::bind_with_secret(discovery_secret_key()).await {
+        match DiscoveryService::bind_with_secret_and_port(
+            discovery_secret_key(),
+            Some(state.config.port),
+        )
+        .await
+        {
             Ok(service) => *slot = Some(Arc::new(service)),
             Err(error) => {
                 tracing::warn!(%error, "peer discovery unavailable; advertising the device id");
@@ -2158,16 +1764,26 @@ pub(crate) async fn discovery_node_id(state: &Arc<DaemonState>) -> String {
         .unwrap_or_else(|| state.device_id.clone())
 }
 
-/// Announce the HTTP pairing surface once the server has a bound port.
+/// Announce the sync endpoint for app discovery.
 ///
-/// The record carries the node id the client will use as the pairing key, so a
-/// device that finds us over mDNS can confirm it with `GET /sync/identity`
-/// before posting a claim.
+/// The record carries the node id a client pairs with, the device name and the
+/// version. The SRV port is the endpoint's UDP port; it is informational, and
+/// nothing dials it as an HTTP surface.
 async fn advertise(state: &Arc<DaemonState>) {
-    let (host, port) = current_host_port(state).await;
-    let Ok(ip) = host.parse::<std::net::IpAddr>() else {
-        tracing::warn!(%host, "mDNS advertising skipped: unparseable bind address");
-        return;
+    let (ip, port) = {
+        let slot = state.discovery.lock().await;
+        slot.as_ref()
+            .and_then(|service| {
+                service
+                    .bound_sockets()
+                    .into_iter()
+                    .find(std::net::SocketAddr::is_ipv4)
+            })
+            .map(|addr| (addr.ip(), addr.port()))
+            .unwrap_or((
+                std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED),
+                state.config.port,
+            ))
     };
     let node_id = discovery_node_id(state).await;
     let device_name = state.device_name.lock().await.clone();
@@ -2206,10 +1822,10 @@ fn spawn_pull_loop(state: Arc<DaemonState>) {
 
 /// Tell the parent process that a pull changed this library.
 ///
-/// The pull runs on the daemon's own clock, so nothing else would tell the UI:
-/// `sync.completed` reports requests this device *served*. Only a pull that
-/// applied rows is reported — a pull that found nothing changed the catalog by
-/// definition not at all, and a UI refetch would be pure noise.
+/// The pull runs on the daemon's own clock, so nothing else would tell the UI.
+/// Only a pull that applied rows is reported — a pull that found nothing
+/// changed the catalog by definition not at all, and a UI refetch would be pure
+/// noise.
 fn report_pulled(state: &Arc<DaemonState>, device_id: DbId, outcome: &serde_json::Value) {
     let applied = outcome
         .get("applied")
@@ -2249,22 +1865,20 @@ async fn outbound_device_ids(state: &Arc<DaemonState>) -> Vec<DbId> {
     }
 }
 
-/// Make pairings approved before pairing became mutual pull-capable.
+/// Make pairings that already name a node id pull-capable.
 ///
-/// Approval used to write `outbound = false`, which `pull_device` refuses: the
-/// device that *approved* a claim could never read the device that filed it,
-/// even though both sides already held the same token. The flag only gates
-/// pulling, so flipping it on rows that have a token grants the missing half
-/// without re-pairing anything.
+/// Approval used to write `outbound = false`, which `pull_device` refuses, and
+/// the transport change means only a row with a node id can be dialled. The
+/// flag only gates pulling, so flipping it on those rows grants the missing
+/// half without re-pairing anything.
 async fn promote_mutual_pairings(state: &Arc<DaemonState>) -> Result<(), ServerError> {
-    // Approval used to store the address the claim was *served* on — this
-    // device's own, and a wildcard one at that — so those rows have nothing to
-    // dial. A peer address is never `0.0.0.0`/`[::]`; anything specific is.
+    // Only a row that names the peer's node id can be dialled. Rows from the
+    // HTTP transport have no node id and are left alone: promoting them would
+    // make every pull fail on the missing address.
     let updated = livtet_data::sql::query(
         "UPDATE paired_devices SET outbound = 1 \
          WHERE outbound = 0 AND session_token IS NOT NULL AND session_token != '' \
-           AND listen_on IS NOT NULL \
-           AND listen_on NOT LIKE '0.0.0.0:%' AND listen_on NOT LIKE '[::]:%'",
+           AND node_id IS NOT NULL AND node_id != ''",
     )
     .execute(&state.pool)
     .await
@@ -2295,73 +1909,4 @@ async fn cleanup_old_pairings(state: &Arc<DaemonState>) -> Result<(), ServerErro
 
     tracing::info!("cleaned up old pending pairings");
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{address_changed, preferred_address};
-    use crate::mdns::NearbyPeer;
-
-    fn peer(addresses: &[&str], port: u16) -> NearbyPeer {
-        NearbyPeer {
-            node_id: "node".to_string(),
-            device_id: "01M6BYRPJ5XQ4HH7R8CEZ194HY".to_string(),
-            name: "Jacky's MacBook Pro".to_string(),
-            device_type: "desktop".to_string(),
-            version: "0.2.1".to_string(),
-            hostname: "jackys-macbook-pro.local".to_string(),
-            addresses: addresses
-                .iter()
-                .map(|address| address.to_string())
-                .collect(),
-            port,
-        }
-    }
-
-    /// A peer advertises every interface it has. Dialling loopback or a
-    /// link-local address reaches this machine, never the peer.
-    #[test]
-    fn the_routable_address_wins_over_the_local_ones() {
-        let advertised = peer(
-            &["127.0.0.1", "fe80::1c2b:3eff:fe4d:5a6b", "192.168.1.226"],
-            7710,
-        );
-
-        let chosen = preferred_address(&advertised).expect("an address to dial");
-
-        assert_eq!(chosen.to_string(), "192.168.1.226:7710");
-    }
-
-    /// Two instances on one machine still sync: the fallback is better than
-    /// refusing to try.
-    #[test]
-    fn a_loopback_only_peer_is_still_reachable() {
-        let advertised = peer(&["127.0.0.1"], 7711);
-
-        let chosen = preferred_address(&advertised).expect("an address to dial");
-
-        assert_eq!(chosen.to_string(), "127.0.0.1:7711");
-    }
-
-    #[test]
-    fn a_peer_without_addresses_offers_nothing_to_dial() {
-        assert!(preferred_address(&peer(&[], 7710)).is_none());
-    }
-
-    /// The address is only worth rewriting when it actually moved: a peer that
-    /// came back on the port it advertised before must not churn its row (and
-    /// trigger a pointless retry) on every failed pull.
-    #[test]
-    fn only_a_moved_address_counts_as_a_change() {
-        let stored: livtet_types::Address = "192.168.1.226:7710".parse().expect("stored address");
-        let same: livtet_types::Address = "192.168.1.226:7710".parse().expect("same address");
-        let moved: livtet_types::Address = "192.168.1.226:7711".parse().expect("moved address");
-
-        assert!(!address_changed(Some(&stored), &same));
-        assert!(address_changed(Some(&stored), &moved));
-        assert!(
-            address_changed(None, &moved),
-            "a pairing with no address has to take the resolved one"
-        );
-    }
 }
