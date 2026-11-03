@@ -249,8 +249,8 @@ async fn author_names_for_edition(
 fn to_identifier(row: &identifiers::Model) -> Identifier {
     let kind = IdentifierKind::parse(&row.kind)
         .unwrap_or_else(|| IdentifierKind::Custom(row.kind.clone()));
-    let urn = Urn::parse(&row.value)
-        .unwrap_or_else(|_| Urn::new(row.kind.clone(), row.value.clone()));
+    let urn =
+        Urn::parse(&row.value).unwrap_or_else(|_| Urn::new(row.kind.clone(), row.value.clone()));
     Identifier { kind, urn }
 }
 

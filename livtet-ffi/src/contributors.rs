@@ -11,7 +11,9 @@
 //! first; the catalog hydration path does exactly that.
 
 use livtet_core::data::entities::{authors, edition_authors};
-use livtet_core::data::orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, QueryOrder, Set};
+use livtet_core::data::orm::{
+    ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, QueryOrder, Set,
+};
 use livtet_core::types::DbId;
 
 use crate::dto::{Contribution, Contributor};
@@ -339,7 +341,10 @@ mod tests {
             .unwrap();
         assert_eq!(renamed.name, "Wole Soyinka (1934–)");
 
-        let found = store.find_contributors("soyinka".to_string()).await.unwrap();
+        let found = store
+            .find_contributors("soyinka".to_string())
+            .await
+            .unwrap();
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].id, created.id);
 
@@ -352,10 +357,16 @@ mod tests {
     async fn blank_names_and_roles_are_rejected() {
         let (_tmp, store, edition) = store_with_edition().await;
 
-        let err = store.create_contributor("   ".to_string()).await.unwrap_err();
+        let err = store
+            .create_contributor("   ".to_string())
+            .await
+            .unwrap_err();
         assert!(matches!(err, LivtetError::InvalidInput(_)), "{err:?}");
 
-        let who = store.create_contributor("Chinua Achebe".to_string()).await.unwrap();
+        let who = store
+            .create_contributor("Chinua Achebe".to_string())
+            .await
+            .unwrap();
         let err = store
             .add_edition_contributor(edition, who.id, "  ".to_string())
             .await
@@ -366,7 +377,10 @@ mod tests {
     #[tokio::test]
     async fn attach_move_and_detach_contributor_roles() {
         let (_tmp, store, edition) = store_with_edition().await;
-        let who = store.create_contributor("Chinua Achebe".to_string()).await.unwrap();
+        let who = store
+            .create_contributor("Chinua Achebe".to_string())
+            .await
+            .unwrap();
 
         let author = store
             .add_edition_contributor(edition, who.id, "Author".to_string())
@@ -390,7 +404,12 @@ mod tests {
         let listed = store.list_edition_contributors(edition).await.unwrap();
         // The seeded edition already carries its own contributors, so only
         // this contributor's links are counted.
-        let mine = |role: &str| listed.iter().filter(|c| c.contributor_id == who.id && c.role == role).count();
+        let mine = |role: &str| {
+            listed
+                .iter()
+                .filter(|c| c.contributor_id == who.id && c.role == role)
+                .count()
+        };
         assert_eq!(mine("author"), 1, "one row per role");
         assert_eq!(mine("translator"), 1);
 
@@ -415,14 +434,18 @@ mod tests {
         // Ordered by name, then role: same contributor, so role decides.
         assert_eq!(roles, vec!["author".to_string(), "editor".to_string()]);
 
-        assert!(store
-            .remove_edition_contributor(edition, who.id, "author".to_string())
-            .await
-            .unwrap());
-        assert!(!store
-            .remove_edition_contributor(edition, who.id, "author".to_string())
-            .await
-            .unwrap());
+        assert!(
+            store
+                .remove_edition_contributor(edition, who.id, "author".to_string())
+                .await
+                .unwrap()
+        );
+        assert!(
+            !store
+                .remove_edition_contributor(edition, who.id, "author".to_string())
+                .await
+                .unwrap()
+        );
 
         // The contributor row survives losing a link.
         assert!(store.get_contributor(who.id).await.unwrap().is_some());
@@ -443,7 +466,10 @@ mod tests {
         let other_work = &store.list_works(10, 0, None, None).await.unwrap()[1];
         let other_edition = store.list_editions(other_work.id).await.unwrap()[0].id;
 
-        let who = store.create_contributor("Ngũgĩ wa Thiong'o".to_string()).await.unwrap();
+        let who = store
+            .create_contributor("Ngũgĩ wa Thiong'o".to_string())
+            .await
+            .unwrap();
         store
             .add_edition_contributor(edition, who.id, "author".to_string())
             .await
@@ -474,7 +500,10 @@ mod tests {
     #[tokio::test]
     async fn attaching_to_a_missing_edition_or_contributor_fails() {
         let (_tmp, store, edition) = store_with_edition().await;
-        let who = store.create_contributor("Someone".to_string()).await.unwrap();
+        let who = store
+            .create_contributor("Someone".to_string())
+            .await
+            .unwrap();
 
         let err = store
             .add_edition_contributor(DbId::new(), who.id, "author".to_string())

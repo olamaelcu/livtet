@@ -165,9 +165,9 @@ impl LivtetStore {
         .await?;
 
         let mut summaries = crate::works::summarize_works(&db, vec![model]).await?;
-        summaries.pop().ok_or_else(|| {
-            LivtetError::InvalidInput("work insert produced no row".to_string())
-        })
+        summaries
+            .pop()
+            .ok_or_else(|| LivtetError::InvalidInput("work insert produced no row".to_string()))
     }
 
     /// Create an edition under an existing work. Fails `NotFound` for a
@@ -196,10 +196,12 @@ impl LivtetStore {
         .insert(&db)
         .await?;
 
-        self.get_edition(id).await?.ok_or_else(|| LivtetError::NotFound {
-            entity: "editions".to_string(),
-            id: id.to_string(),
-        })
+        self.get_edition(id)
+            .await?
+            .ok_or_else(|| LivtetError::NotFound {
+                entity: "editions".to_string(),
+                id: id.to_string(),
+            })
     }
 
     /// Replace one identifier of an edition with another.
@@ -696,14 +698,18 @@ mod tests {
         assert!(listed.contains(&doi));
         assert!(!listed.contains(&oclc), "old identifier detached");
 
-        assert!(store
-            .remove_edition_identifier(edition.id, isbn.clone())
-            .await
-            .unwrap());
-        assert!(!store
-            .remove_edition_identifier(edition.id, isbn)
-            .await
-            .unwrap());
+        assert!(
+            store
+                .remove_edition_identifier(edition.id, isbn.clone())
+                .await
+                .unwrap()
+        );
+        assert!(
+            !store
+                .remove_edition_identifier(edition.id, isbn)
+                .await
+                .unwrap()
+        );
         let listed = store.list_edition_identifiers(edition.id).await.unwrap();
         assert_eq!(listed, vec![doi]);
     }
@@ -731,15 +737,19 @@ mod tests {
         assert_eq!(hits.len(), 2);
 
         // Unlinking one edition leaves the other's link intact.
-        assert!(store
-            .remove_edition_identifier(a.id, isbn.clone())
-            .await
-            .unwrap());
-        assert!(store
-            .list_edition_identifiers(a.id)
-            .await
-            .unwrap()
-            .is_empty());
+        assert!(
+            store
+                .remove_edition_identifier(a.id, isbn.clone())
+                .await
+                .unwrap()
+        );
+        assert!(
+            store
+                .list_edition_identifiers(a.id)
+                .await
+                .unwrap()
+                .is_empty()
+        );
         assert_eq!(
             store.list_edition_identifiers(b.id).await.unwrap(),
             vec![isbn.clone()]
