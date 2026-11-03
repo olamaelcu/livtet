@@ -243,6 +243,88 @@ impl LivtetStore {
         Ok(removed)
     }
 
+    /// Delete a work and everything hanging off it.
+    ///
+    /// `editions.work_id` cascades, so the editions, their junctions, and the
+    /// work's status row go with it. Search documents are removed explicitly:
+    /// the index has no cascade and a stale hit would surface a book that no
+    /// longer exists.
+    pub async fn delete_work(&self, work_id: DbId) -> Result<bool, LivtetError> {
+        let db = self.state.db_conn();
+        let edition_ids: Vec<DbId> = editions::Entity::find()
+            .filter(editions::Column::WorkId.eq(work_id))
+            .all(&db)
+            .await?
+            .into_iter()
+            .map(|e| e.id)
+            .collect();
+
+        let removed = works::Entity::delete_by_id(work_id)
+            .exec(&db)
+            .await?
+            .rows_affected
+            > 0;
+        if removed {
+            for edition_id in edition_ids {
+                let _ = self.index.delete_edition(edition_id).await;
+            }
+        }
+        Ok(removed)
+    }
+
+    /// Delete one edition.
+    ///
+    /// A work with no editions left would be a library row that cannot be
+    /// opened, filed, or given a cover, so the work goes too when this was its
+    /// last edition.
+    pub async fn delete_edition(&self, edition_id: DbId) -> Result<bool, LivtetError> {
+        let db = self.state.db_conn();
+        let Some(edition) = editions::Entity::find_by_id(edition_id).one(&db).await? else {
+            return Ok(false);
+        };
+
+        let siblings = editions::Entity::find()
+            .filter(editions::Column::WorkId.eq(edition.work_id))
+            .all(&db)
+            .await?
+            .len();
+
+        let removed = editions::Entity::delete_by_id(edition_id)
+            .exec(&db)
+            .await?
+            .rows_affected
+            > 0;
+        if removed {
+            let _ = self.index.delete_edition(edition_id).await;
+            if siblings <= 1 {
+                works::Entity::delete_by_id(edition.work_id)
+                    .exec(&db)
+                    .await?;
+            }
+        }
+        Ok(removed)
+    }
+
+    /// Record (or clear) the catalog cover URL of an edition.
+    ///
+    /// Used to backfill editions imported before the column existed; the cover
+    /// cache picks it up on the next load.
+    pub async fn set_edition_cover_url(
+        &self,
+        edition_id: DbId,
+        cover_image_url: Option<String>,
+    ) -> Result<(), LivtetError> {
+        let db = self.state.db_conn();
+        let model = require_edition(&db, edition_id).await?;
+
+        let mut active: editions::ActiveModel = model.into();
+        active.cover_image_url = Set(cover_image_url.filter(|url| !url.trim().is_empty()));
+        active.updated_at = Set(Some(now_primitive()));
+        active.update(&db).await?;
+
+        self.sync_edition_index(edition_id).await
+    }
+
     /// Apply a [`EditionPatch`] and return the refreshed detail.
     pub async fn update_edition(
         &self,
@@ -443,7 +525,7 @@ mod tests {
         .await
         .expect("seed");
 
-        let work = &store.list_works(1, 0, None, None).await.unwrap()[0];
+        let work = &store.list_works(1, 0, None, None, None).await.unwrap()[0];
         let edition = store.list_editions(work.id).await.unwrap()[0].id;
         (tmp, store, edition)
     }
@@ -666,7 +748,7 @@ mod tests {
             .await
             .unwrap();
 
-        let listed = store.list_works(100, 0, None, None).await.unwrap();
+        let listed = store.list_works(100, 0, None, None, None).await.unwrap();
         let row = listed
             .iter()
             .find(|w| w.id == work.id)
@@ -678,6 +760,218 @@ mod tests {
             Some("https://covers.example/covered.jpg")
         );
         assert!(row.status.is_none());
+    }
+
+    #[tokio::test]
+    async fn list_works_searches_titles_and_contributors() {
+        let (_tmp, store, _edition) = seeded_store_with_edition().await;
+
+        let work = store
+            .create_work("Titles Are Hard".to_string(), None, None)
+            .await
+            .unwrap();
+        let edition = store
+            .create_edition(NewEdition {
+                work_id: work.id,
+                title: Some("Titles Are Hard".to_string()),
+                description: None,
+                published_date: None,
+                format_id: None,
+                language_id: None,
+                notes: None,
+                cover_image_url: None,
+            })
+            .await
+            .unwrap();
+
+        // The import path attaches contributors per edition, not per work.
+        let who = store
+            .create_contributor("Chimamanda Ngozi Adichie".to_string())
+            .await
+            .unwrap();
+        store
+            .add_edition_contributor(edition.id, who.id, "author".to_string())
+            .await
+            .unwrap();
+
+        let by_title = store
+            .list_works(100, 0, None, None, Some("titles are".to_string()))
+            .await
+            .unwrap();
+        assert_eq!(by_title.len(), 1);
+        assert_eq!(by_title[0].id, work.id);
+
+        // Case-insensitive, and found through the edition junction.
+        let by_author = store
+            .list_works(100, 0, None, None, Some("ADICHIE".to_string()))
+            .await
+            .unwrap();
+        assert_eq!(by_author.len(), 1);
+        assert_eq!(by_author[0].id, work.id);
+
+        let none = store
+            .list_works(100, 0, None, None, Some("nothing matches this".to_string()))
+            .await
+            .unwrap();
+        assert!(none.is_empty());
+
+        // A blank query is not a filter.
+        let all = store
+            .list_works(100, 0, None, None, Some("   ".to_string()))
+            .await
+            .unwrap();
+        assert!(all.len() >= 2);
+    }
+
+    #[tokio::test]
+    async fn deleting_a_work_takes_its_editions_and_search_hits() {
+        let (_tmp, store, _edition) = seeded_store_with_edition().await;
+
+        let work = store
+            .create_work("Doomed Work".to_string(), None, None)
+            .await
+            .unwrap();
+        store
+            .create_edition(NewEdition {
+                work_id: work.id,
+                title: Some("Doomed Edition".to_string()),
+                description: None,
+                published_date: None,
+                format_id: None,
+                language_id: None,
+                notes: None,
+                cover_image_url: None,
+            })
+            .await
+            .unwrap();
+        assert_eq!(store.list_editions(work.id).await.unwrap().len(), 1);
+
+        assert!(store.delete_work(work.id).await.unwrap());
+        assert!(!store.delete_work(work.id).await.unwrap());
+
+        assert!(store.list_editions(work.id).await.unwrap().is_empty());
+        let listed = store.list_works(100, 0, None, None, None).await.unwrap();
+        assert!(!listed.iter().any(|w| w.id == work.id));
+        // The index has no cascade, so a surviving document would resurrect it.
+        let hits = store
+            .search_works("Doomed".to_string(), 10, 0)
+            .await
+            .unwrap();
+        assert!(
+            !hits.iter().any(|h| h.work_id == work.id.to_string()),
+            "search still returns the deleted work"
+        );
+    }
+
+    #[tokio::test]
+    async fn deleting_the_last_edition_removes_the_work() {
+        let (_tmp, store, _edition) = seeded_store_with_edition().await;
+
+        let work = store
+            .create_work("Single Edition".to_string(), None, None)
+            .await
+            .unwrap();
+        let edition = store
+            .create_edition(NewEdition {
+                work_id: work.id,
+                title: Some("Only One".to_string()),
+                description: None,
+                published_date: None,
+                format_id: None,
+                language_id: None,
+                notes: None,
+                cover_image_url: None,
+            })
+            .await
+            .unwrap();
+
+        assert!(store.delete_edition(edition.id).await.unwrap());
+        assert!(!store.delete_edition(edition.id).await.unwrap());
+        // A work with no editions could not be opened or filed, so it goes too.
+        assert!(store.get_edition(edition.id).await.unwrap().is_none());
+        assert!(
+            !store
+                .list_works(100, 0, None, None, None)
+                .await
+                .unwrap()
+                .iter()
+                .any(|w| w.id == work.id)
+        );
+    }
+
+    #[tokio::test]
+    async fn deleting_one_of_several_editions_keeps_the_work() {
+        let (_tmp, store, _edition) = seeded_store_with_edition().await;
+
+        let work = store
+            .create_work("Two Editions".to_string(), None, None)
+            .await
+            .unwrap();
+        let mut ids = Vec::new();
+        for title in ["First", "Second"] {
+            ids.push(
+                store
+                    .create_edition(NewEdition {
+                        work_id: work.id,
+                        title: Some(title.to_string()),
+                        description: None,
+                        published_date: None,
+                        format_id: None,
+                        language_id: None,
+                        notes: None,
+                        cover_image_url: None,
+                    })
+                    .await
+                    .unwrap()
+                    .id,
+            );
+        }
+
+        assert!(store.delete_edition(ids[0]).await.unwrap());
+        assert_eq!(store.list_editions(work.id).await.unwrap().len(), 1);
+        assert!(
+            store
+                .list_works(100, 0, None, None, None)
+                .await
+                .unwrap()
+                .iter()
+                .any(|w| w.id == work.id),
+            "the work survives while an edition does"
+        );
+    }
+
+    #[tokio::test]
+    async fn cover_url_can_be_backfilled_after_import() {
+        let (_tmp, store, edition) = seeded_store_with_edition().await;
+
+        let work = &store.list_works(1, 0, None, None, None).await.unwrap()[0];
+        let before = store.list_works(1, 0, None, None, None).await.unwrap();
+        assert!(before[0].cover_url.is_none(), "seeded edition has no cover");
+
+        store
+            .set_edition_cover_url(
+                edition,
+                Some("https://covers.example/backfilled.jpg".to_string()),
+            )
+            .await
+            .unwrap();
+        let after = store.list_works(1, 0, None, None, None).await.unwrap();
+        assert_eq!(
+            after[0].cover_url.as_deref(),
+            Some("https://covers.example/backfilled.jpg")
+        );
+        assert_eq!(after[0].id, work.id);
+
+        // An empty URL clears it again rather than storing blank text.
+        store
+            .set_edition_cover_url(edition, Some("   ".to_string()))
+            .await
+            .unwrap();
+        assert!(
+            store.list_works(1, 0, None, None, None).await.unwrap()[0]
+                .cover_url
+                .is_none()
+        );
     }
 
     #[tokio::test]

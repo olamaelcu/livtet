@@ -205,7 +205,7 @@ mod tests {
     #[tokio::test]
     async fn filtering_by_format_narrows_the_listing() {
         let (_tmp, store) = seeded_store(5).await;
-        let all = store.list_works(100, 0, None, None).await.unwrap();
+        let all = store.list_works(100, 0, None, None, None).await.unwrap();
         let format = store.list_formats().await.unwrap()[0].clone();
 
         let filtered = store

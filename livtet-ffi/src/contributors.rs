@@ -316,7 +316,7 @@ mod tests {
         .await
         .expect("seed");
 
-        let work = &store.list_works(1, 0, None, None).await.unwrap()[0];
+        let work = &store.list_works(1, 0, None, None, None).await.unwrap()[0];
         let edition = store.list_editions(work.id).await.unwrap()[0].id;
         (tmp, store, edition)
     }
@@ -463,7 +463,7 @@ mod tests {
     #[tokio::test]
     async fn contributor_is_shared_across_editions() {
         let (_tmp, store, edition) = store_with_edition().await;
-        let other_work = &store.list_works(10, 0, None, None).await.unwrap()[1];
+        let other_work = &store.list_works(10, 0, None, None, None).await.unwrap()[1];
         let other_edition = store.list_editions(other_work.id).await.unwrap()[0].id;
 
         let who = store

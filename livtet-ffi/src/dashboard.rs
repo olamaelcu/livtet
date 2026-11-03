@@ -178,7 +178,7 @@ mod tests {
     #[tokio::test]
     async fn recently_read_tracks_progress_and_sessions() {
         let (_tmp, store) = seeded_store(2).await;
-        let work = store.list_works(1, 0, None, None).await.unwrap()[0].clone();
+        let work = store.list_works(1, 0, None, None, None).await.unwrap()[0].clone();
         let edition = store.list_editions(work.id).await.unwrap()[0].id;
         let format = DbId::from(KnownFormats::Epub);
 

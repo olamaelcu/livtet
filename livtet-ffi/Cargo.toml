@@ -18,6 +18,7 @@ livtet-core = { workspace = true, features = ["uniffi"] }
 livtet-covers = { workspace = true }
 livtet-iroh = { workspace = true }
 livtet-sync-iroh = { workspace = true }
+livtet-mdns = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }
 camino.workspace = true
 hex.workspace = true

@@ -107,6 +107,8 @@ const EXPECTED_TYPES: &[&str] = &[
     "EditionPatch",
     "SeedStats",
     "ReindexProgressEvent",
+    // Pairing and advertising over iroh
+    "SyncPairingResult",
     // Dashboard + filters
     "DashboardStats",
     "RecentlyReadBook",
@@ -141,6 +143,18 @@ const EXPECTED_TYPES: &[&str] = &[
     "SortDirection",
     "WorkSortBy",
     "WorkFilters",
+];
+
+/// Free functions the mobile clients call directly, not through the store.
+///
+/// Pairing and advertising hang off the endpoint identity rather than a
+/// database, so they are module-level exports; a rename here would break the
+/// Android/iOS callers without breaking any store method.
+const EXPECTED_SYNC_FUNCTIONS: &[&str] = &[
+    "pairSyncDevice",
+    "syncPairingStatus",
+    "advertiseSyncDevice",
+    "stopAdvertisingSyncDevice",
 ];
 
 /// Method names (camelCase) expected on the store.
@@ -272,6 +286,16 @@ fn kotlin_and_swift_bindings_expose_the_full_surface() {
         assert!(
             swift.contains(&method.to_lowercase()),
             "swift bindings missing method {method}"
+        );
+    }
+    for function in EXPECTED_SYNC_FUNCTIONS {
+        assert!(
+            kotlin.contains(&function.to_lowercase()),
+            "kotlin bindings missing sync function {function}"
+        );
+        assert!(
+            swift.contains(&function.to_lowercase()),
+            "swift bindings missing sync function {function}"
         );
     }
 }

@@ -31,4 +31,7 @@ pub use maintenance::{ReindexProgress, ReindexProgressEvent};
 pub use mutations::EditionPatch;
 pub use quotes::{EmptyMessage, Greeting};
 pub use store::LivtetStore;
-pub use sync::{SyncPairingResult, pair_sync_device, sync_pairing_status};
+pub use sync::{
+    SyncPairingResult, advertise_sync_device, pair_sync_device, stop_advertising_sync_device,
+    sync_pairing_status,
+};

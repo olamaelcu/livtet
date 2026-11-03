@@ -7,8 +7,8 @@ use livtet_core::data::entities::{
     edition_publishers, editions, formats, identifiers, languages, publishers, work_authors, works,
 };
 use livtet_core::data::orm::{
-    ColumnTrait, DatabaseConnection, EntityTrait, Order, PaginatorTrait, QueryFilter, QueryOrder,
-    QuerySelect, Select,
+    ColumnTrait, Condition, DatabaseConnection, EntityTrait, Order, PaginatorTrait, QueryFilter,
+    QueryOrder, QuerySelect, Select,
 };
 use livtet_core::types::{
     DbId, Identifier, IdentifierKind, SortDirection, Urn, WorkSortBy, WorkStatus,
@@ -30,10 +30,25 @@ impl LivtetStore {
         offset: u32,
         sort_by: Option<WorkSortBy>,
         sort_direction: Option<SortDirection>,
+        query: Option<String>,
     ) -> Result<Vec<WorkSummary>, LivtetError> {
         let db = self.state.db_conn();
 
-        let ordered = apply_work_ordering(works::Entity::find(), sort_by, sort_direction);
+        let mut ordered = apply_work_ordering(works::Entity::find(), sort_by, sort_direction);
+        // Filtered in SQL rather than in memory so the offset still pages over
+        // the filtered set; the Tantivy index is left to `search_works`, which
+        // returns hits without the cover and status this list renders.
+        if let Some(needle) = query.as_deref().map(str::trim).filter(|q| !q.is_empty()) {
+            // SQLite's LIKE is case-insensitive for ASCII, so no lower() is
+            // needed on either side.
+            let pattern = format!("%{needle}%");
+            let author_work_ids = works_authored_by(&db, &pattern).await?;
+            let mut condition = Condition::any().add(works::Column::Title.like(pattern.clone()));
+            if !author_work_ids.is_empty() {
+                condition = condition.add(works::Column::Id.is_in(author_work_ids));
+            }
+            ordered = ordered.filter(condition);
+        }
 
         let models = ordered
             .order_by(works::Column::Id, Order::Asc)
@@ -140,6 +155,59 @@ impl LivtetStore {
     }
 }
 
+/// Works with an author whose name matches `pattern` (already carrying its
+/// wildcards), so a search for a person finds their books.
+///
+/// Contributors are attached per edition on the import path and per work by the
+/// seeder, so both junctions are read; checking one would hide half the library
+/// from an author search.
+async fn works_authored_by(
+    db: &DatabaseConnection,
+    pattern: &str,
+) -> Result<Vec<DbId>, LivtetError> {
+    let author_ids: Vec<DbId> = authors::Entity::find()
+        .filter(authors::Column::Name.like(pattern.to_string()))
+        .all(db)
+        .await?
+        .into_iter()
+        .map(|a| a.id)
+        .collect();
+    if author_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let mut work_ids: Vec<DbId> = work_authors::Entity::find()
+        .filter(work_authors::Column::AuthorId.is_in(author_ids.iter().copied()))
+        .all(db)
+        .await?
+        .into_iter()
+        .map(|link| link.work_id)
+        .collect();
+
+    let edition_ids: Vec<DbId> = edition_authors::Entity::find()
+        .filter(edition_authors::Column::AuthorId.is_in(author_ids))
+        .all(db)
+        .await?
+        .into_iter()
+        .map(|link| link.edition_id)
+        .collect();
+    if !edition_ids.is_empty() {
+        work_ids.extend(
+            editions::Entity::find()
+                .filter(editions::Column::Id.is_in(edition_ids))
+                .all(db)
+                .await?
+                .into_iter()
+                .map(|e| e.work_id),
+        );
+    }
+
+    // DbId is not Ord, so dedupe on the string form.
+    let mut seen = std::collections::HashSet::new();
+    work_ids.retain(|id| seen.insert(id.to_string()));
+    Ok(work_ids)
+}
+
 /// Apply the shared work-list ordering: title ascending by default,
 /// with `WorkSortBy::NewestCap` always meaning `created_at DESC`.
 pub(crate) fn apply_work_ordering(
@@ -209,9 +277,9 @@ struct WorkExtras {
 /// A catalog cover wins over a local one: it is the image the edition was
 /// imported with, and an imported edition has no file to take a cover from.
 /// Local covers come from `digital_inventory.cover_path`, the same column the
-/// `edition_covers` view unions. The primary edition is the work's
-/// `preferred_edition_id`, falling back to its oldest edition, which is what
-/// a named shelf stores.
+/// `edition_covers` view unions. The primary edition is the work's oldest
+/// edition: a work keeps one edition per format and record, so there is
+/// nothing to prefer between them and the shelf stores that edition.
 async fn work_extras(
     db: &DatabaseConnection,
     models: &[works::Model],
@@ -242,14 +310,11 @@ async fn work_extras(
         }
     }
 
-    // A recorded preference outranks "oldest edition".
+    // A work with no editions at all still needs a row to render.
     for work in models {
-        if let (Some(preferred), Some(extra)) = (work.preferred_edition_id, out.get_mut(&work.id)) {
-            extra.primary_edition_id = Some(preferred);
-        }
         out.entry(work.id).or_insert_with(|| WorkExtras {
             cover_url: None,
-            primary_edition_id: work.preferred_edition_id,
+            primary_edition_id: None,
         });
     }
 
@@ -545,7 +610,10 @@ mod tests {
     #[tokio::test]
     async fn list_works_returns_seeded_works() {
         let (_tmp, store) = seeded_store(3).await;
-        let works = store.list_works(100, 0, None, None).await.expect("list");
+        let works = store
+            .list_works(100, 0, None, None, None)
+            .await
+            .expect("list");
         assert_eq!(works.len(), 3);
         assert!(works.iter().all(|w| !w.title.is_empty()));
         assert_eq!(store.count_works().await.unwrap(), 3);
@@ -554,11 +622,11 @@ mod tests {
     #[tokio::test]
     async fn list_works_paginates() {
         let (_tmp, store) = seeded_store(5).await;
-        let all = store.list_works(100, 0, None, None).await.unwrap();
-        let page = store.list_works(2, 0, None, None).await.unwrap();
+        let all = store.list_works(100, 0, None, None, None).await.unwrap();
+        let page = store.list_works(2, 0, None, None, None).await.unwrap();
         assert_eq!(page.len(), 2);
         assert_eq!(page[0].id, all[0].id);
-        let rest = store.list_works(2, 2, None, None).await.unwrap();
+        let rest = store.list_works(2, 2, None, None, None).await.unwrap();
         assert_eq!(rest[0].id, all[2].id);
         assert_eq!(rest[1].id, all[3].id);
     }
@@ -566,7 +634,7 @@ mod tests {
     #[tokio::test]
     async fn list_editions_and_detail_roundtrip() {
         let (_tmp, store) = seeded_store(2).await;
-        let works = store.list_works(100, 0, None, None).await.unwrap();
+        let works = store.list_works(100, 0, None, None, None).await.unwrap();
         let work = &works[0];
 
         let editions = store.list_editions(work.id).await.unwrap();
@@ -593,7 +661,7 @@ mod tests {
 
         // Give each work a distinct created_at, then verify ordering
         // through the FFI method rather than raw rows.
-        let by_title = store.list_works(100, 0, None, None).await.unwrap();
+        let by_title = store.list_works(100, 0, None, None, None).await.unwrap();
         let db = store.state.db_conn();
         for (i, work) in by_title.iter().enumerate() {
             use livtet_core::data::orm::{ActiveModelTrait, EntityTrait, Set};
@@ -616,6 +684,7 @@ mod tests {
                 100,
                 0,
                 Some(livtet_core::types::WorkSortBy::NewestCap),
+                None,
                 None,
             )
             .await

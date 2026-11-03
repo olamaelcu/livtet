@@ -551,7 +551,7 @@ mod tests {
         .expect("seed");
 
         let work = store
-            .list_works(1, 0, None, None)
+            .list_works(1, 0, None, None, None)
             .await
             .unwrap()
             .swap_remove(0);

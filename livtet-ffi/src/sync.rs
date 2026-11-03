@@ -11,11 +11,17 @@
 //! the connection's node id when the claim is filed, and every later
 //! `pair_status` poll must present the same one.
 
+use std::collections::HashMap;
+use std::sync::{Arc, LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
 use camino::Utf8Path;
 use livtet_iroh::{DiscoveryService, SecretKey};
-use livtet_sync_iroh::{Client, PairingOutcome};
+use livtet_mdns::Advertiser;
+use livtet_sync_iroh::{
+    Client, Handler, Identity, Outcome, PROTOCOL_VERSION, PairingOutcome, Request, Response,
+    spawn_server,
+};
 
 use crate::error::LivtetError;
 
@@ -161,11 +167,204 @@ fn load_or_create_secret(path: &Utf8Path) -> Result<SecretKey, LivtetError> {
     Ok(secret)
 }
 
+/// The advertisement this process is running, keyed by secret key path.
+static ADVERTISED: LazyLock<Mutex<HashMap<String, RunningAdvertisement>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// A bound endpoint, its mDNS record, and the task answering connections.
+struct RunningAdvertisement {
+    node_id: String,
+    discovery: DiscoveryService,
+    advertiser: Advertiser,
+    serving: tokio::task::JoinHandle<()>,
+}
+
+/// Announce this device on `_livtet-sync._tcp` so peers list it.
+///
+/// Returns the node id the advertisement carries. It comes from the same
+/// persisted key that pairing uses, so a desktop that discovers this device and
+/// a reader who types the id by hand are naming one identity.
+///
+/// Idempotent per `secret_key_path`: a second call returns the id already
+/// advertised instead of binding another endpoint, so re-opening the screen
+/// does not leave duplicate records on the network.
+///
+/// The endpoint answers `Identity` — so a peer can confirm who it dialled — and
+/// refuses pairing claims. This build only pairs outward; the reader approves on
+/// the desktop. A refusal with a reason ends the peer's wait immediately and
+/// tells the reader where to pair from, rather than leaving it hanging on a
+/// device that will never decide.
+#[uniffi::export(async_runtime = "tokio")]
+pub async fn advertise_sync_device(
+    secret_key_path: String,
+    device_id: String,
+    name: String,
+    device_type: String,
+) -> Result<String, LivtetError> {
+    if let Ok(hosts) = ADVERTISED.lock()
+        && let Some(host) = hosts.get(&secret_key_path)
+    {
+        return Ok(host.node_id.clone());
+    }
+
+    let secret = load_or_create_secret(Utf8Path::new(&secret_key_path))?;
+    let discovery = DiscoveryService::bind_with_secret(secret)
+        .await
+        .map_err(|error| {
+            LivtetError::Sync(format!("could not start the sync endpoint: {error}"))
+        })?;
+    let node_id = discovery.node_id().as_str().to_string();
+    let (ip, port) = advertised_endpoint(&discovery);
+
+    let identity = Identity {
+        protocol: PROTOCOL_VERSION,
+        node_id: node_id.clone(),
+        device_id: device_id.clone(),
+    };
+    let handler: Handler = Arc::new(move |request, _remote| {
+        let identity = identity.clone();
+        Box::pin(async move {
+            match request {
+                Request::Identity => Outcome::reply(Response::Identity(identity)),
+                Request::Pair { .. } | Request::PairStatus { .. } => {
+                    Outcome::reply(Response::Refused {
+                        reason: "pair from the phone: Settings, Sync & Discovery, then this \
+                                 device's node ID. This build does not approve requests sent to it."
+                            .to_string(),
+                    })
+                }
+                _ => Outcome::reply(Response::Refused {
+                    reason: "this device only answers pairing".to_string(),
+                }),
+            }
+        })
+    });
+    let serving = spawn_server(discovery.endpoint().clone(), handler);
+
+    let advertiser = Advertiser::start(&node_id, &device_id, Some(&name), &device_type, ip, port)
+        .map_err(|error| {
+        LivtetError::Sync(format!("could not advertise this device: {error}"))
+    })?;
+
+    if let Ok(mut hosts) = ADVERTISED.lock() {
+        hosts.insert(
+            secret_key_path,
+            RunningAdvertisement {
+                node_id: node_id.clone(),
+                discovery,
+                advertiser,
+                serving,
+            },
+        );
+    }
+    Ok(node_id)
+}
+
+/// Withdraw the advertisement and stop answering. A no-op when nothing is
+/// advertised for this key path.
+#[uniffi::export]
+pub fn stop_advertising_sync_device(secret_key_path: String) {
+    let running = ADVERTISED
+        .lock()
+        .ok()
+        .and_then(|mut hosts| hosts.remove(&secret_key_path));
+    if let Some(running) = running {
+        running.advertiser.shutdown();
+        running.serving.abort();
+        // Dropping the endpoint's last handle closes the socket, which unwinds
+        // the accept loop the aborted task was driving.
+        drop(running.discovery);
+    }
+}
+
+/// The address and port to publish: the endpoint's IPv4 socket when it bound
+/// one, else whatever it bound, else "all interfaces" at the parsed port.
+fn advertised_endpoint(discovery: &DiscoveryService) -> (std::net::IpAddr, u16) {
+    let sockets = discovery.bound_sockets();
+    let chosen = sockets
+        .iter()
+        .find(|socket| socket.is_ipv4())
+        .or_else(|| sockets.first());
+    match chosen {
+        Some(socket) => (socket.ip(), socket.port()),
+        None => (std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED), 0),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use livtet_sync_iroh::{Handler, Outcome, Request, Response};
-    use std::sync::Arc;
+    use std::time::Duration;
+
+    /// The phone must show up in the same browse the desktop's nearby list runs.
+    ///
+    /// This is the visibility contract: the record the FFI registers carries the
+    /// node id a peer dials, the name a reader sees, and the `android` type the
+    /// desktop keys its label off.
+    #[tokio::test]
+    async fn an_advertised_device_appears_to_a_nearby_browse() {
+        let dir = camino_tempfile::Utf8TempDir::new().expect("temp dir");
+        let key_path = dir.path().join("sync.key").to_string();
+
+        let node_id = advertise_sync_device(
+            key_path.clone(),
+            "01ARZ3NDEKTSV4RRFFQ69G5FAW".to_string(),
+            "Reader's phone".to_string(),
+            "android".to_string(),
+        )
+        .await
+        .expect("advertise");
+
+        let peers = tokio::task::spawn_blocking(|| livtet_mdns::browse_for(Duration::from_secs(3)))
+            .await
+            .expect("browse task")
+            .expect("browse");
+
+        let mine = peers
+            .iter()
+            .find(|peer| peer.node_id == node_id)
+            .unwrap_or_else(|| panic!("advertised node {node_id} missing from {peers:?}"));
+        assert_eq!(mine.name, "Reader's phone");
+        assert_eq!(mine.device_type, "android");
+
+        stop_advertising_sync_device(key_path);
+    }
+    /// Reopening the screen must not strand the previous advertisement.
+    ///
+    /// The registry is keyed by key path, so a stop that failed to remove the
+    /// entry (or an advertise that refused to rebind after one) would leave the
+    /// device invisible for the rest of the process's life.
+    #[tokio::test]
+    async fn advertising_stops_and_restarts_with_the_same_identity() {
+        let dir = camino_tempfile::Utf8TempDir::new().expect("temp dir");
+        let key_path = dir.path().join("sync.key").to_string();
+
+        let first = advertise_sync_device(
+            key_path.clone(),
+            "01ARZ3NDEKTSV4RRFFQ69G5FAW".to_string(),
+            "Reader's phone".to_string(),
+            "android".to_string(),
+        )
+        .await
+        .expect("advertise");
+
+        stop_advertising_sync_device(key_path.clone());
+
+        let second = advertise_sync_device(
+            key_path.clone(),
+            "01ARZ3NDEKTSV4RRFFQ69G5FAW".to_string(),
+            "Reader's phone".to_string(),
+            "android".to_string(),
+        )
+        .await
+        .expect("advertise again");
+
+        assert_eq!(
+            first, second,
+            "the persisted key must yield one identity across restarts"
+        );
+        stop_advertising_sync_device(key_path);
+    }
 
     /// File a claim against a peer that approves it, over a real iroh connection.
     ///
