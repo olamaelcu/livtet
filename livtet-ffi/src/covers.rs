@@ -24,6 +24,7 @@ const COVER_PROVIDER: &str = "catalog";
 const COVER_IDENTIFIER_TYPE: &str = "edition";
 const COVER_SIZE: &str = "orig";
 
+#[uniffi::export(async_runtime = "tokio")]
 impl LivtetStore {
     /// Where the cached cover for `edition_id` lives, if it has been stored.
     ///
