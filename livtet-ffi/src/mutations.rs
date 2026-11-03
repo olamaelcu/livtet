@@ -293,7 +293,7 @@ impl LivtetStore {
 
 /// Shared index refresh after a mutation to one edition.
 impl LivtetStore {
-    async fn sync_edition_index(&self, edition_id: DbId) -> Result<(), LivtetError> {
+    pub(crate) async fn sync_edition_index(&self, edition_id: DbId) -> Result<(), LivtetError> {
         self.index
             .add_edition(&self.state.db_conn(), edition_id)
             .await
@@ -301,7 +301,7 @@ impl LivtetStore {
     }
 }
 
-async fn require_edition(
+pub(crate) async fn require_edition(
     db: &livtet_core::data::orm::DatabaseConnection,
     edition_id: DbId,
 ) -> Result<editions::Model, LivtetError> {
@@ -397,20 +397,20 @@ async fn detach_identifier(
 }
 
 /// Convert a [`PublishedDate`] into the full date the `editions` column
-/// stores, rejecting partial precision.
+/// stores, filling in the first day of whatever precision is missing.
 fn full_date(published_date: PublishedDate) -> Result<time::Date, LivtetError> {
-    match published_date {
-        PublishedDate::YearMonthDay { year, month, day } => {
-            let month = time::Month::try_from(month)
-                .map_err(|e| LivtetError::InvalidInput(format!("invalid month: {e}")))?;
-            time::Date::from_calendar_date(year, month, day)
-                .map_err(|e| LivtetError::InvalidInput(format!("invalid calendar date: {e}")))
-        }
-        other => Err(LivtetError::InvalidInput(format!(
-            "published_date must be a full y-m-d date, got {:?}",
-            other
-        ))),
-    }
+    // The column holds a full `time::Date`, so precision the caller did not
+    // supply degrades to the first day of the period they did: a bare year
+    // becomes January 1 of that year, a year-month the first of that month.
+    let (year, month, day) = match published_date {
+        PublishedDate::YearMonthDay { year, month, day } => (year, month, day),
+        PublishedDate::YearMonth { year, month } => (year, month, 1),
+        PublishedDate::Year(year) => (year, 1, 1),
+    };
+    let month = time::Month::try_from(month)
+        .map_err(|e| LivtetError::InvalidInput(format!("invalid month: {e}")))?;
+    time::Date::from_calendar_date(year, month, day)
+        .map_err(|e| LivtetError::InvalidInput(format!("invalid calendar date: {e}")))
 }
 
 #[cfg(test)]
@@ -492,7 +492,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn update_edition_patches_and_rejects_partial_dates() {
+    async fn update_edition_patches_and_fills_partial_dates() {
         let (_tmp, store, edition) = seeded_store_with_edition().await;
 
         let patch = EditionPatch {
@@ -518,7 +518,8 @@ mod tests {
             })
         );
 
-        let bad = EditionPatch {
+        // Partial precision degrades to the first day of the known period.
+        let year_only = EditionPatch {
             title: None,
             description: None,
             notes: None,
@@ -526,8 +527,36 @@ mod tests {
             format_id: None,
             language_id: None,
         };
-        let err = store.update_edition(edition, bad).await.unwrap_err();
-        assert!(matches!(err, LivtetError::InvalidInput(_)), "{err:?}");
+        let detail = store.update_edition(edition, year_only).await.unwrap();
+        assert_eq!(
+            detail.published_date,
+            Some(PublishedDate::YearMonthDay {
+                year: 1989,
+                month: 1,
+                day: 1
+            })
+        );
+
+        let month_only = EditionPatch {
+            title: None,
+            description: None,
+            notes: None,
+            published_date: Some(PublishedDate::YearMonth {
+                year: 2001,
+                month: 7,
+            }),
+            format_id: None,
+            language_id: None,
+        };
+        let detail = store.update_edition(edition, month_only).await.unwrap();
+        assert_eq!(
+            detail.published_date,
+            Some(PublishedDate::YearMonthDay {
+                year: 2001,
+                month: 7,
+                day: 1
+            })
+        );
     }
 
     #[tokio::test]

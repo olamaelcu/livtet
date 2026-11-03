@@ -8,6 +8,7 @@
 #![allow(unsafe_code)]
 uniffi::setup_scaffolding!();
 
+mod contributors;
 mod dashboard;
 mod dto;
 mod error;

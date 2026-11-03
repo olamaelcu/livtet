@@ -206,3 +206,24 @@ pub struct LibraryLanguage {
     pub name: String,
     pub flag_emoji: Option<String>,
 }
+
+/// One contributor in the library's `authors` table.
+///
+/// The row is a name shared library-wide: editions reference it through
+/// `edition_authors` rather than holding a copy, so a rename shows up
+/// everywhere the contributor appears.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct Contributor {
+    pub id: DbId,
+    pub name: String,
+}
+
+/// A contributor attached to one edition, with the role they held there.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct Contribution {
+    pub edition_id: DbId,
+    pub contributor_id: DbId,
+    pub name: String,
+    /// Role on this edition: `author`, `editor`, `translator`, …
+    pub role: String,
+}
