@@ -6,7 +6,7 @@
 //! timestamps as RFC 3339 strings, and enum-like values as the
 //! `livtet-types` UniFFI enums.
 
-use livtet_core::types::{DbId, DiskPath, ProgressUnit, PublishedDate};
+use livtet_core::types::{DbId, DiskPath, ProgressUnit, PublishedDate, WorkStatus};
 
 /// RFC 3339 rendering shared by all DTO timestamps (UTC).
 pub(crate) fn ts(dt: &time::PrimitiveDateTime) -> String {
@@ -38,6 +38,11 @@ pub struct WorkSummary {
     pub description: Option<String>,
     /// Author/author-role display names in junction order.
     pub authors: Vec<String>,
+    /// Cover image for the work: the catalog URL when an edition carries one,
+    /// otherwise a local cover file path. `None` when no edition has a cover.
+    pub cover_url: Option<String>,
+    /// Current reading status; `None` for a work that was never shelved.
+    pub status: Option<WorkStatus>,
     pub created_at: String,
     pub updated_at: Option<String>,
 }

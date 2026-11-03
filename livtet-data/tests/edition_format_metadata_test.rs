@@ -53,6 +53,7 @@ async fn edition_format_metadata_round_trips() {
         notes: Set(None),
         description: Set(None),
         format_metadata: Set(Some(audiobook_metadata())),
+        cover_image_url: Set(None),
         created_at: Set(now()),
         updated_at: Set(None),
     }
@@ -89,6 +90,7 @@ async fn edition_format_metadata_defaults_to_null() {
         notes: Set(None),
         description: Set(None),
         format_metadata: Set(None),
+        cover_image_url: Set(None),
         created_at: Set(now()),
         updated_at: Set(None),
     }

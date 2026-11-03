@@ -46,6 +46,7 @@ async fn seed_edition(db: &DatabaseConnection, work_id: DbId) -> editions::Model
         notes: Set(None),
         description: Set(None),
         format_metadata: Set(None),
+        cover_image_url: Set(None),
         created_at: Set(now()),
         updated_at: Set(None),
     }

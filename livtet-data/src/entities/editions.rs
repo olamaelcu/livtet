@@ -19,6 +19,10 @@ pub struct Model {
     /// chapters), validated against the edition format's
     /// `FormatMetadataSchema` at the application layer.
     pub format_metadata: Option<serde_json::Value>,
+    /// Remote cover image for editions that were imported from the catalog
+    /// rather than from a file on disk. Local covers stay in
+    /// `digital_inventory.cover_path` / `edition_specific_covers`.
+    pub cover_image_url: Option<String>,
     pub created_at: time::PrimitiveDateTime,
     pub updated_at: Option<time::PrimitiveDateTime>,
 }
@@ -65,6 +69,7 @@ impl fake::Dummy<fake::Faker> for Model {
             notes: faker.fake_with_rng(rng),
             description: faker.fake_with_rng(rng),
             format_metadata: Some(serde_json::Value::Null),
+            cover_image_url: None,
             created_at: faker.fake_with_rng(rng),
             updated_at: faker.fake_with_rng(rng),
         }

@@ -102,6 +102,7 @@ async fn seed_work_with_two_editions(db: &DatabaseConnection) -> (DbId, DbId, Db
         notes: Set(None),
         description: Set(Some("The first edition of Rothfuss's debut novel.".into())),
         format_metadata: Set(None),
+        cover_image_url: Set(None),
         created_at: Set(now),
         updated_at: Set(None),
     };
@@ -119,6 +120,7 @@ async fn seed_work_with_two_editions(db: &DatabaseConnection) -> (DbId, DbId, Db
         notes: Set(None),
         description: Set(Some("Anniversary hardcover with extra commentary.".into())),
         format_metadata: Set(None),
+        cover_image_url: Set(None),
         created_at: Set(now),
         updated_at: Set(None),
     };
@@ -689,6 +691,7 @@ async fn seed_comprehensive(db: &DatabaseConnection) -> Seed {
             notes: Set(None),
             description: Set(Some(desc.into())),
             format_metadata: Set(None),
+            cover_image_url: Set(None),
             created_at: Set(now),
             updated_at: Set(None),
         }
@@ -712,6 +715,7 @@ async fn seed_comprehensive(db: &DatabaseConnection) -> Seed {
             "Sequel novel chronicling Kvothe's arrival at the Maer's court.".into(),
         )),
         format_metadata: Set(None),
+        cover_image_url: Set(None),
         created_at: Set(now),
         updated_at: Set(None),
     }
@@ -1474,6 +1478,7 @@ async fn edition_isbns_empty_for_no_identifiers() {
         notes: Set(None),
         description: Set(None),
         format_metadata: Set(None),
+        cover_image_url: Set(None),
         created_at: Set(now),
         updated_at: Set(None),
     }
@@ -2192,6 +2197,7 @@ async fn reindex_uses_work_level_fallbacks_and_nonisbn_identifiers() {
         notes: Set(Some("marginalia in the endpapers".into())),
         description: Set(Some("A rare private printing.".into())),
         format_metadata: Set(None),
+        cover_image_url: Set(None),
         created_at: Set(now),
         // Populated updated_at exercises the updated_at indexing branch.
         updated_at: Set(Some(now)),

@@ -413,6 +413,7 @@ async fn generate_works_and_editions(
                 notes: Set(None),
                 description: Set(None),
                 format_metadata: Set(None),
+                cover_image_url: Set(None),
                 created_at: Set(timestamp),
                 updated_at: Set(None),
             };
@@ -430,6 +431,7 @@ async fn generate_works_and_editions(
                 notes: None,
                 description: None,
                 format_metadata: None,
+                cover_image_url: None,
                 created_at: timestamp,
                 updated_at: None,
             });

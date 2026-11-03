@@ -40,6 +40,8 @@ pub struct NewEdition {
     pub format_id: Option<DbId>,
     pub language_id: Option<DbId>,
     pub notes: Option<String>,
+    /// Catalog cover image URL; local covers live in `digital_inventory`.
+    pub cover_image_url: Option<String>,
 }
 
 #[uniffi::export(async_runtime = "tokio")]
@@ -190,6 +192,7 @@ impl LivtetStore {
             notes: Set(input.notes.filter(|n| !n.trim().is_empty())),
             description: Set(input.description.filter(|d| !d.trim().is_empty())),
             format_metadata: Set(None),
+            cover_image_url: Set(input.cover_image_url.filter(|u| !u.trim().is_empty())),
             created_at: Set(now_primitive()),
             updated_at: Set(None),
         }
@@ -591,6 +594,7 @@ mod tests {
                 format_id: None,
                 language_id: None,
                 notes: None,
+                cover_image_url: None,
             })
             .await
             .unwrap()
@@ -620,6 +624,7 @@ mod tests {
                 format_id: None,
                 language_id: None,
                 notes: None,
+                cover_image_url: None,
             })
             .await
             .unwrap();
@@ -637,6 +642,42 @@ mod tests {
         let editions = store.list_editions(work.id).await.unwrap();
         assert_eq!(editions.len(), 1);
         assert_eq!(editions[0].id, edition.id);
+    }
+
+    #[tokio::test]
+    async fn created_edition_cover_surfaces_on_the_work() {
+        let (_tmp, store, _edition) = seeded_store_with_edition().await;
+
+        let work = store
+            .create_work("Covered Work".to_string(), None, None)
+            .await
+            .unwrap();
+        store
+            .create_edition(NewEdition {
+                work_id: work.id,
+                title: Some("Covered Edition".to_string()),
+                description: None,
+                published_date: None,
+                format_id: None,
+                language_id: None,
+                notes: None,
+                cover_image_url: Some("https://covers.example/covered.jpg".to_string()),
+            })
+            .await
+            .unwrap();
+
+        let listed = store.list_works(100, 0, None, None).await.unwrap();
+        let row = listed
+            .iter()
+            .find(|w| w.id == work.id)
+            .expect("work listed");
+        // The library draws covers from the work row, so the edition's catalog
+        // URL has to reach it; status stays None until the work is shelved.
+        assert_eq!(
+            row.cover_url.as_deref(),
+            Some("https://covers.example/covered.jpg")
+        );
+        assert!(row.status.is_none());
     }
 
     #[tokio::test]
@@ -661,6 +702,7 @@ mod tests {
                 format_id: None,
                 language_id: None,
                 notes: None,
+                cover_image_url: None,
             })
             .await
             .unwrap_err();

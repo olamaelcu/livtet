@@ -47,6 +47,7 @@ async fn seed_edition(db: &DatabaseConnection) -> DbId {
         notes: Set(None),
         description: Set(None),
         format_metadata: Set(None),
+        cover_image_url: Set(None),
         created_at: Set(now()),
         updated_at: Set(None),
     }

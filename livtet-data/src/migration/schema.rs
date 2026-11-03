@@ -416,6 +416,7 @@ pub enum Editions {
     Notes,
     Description,
     FormatMetadata,
+    CoverImageUrl,
 }
 
 // Junction tables

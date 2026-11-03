@@ -3,14 +3,16 @@
 use std::collections::HashMap;
 
 use livtet_core::data::entities::{
-    authors, digital_inventory, edition_authors, edition_identifiers, edition_publishers, editions,
-    formats, identifiers, languages, publishers, work_authors, works,
+    authors, current_work_status, digital_inventory, edition_authors, edition_identifiers,
+    edition_publishers, editions, formats, identifiers, languages, publishers, work_authors, works,
 };
 use livtet_core::data::orm::{
     ColumnTrait, DatabaseConnection, EntityTrait, Order, PaginatorTrait, QueryFilter, QueryOrder,
     QuerySelect, Select,
 };
-use livtet_core::types::{DbId, Identifier, IdentifierKind, SortDirection, Urn, WorkSortBy};
+use livtet_core::types::{
+    DbId, Identifier, IdentifierKind, SortDirection, Urn, WorkSortBy, WorkStatus,
+};
 
 use crate::dto::{EditionDetail, EditionFile, EditionSummary, WorkSummary, ts, ts_opt};
 use crate::error::LivtetError;
@@ -172,6 +174,8 @@ pub(crate) async fn summarize_works(
 ) -> Result<Vec<WorkSummary>, LivtetError> {
     let ids: Vec<DbId> = models.iter().map(|w| w.id).collect();
     let authors_by_work = author_names_for_works(db, &ids).await?;
+    let covers_by_work = cover_urls_for_works(db, &ids).await?;
+    let status_by_work = work_statuses(db, &ids).await?;
 
     Ok(models
         .into_iter()
@@ -183,10 +187,82 @@ pub(crate) async fn summarize_works(
                 sort_title: w.sort_title,
                 description: w.description,
                 authors,
+                cover_url: covers_by_work.get(&w.id).cloned(),
+                status: status_by_work.get(&w.id).copied(),
                 created_at: ts(&w.created_at),
                 updated_at: ts_opt(w.updated_at),
             }
         })
+        .collect())
+}
+
+/// Cover URL per work.
+///
+/// A catalog cover wins over a local one: it is the image the edition was
+/// imported with, and imported editions have no file to take a cover from.
+/// Local covers come from `digital_inventory.cover_path`, the same column the
+/// `edition_covers` view unions.
+async fn cover_urls_for_works(
+    db: &DatabaseConnection,
+    work_ids: &[DbId],
+) -> Result<HashMap<DbId, String>, LivtetError> {
+    let mut out: HashMap<DbId, String> = HashMap::new();
+    if work_ids.is_empty() {
+        return Ok(out);
+    }
+
+    let editions_of_work = editions::Entity::find()
+        .filter(editions::Column::WorkId.is_in(work_ids.iter().copied()))
+        .order_by_asc(editions::Column::CreatedAt)
+        .all(db)
+        .await?;
+
+    for edition in &editions_of_work {
+        if let Some(url) = edition.cover_image_url.as_deref().filter(|u| !u.is_empty()) {
+            out.entry(edition.work_id)
+                .or_insert_with(|| url.to_string());
+        }
+    }
+
+    let without_remote: HashMap<DbId, DbId> = editions_of_work
+        .iter()
+        .filter(|e| !out.contains_key(&e.work_id))
+        .map(|e| (e.id, e.work_id))
+        .collect();
+    if without_remote.is_empty() {
+        return Ok(out);
+    }
+
+    let local = digital_inventory::Entity::find()
+        .filter(digital_inventory::Column::EditionId.is_in(without_remote.keys().copied()))
+        .all(db)
+        .await?;
+    for row in local {
+        let Some(work_id) = without_remote.get(&row.edition_id) else {
+            continue;
+        };
+        if let Some(path) = row.cover_path.filter(|p| !p.is_empty()) {
+            out.entry(*work_id).or_insert(path);
+        }
+    }
+
+    Ok(out)
+}
+
+/// Current reading status per work; works never shelved are simply absent.
+async fn work_statuses(
+    db: &DatabaseConnection,
+    work_ids: &[DbId],
+) -> Result<HashMap<DbId, WorkStatus>, LivtetError> {
+    if work_ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+    Ok(current_work_status::Entity::find()
+        .filter(current_work_status::Column::WorkId.is_in(work_ids.iter().copied()))
+        .all(db)
+        .await?
+        .into_iter()
+        .map(|m| (m.work_id, m.status))
         .collect())
 }
 
