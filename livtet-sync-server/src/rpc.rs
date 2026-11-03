@@ -37,8 +37,12 @@ pub mod method {
     pub const PAIRING_APPROVE: &str = "pairing.approve";
     /// Reject a pending pairing.
     pub const PAIRING_REJECT: &str = "pairing.reject";
-    /// Dial a peer and wait for its approval on the same stream.
+    /// Dial a peer, file a claim, and poll until it is decided.
     pub const PAIRING_CLAIM: &str = "pairing.claim";
+    /// The most recent sync requests this daemon answered.
+    pub const REQUESTS_RECENT: &str = "requests.recent";
+    /// Rebind the iroh endpoint on a new UDP port without restarting.
+    pub const SERVER_REBIND: &str = "server.rebind";
     /// List paired devices.
     pub const DEVICES_LIST: &str = "devices.list";
     /// Offer a local book file to one paired device.
@@ -70,6 +74,10 @@ pub mod method {
     pub const NOTIFY_OFFER_RECEIVED: &str = "offer.received";
     /// Notification: a paired device answered an offer this desktop sent.
     pub const NOTIFY_OFFER_DECIDED: &str = "offer.decided";
+    /// Notification: a peer had a sync request served.
+    pub const NOTIFY_REQUEST_RECEIVED: &str = "request.received";
+    /// Notification: a pull, push, or full dump completed for a peer.
+    pub const NOTIFY_SYNC_COMPLETED: &str = "sync.completed";
 }
 
 /// JSON-RPC 2.0 error codes.
@@ -232,6 +240,21 @@ pub struct ResolveParams {
     pub resolution: String,
     #[serde(default)]
     pub merged_payload: Option<String>,
+}
+
+/// Parameters for [`method::REQUESTS_RECENT`].
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct RequestsRecentParams {
+    /// How many records to return, newest first.
+    #[serde(default)]
+    pub limit: Option<u64>,
+}
+
+/// Parameters for [`method::SERVER_REBIND`].
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RebindParams {
+    /// UDP port for the new endpoint; `0` asks the OS for an ephemeral one.
+    pub port: u16,
 }
 
 /// Decode a single NDJSON line into a [`RpcMessage`].

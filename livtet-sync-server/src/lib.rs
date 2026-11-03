@@ -13,6 +13,7 @@ pub mod error;
 pub mod mdns;
 pub mod pairing;
 pub mod peer;
+pub mod rate_limit;
 pub mod requests;
 pub mod rpc;
 pub mod wire;
@@ -20,11 +21,11 @@ pub mod wire;
 pub use config::ServerConfig;
 pub use daemon::DaemonState;
 pub use error::ServerError;
-pub use requests::{Notifier, notify};
+pub use requests::{Notifier, RequestLog, RequestRecord, notify, recent};
 pub use rpc::{
-    DeviceParams, JSONRPC, PairingBeginParams, ResolveParams, RpcErrorObject, RpcMessage,
-    RpcNotification, RpcRequest, RpcResponse, StdioClient, TokenParams, encode_notification,
-    encode_request, encode_response, error_code, method, parse_message,
+    DeviceParams, JSONRPC, PairingBeginParams, RebindParams, RequestsRecentParams, ResolveParams,
+    RpcErrorObject, RpcMessage, RpcNotification, RpcRequest, RpcResponse, StdioClient, TokenParams,
+    encode_notification, encode_request, encode_response, error_code, method, parse_message,
 };
 
 /// Build a multi-threaded tokio runtime and run the daemon to completion.

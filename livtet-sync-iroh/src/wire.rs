@@ -1,9 +1,12 @@
 //! Framed sync requests over an iroh bidirectional stream.
 //!
-//! One request per stream. A frame is a `u32` big-endian length followed by
-//! that many bytes of JSON; the response is a single frame on the same stream.
-//! File and cover reads write their JSON header first and then the raw bytes,
-//! so a large book never has to be buffered into one frame.
+//! One request per stream. A message is framed in chunks: a `u32` big-endian
+//! total length, then a series of `u32` big-endian chunk lengths each followed
+//! by that many bytes. The chunks carry one JSON document between them; the
+//! total is what bounds the reader, so a peer can stream a large push without
+//! either side holding a single frame-sized prefix. File and cover reads write
+//! their JSON header first and then the raw bytes, so a large book never has to
+//! be buffered into one message.
 //!
 //! The operations mirror the HTTP routes this transport replaces one for one.
 //! They are carried here, not in `livtet-sync`, because the envelopes are this
@@ -16,17 +19,30 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 use livtet_sync::types::{Conflict, FullDump, PullResponse, PushResponse, SyncChange, SyncStatus};
 
-/// Largest JSON frame this transport will accept.
+/// The protocol revision this codec speaks.
 ///
-/// Every control message is small — a change batch is the biggest, and the
-/// daemon's own pull limit bounds it — so anything approaching this is either a
-/// corrupt length prefix or a peer trying to make the reader allocate. Files do
-/// not go through frames, so this bound stays low.
-pub const MAX_FRAME_BYTES: usize = 8 * 1024 * 1024;
+/// A peer that does not match is refused by the ALPN, and this value restates
+/// the revision in the handshake so a mismatch is visible in a log rather than
+/// only as a failed connection.
+pub const PROTOCOL_VERSION: u32 = 2;
+
+/// Largest message this transport will accept, across all chunks.
+///
+/// A push of a whole library is the biggest legitimate message; 256 MiB leaves
+/// room for one while staying far below anything a corrupt length prefix could
+/// make a reader allocate. Files do not go through messages, so this bound is
+/// only about control traffic.
+pub const MAX_MESSAGE_BYTES: usize = 256 * 1024 * 1024;
+
+/// Largest single chunk. A writer emits at most this much per length prefix so
+/// a reader can copy chunk by chunk instead of buffering the whole message.
+pub const MAX_CHUNK_BYTES: usize = 8 * 1024 * 1024;
 
 /// The identity a peer can confirm before pairing.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Identity {
+    /// The protocol revision the peer speaks, restating the ALPN.
+    pub protocol: u32,
     /// iroh endpoint id, which is also the pairing key.
     pub node_id: String,
     /// The local ULID the peer's sync rows are written against.
@@ -36,7 +52,9 @@ pub struct Identity {
 /// One operation on a sync stream.
 ///
 /// `token` is the session token minted at approval; it is absent from the
-/// operations that must work before a pairing exists (`Identity`, `Pair`).
+/// operations that must work before a pairing exists (`Identity`, `Pair`,
+/// `PairStatus`). The caller's node id is never a payload field: it is the
+/// authenticated QUIC connection identity.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case")]
 pub enum Request {
@@ -57,14 +75,15 @@ pub enum Request {
         token: String,
         changes: Vec<SyncChange>,
     },
-    /// Ask to be paired. The reply arrives when the reader decides, on this
-    /// same stream.
+    /// File a pairing claim. The claim is keyed by the connection's node id,
+    /// and the answer arrives on a later `PairStatus` on any connection.
     Pair {
         device_id: String,
         name: String,
         device_type: String,
-        node_id: String,
     },
+    /// What became of a claim this device filed, named by the claim secret.
+    PairStatus { claim: String },
     /// Unresolved conflicts.
     Conflicts { token: String },
     /// Resolution for one conflict.
@@ -75,12 +94,18 @@ pub enum Request {
         merged_payload: Option<String>,
     },
     /// Bytes of one inventory file, from `offset`, at most `length` of them.
+    ///
+    /// `if_range` is the etag the caller already holds: when it still matches,
+    /// the requested range is served; when it does not, the whole file is.
     File {
         token: String,
         inventory_id: String,
         offset: u64,
         length: Option<u64>,
+        if_range: Option<String>,
     },
+    /// Size, content type and etag of one inventory file, without its bytes.
+    FileInfo { token: String, inventory_id: String },
     /// The extracted cover of one inventory item.
     Cover { token: String, inventory_id: String },
     /// What became of an offer this peer sent.
@@ -100,6 +125,10 @@ pub enum Response {
     Changes(PullResponse),
     Full(Box<FullDump>),
     Pushed(PushResponse),
+    /// The claim was filed; the reader decides out of band.
+    PairingPending {
+        claim: String,
+    },
     /// The pairing was approved; the peer may use this token from now on.
     Paired {
         device_id: String,
@@ -113,27 +142,82 @@ pub enum Response {
     Resolved(bool),
     /// A file header; the caller reads `length` raw bytes next.
     File(FileHeader),
+    /// Size, content type and etag of one inventory file.
+    FileInfo(FileMetadata),
     /// A cover header; the caller reads `length` raw bytes next.
     Cover(FileHeader),
     /// The sender recorded the decision.
     OfferDecided,
-    /// Nothing was found for the id, or the range was empty.
-    Missing {
-        reason: String,
-    },
-    /// The request was understood but refused: bad token, unknown device.
-    Denied {
-        reason: String,
+    /// The request could not be served. The code says why without the caller
+    /// having to parse the message.
+    Error {
+        code: ErrorCode,
+        message: String,
     },
 }
 
-/// Content type and size for the byte phase that follows.
+/// Why a request could not be served.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ErrorCode {
+    /// Malformed request, a bad id, or a resolution this side does not know.
+    BadRequest,
+    /// Unknown session token, or one issued to another node.
+    Unauthorized,
+    /// No such row, claim, or file.
+    NotFound,
+    /// The request conflicts with the current state.
+    Conflict,
+    /// The caller is over its budget for this operation.
+    TooManyRequests,
+    /// The requested offset is past the end of the file.
+    RangeNotSatisfiable {
+        /// The current file size, so the caller can restart from a known end.
+        size: u64,
+    },
+    /// A conditional request whose precondition no longer holds.
+    PreconditionFailed,
+    /// The server failed while serving the request.
+    Internal,
+}
+
+impl ErrorCode {
+    /// A stable lower-case name for logs and request records.
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::BadRequest => "bad_request",
+            Self::Unauthorized => "unauthorized",
+            Self::NotFound => "not_found",
+            Self::Conflict => "conflict",
+            Self::TooManyRequests => "too_many_requests",
+            Self::RangeNotSatisfiable { .. } => "range_not_satisfiable",
+            Self::PreconditionFailed => "precondition_failed",
+            Self::Internal => "internal",
+        }
+    }
+}
+
+/// Content type and range for the byte phase that follows. `total` and `etag`
+/// describe the whole file, so a ranged read still knows what it came from.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FileHeader {
     pub content_type: String,
-    /// Byte offset this phase starts at, which is the request's `offset`.
+    /// Byte offset this phase starts at.
     pub offset: u64,
+    /// Bytes in the phase that follows.
     pub length: u64,
+    /// Size of the whole file.
+    pub total: u64,
+    /// Opaque version tag, sent back as `if_range` to continue a download.
+    pub etag: String,
+}
+
+/// A file's metadata, as `FileInfo` reports it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FileMetadata {
+    pub content_type: String,
+    pub size: u64,
+    pub etag: String,
 }
 
 /// Why a frame could not be read or written.
@@ -143,30 +227,45 @@ pub enum WireError {
     Io(#[from] std::io::Error),
     #[error("frame body: {0}")]
     Json(#[from] serde_json::Error),
-    #[error("frame of {size} bytes exceeds the {MAX_FRAME_BYTES}-byte limit")]
-    TooLarge { size: u32 },
+    #[error("message of {size} bytes exceeds the {MAX_MESSAGE_BYTES}-byte limit")]
+    TooLarge { size: u64 },
+    #[error("chunk of {chunk} bytes overflows the {total}-byte message after {read} bytes")]
+    ChunkOverflow { total: u64, chunk: u64, read: u64 },
+    #[error("empty chunk in a {total}-byte message")]
+    EmptyChunk { total: u64 },
+    #[error("protocol: {0}")]
+    Protocol(String),
     #[error("stream: {0}")]
     Stream(String),
 }
 
-/// Write one length-prefixed JSON frame.
+/// Write one chunked JSON message.
+///
+/// The total length goes first so the reader knows how much to expect and
+/// can refuse an implausible size before reading a byte of body.
 pub async fn write_frame<W, T>(writer: &mut W, value: &T) -> Result<(), WireError>
 where
     W: AsyncWrite + Unpin,
     T: Serialize,
 {
     let body = serde_json::to_vec(value)?;
-    let size = u32::try_from(body.len()).unwrap_or(u32::MAX);
-    if body.len() > MAX_FRAME_BYTES {
-        return Err(WireError::TooLarge { size });
+    if body.len() > MAX_MESSAGE_BYTES {
+        return Err(WireError::TooLarge {
+            size: body.len() as u64,
+        });
     }
-    writer.write_all(&size.to_be_bytes()).await?;
-    writer.write_all(&body).await?;
+    writer.write_all(&(body.len() as u32).to_be_bytes()).await?;
+    for chunk in body.chunks(MAX_CHUNK_BYTES) {
+        writer
+            .write_all(&(chunk.len() as u32).to_be_bytes())
+            .await?;
+        writer.write_all(chunk).await?;
+    }
     writer.flush().await?;
     Ok(())
 }
 
-/// Read one length-prefixed JSON frame.
+/// Read one chunked JSON message.
 ///
 /// A closed stream before the length prefix is an `UnexpectedEof`; a closed
 /// stream mid-body too. Both mean the peer went away, which callers report as
@@ -176,14 +275,33 @@ where
     R: AsyncRead + Unpin,
     T: DeserializeOwned,
 {
-    let mut length = [0u8; 4];
-    reader.read_exact(&mut length).await?;
-    let size = u32::from_be_bytes(length);
-    if size as usize > MAX_FRAME_BYTES {
-        return Err(WireError::TooLarge { size });
+    let mut total = [0u8; 4];
+    reader.read_exact(&mut total).await?;
+    let total = u64::from(u32::from_be_bytes(total));
+    if total > MAX_MESSAGE_BYTES as u64 {
+        return Err(WireError::TooLarge { size: total });
     }
-    let mut body = vec![0u8; size as usize];
-    reader.read_exact(&mut body).await?;
+
+    // Grown one chunk at a time: a peer that claims a large total and hangs up
+    // costs only what it actually sent, not the size it claimed.
+    let mut body: Vec<u8> = Vec::new();
+    while (body.len() as u64) < total {
+        let mut chunk = [0u8; 4];
+        reader.read_exact(&mut chunk).await?;
+        let chunk = u64::from(u32::from_be_bytes(chunk));
+        if chunk > MAX_CHUNK_BYTES as u64 {
+            return Err(WireError::TooLarge { size: chunk });
+        }
+        if chunk == 0 {
+            return Err(WireError::EmptyChunk { total });
+        }
+        let read = body.len() as u64;
+        if read + chunk > total {
+            return Err(WireError::ChunkOverflow { total, chunk, read });
+        }
+        body.resize((read + chunk) as usize, 0);
+        reader.read_exact(&mut body[read as usize..]).await?;
+    }
     Ok(serde_json::from_slice(&body)?)
 }
 
@@ -227,38 +345,82 @@ mod tests {
         );
     }
 
-    /// The tag is the contract both sides match on; a rename would silently
-    /// break every peer that speaks the previous release.
-    #[test]
-    fn request_tags_are_stable() {
-        let encoded = serde_json::to_value(Request::Identity).unwrap();
-
-        assert_eq!(encoded["op"], "identity");
-    }
-
-    #[test]
-    fn response_tags_are_stable() {
-        let encoded = serde_json::to_value(Response::Denied {
-            reason: "bad token".to_string(),
-        })
-        .unwrap();
-
-        assert_eq!(encoded["result"], "denied");
-    }
-
-    /// A peer claiming an enormous frame must be refused before allocating it.
+    /// A message larger than one chunk has to be split, sent, and reassembled
+    /// exactly: this is the property that replaces the old single-frame size
+    /// limit for a whole-library push.
     #[tokio::test]
-    async fn an_oversized_frame_is_refused_without_buffering_it() {
-        let (mut writer, mut reader) = tokio::io::duplex(64);
-        let limit = u32::try_from(MAX_FRAME_BYTES).unwrap() + 1;
+    async fn a_message_bigger_than_one_chunk_round_trips() {
+        let big = "a".repeat(MAX_CHUNK_BYTES + 1024);
+        let expected = big.len();
+        let (mut writer, mut reader) = tokio::io::duplex(64 * 1024);
 
-        writer.write_all(&limit.to_be_bytes()).await.unwrap();
+        let sending = tokio::spawn(async move {
+            write_frame(&mut writer, &big).await.unwrap();
+        });
+        let read: String = read_frame(&mut reader).await.unwrap();
+        sending.await.unwrap();
+
+        assert_eq!(read.len(), expected);
+        assert!(read.bytes().all(|byte| byte == b'a'));
+    }
+
+    /// A peer claiming an enormous total must be refused before the reader
+    /// allocates anything for it.
+    #[tokio::test]
+    async fn an_oversized_total_is_refused_without_buffering_it() {
+        let (mut writer, mut reader) = tokio::io::duplex(16);
+        let limit = (MAX_MESSAGE_BYTES as u64) + 1;
+
+        writer
+            .write_all(&u32::try_from(limit).unwrap().to_be_bytes())
+            .await
+            .unwrap();
         let error = read_frame::<_, Request>(&mut reader).await.unwrap_err();
 
         assert!(matches!(
             error,
             WireError::TooLarge { size } if size == limit
         ));
+    }
+
+    /// A chunk longer than the cap is refused rather than grown into.
+    #[tokio::test]
+    async fn an_oversized_chunk_is_refused() {
+        let (mut writer, mut reader) = tokio::io::duplex(16);
+        let total = 8u32;
+        let chunk = u32::try_from(MAX_CHUNK_BYTES + 1).unwrap();
+
+        writer.write_all(&total.to_be_bytes()).await.unwrap();
+        writer.write_all(&chunk.to_be_bytes()).await.unwrap();
+        let error = read_frame::<_, Request>(&mut reader).await.unwrap_err();
+
+        assert!(
+            matches!(error, WireError::TooLarge { size } if size == u64::from(chunk)),
+            "got {error:?}"
+        );
+    }
+
+    /// A chunk that runs past the declared total is a corrupt frame, not a
+    /// reason to allocate past it.
+    #[tokio::test]
+    async fn a_chunk_past_the_total_is_refused() {
+        let (mut writer, mut reader) = tokio::io::duplex(16);
+
+        writer.write_all(&4u32.to_be_bytes()).await.unwrap();
+        writer.write_all(&8u32.to_be_bytes()).await.unwrap();
+        let error = read_frame::<_, Request>(&mut reader).await.unwrap_err();
+
+        assert!(
+            matches!(
+                error,
+                WireError::ChunkOverflow {
+                    total: 4,
+                    chunk: 8,
+                    read: 0
+                }
+            ),
+            "got {error:?}"
+        );
     }
 
     /// A peer that hangs up mid-frame is unreachable, not malformed.
@@ -270,5 +432,81 @@ mod tests {
         let error = read_frame::<_, Request>(&mut reader).await.unwrap_err();
 
         assert!(matches!(error, WireError::Io(_)), "got {error:?}");
+    }
+
+    /// The tag is the contract both sides match on; a rename would silently
+    /// break every peer that speaks the previous release.
+    #[test]
+    fn request_tags_are_stable() {
+        let encoded = serde_json::to_value(Request::Identity).unwrap();
+        assert_eq!(encoded["op"], "identity");
+
+        let pair_status = serde_json::to_value(Request::PairStatus {
+            claim: "claim".to_string(),
+        })
+        .unwrap();
+        assert_eq!(pair_status["op"], "pair_status");
+
+        let file_info = serde_json::to_value(Request::FileInfo {
+            token: "token".to_string(),
+            inventory_id: "id".to_string(),
+        })
+        .unwrap();
+        assert_eq!(file_info["op"], "file_info");
+    }
+
+    #[test]
+    fn response_tags_are_stable() {
+        let encoded = serde_json::to_value(Response::Error {
+            code: ErrorCode::Unauthorized,
+            message: "bad token".to_string(),
+        })
+        .unwrap();
+        assert_eq!(encoded["result"], "error");
+        assert_eq!(encoded["code"], "unauthorized");
+
+        let pending = serde_json::to_value(Response::PairingPending {
+            claim: "claim".to_string(),
+        })
+        .unwrap();
+        assert_eq!(pending["result"], "pairing_pending");
+    }
+
+    /// A range failure carries the size the caller needs to restart from.
+    #[test]
+    fn a_range_failure_carries_the_size() {
+        let encoded = serde_json::to_value(Response::Error {
+            code: ErrorCode::RangeNotSatisfiable { size: 4096 },
+            message: "past the end".to_string(),
+        })
+        .unwrap();
+
+        assert_eq!(encoded["code"]["range_not_satisfiable"]["size"], 4096);
+        assert_eq!(
+            ErrorCode::RangeNotSatisfiable { size: 4096 }.label(),
+            "range_not_satisfiable"
+        );
+    }
+
+    /// The identity states the revision, so a connected peer can log a
+    /// mismatch even though the ALPN already refused the incompatible ones.
+    #[tokio::test]
+    async fn the_identity_carries_the_protocol_version() {
+        let identity = Identity {
+            protocol: PROTOCOL_VERSION,
+            node_id: "node".to_string(),
+            device_id: "device".to_string(),
+        };
+        let (mut writer, mut reader) = tokio::io::duplex(1024);
+
+        write_frame(&mut writer, &Response::Identity(identity.clone()))
+            .await
+            .unwrap();
+        let read: Response = read_frame(&mut reader).await.unwrap();
+
+        assert_eq!(
+            serde_json::to_value(&read).unwrap(),
+            serde_json::to_value(Response::Identity(identity)).unwrap()
+        );
     }
 }

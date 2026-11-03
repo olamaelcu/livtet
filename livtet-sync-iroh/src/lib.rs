@@ -7,16 +7,17 @@
 //! reachable through a direct path, a hole-punched one, or the relay — never by
 //! an inbound port this side has to open.
 //!
-//! See `docs/adr/0007-sync-over-iroh-streams.md`.
+//! See `docs/adr/0008-sync-over-iroh-streams.md`.
 
 pub mod client;
 pub mod server;
 pub mod wire;
 
-pub use client::{DialError, Exchange, call, dial};
+pub use client::{ByteBody, Client, ClientError, DialError, Exchange, PairingOutcome, call, dial};
 pub use iroh::endpoint::Connection;
 pub use livtet_iroh::SYNC_ALPN;
 pub use server::{FileBody, Handler, Outcome, spawn as spawn_server};
 pub use wire::{
-    FileHeader, Identity, MAX_FRAME_BYTES, Request, Response, WireError, read_frame, write_frame,
+    ErrorCode, FileHeader, FileMetadata, Identity, MAX_CHUNK_BYTES, MAX_MESSAGE_BYTES,
+    PROTOCOL_VERSION, Request, Response, WireError, read_frame, write_frame,
 };

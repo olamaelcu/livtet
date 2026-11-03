@@ -1,8 +1,9 @@
 //! Accept side of the framed protocol.
 //!
-//! One task per connection and one per stream: a pairing claim holds its stream
-//! open for as long as the reader takes to approve, which must not stop the
-//! next peer from asking for changes.
+//! One task per connection and one per stream, so a slow file read cannot stop
+//! the next peer from asking for changes. No request waits on a human: a
+//! pairing claim answers `PairingPending` and its decision arrives on a later
+//! `PairStatus`, so a stream never has to survive an idle timeout.
 
 use std::pin::Pin;
 use std::sync::Arc;

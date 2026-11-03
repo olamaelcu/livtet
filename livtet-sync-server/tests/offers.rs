@@ -13,7 +13,8 @@ use camino::{Utf8Path, Utf8PathBuf};
 use fs_err as fs;
 use livtet_iroh::{DiscoveryService, SecretKey};
 use livtet_sync::{PullResponse, SyncChange};
-use livtet_sync_iroh::{FileHeader, Handler, Outcome, Request, Response};
+use livtet_sync_iroh::{ErrorCode, FileHeader, Handler, Outcome, Request, Response};
+
 use livtet_sync_server::rpc::{self, StdioClient};
 use livtet_types::DbId;
 
@@ -66,12 +67,15 @@ async fn start_peer() -> StubPeer {
                                 content_type: "application/epub+zip".to_string(),
                                 offset: 0,
                                 length,
+                                total: length,
+                                etag: format!("{length:x}"),
                             },
                             file,
                         )
                     }
-                    Request::Cover { .. } => Outcome::reply(Response::Missing {
-                        reason: "no cover".to_string(),
+                    Request::Cover { .. } => Outcome::reply(Response::Error {
+                        code: ErrorCode::NotFound,
+                        message: "no cover".to_string(),
                     }),
                     Request::OfferDecision {
                         offer_id, accepted, ..
@@ -83,8 +87,9 @@ async fn start_peer() -> StubPeer {
                             .push((offer_id, accepted));
                         Outcome::reply(Response::OfferDecided)
                     }
-                    other => Outcome::reply(Response::Denied {
-                        reason: format!("unexpected request {other:?}"),
+                    other => Outcome::reply(Response::Error {
+                        code: ErrorCode::BadRequest,
+                        message: format!("unexpected request {other:?}"),
                     }),
                 }
             })

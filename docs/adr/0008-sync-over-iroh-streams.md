@@ -8,16 +8,30 @@ Accepted. Supersedes the transport half of [1](0001-split-sync-into-domain-trans
 and the address handling of [6](0006-re-resolve-a-paired-peers-address-from-its-advertisement.md),
 including the `listen_on` that [7](0007-pairing-is-mutual.md) adds to the claim.
 
-Implemented. `livtet/sync/1` is the only sync transport: the `poem` server,
-the `reqwest` client crate, the `server.start`/`server.stop`/`requests.recent`
-RPCs, the HTTP request log and its counters are gone. Pairing fan-out and
-offer-decision delivery live in `livtet-sync-server::pairing`, owned by the
-daemon rather than a process-global registry. Two details landed differently
-from the Decision below: the transport-agnostic DTO/client layer was not kept
-(nothing consumed it after the cutover), and `--host`/`--lan` were retired
-while `--port` now selects the iroh endpoint's UDP port. mDNS still advertises
-`_livtet-sync._tcp` for app discovery; its SRV port is informational and is
-never dialled as an HTTP surface.
+Implemented. `livtet/sync/2` is the only sync transport: the `poem` server, the
+`reqwest` client crate, the `server.start`/`server.stop` RPCs and the HTTP
+request log are gone. Pairing fan-out and offer-decision delivery live in
+`livtet-sync-server::pairing`, owned by the daemon rather than a process-global
+registry. Two details landed differently from the Decision below: the
+transport-agnostic DTO/client layer was not kept (nothing consumed it after the
+cutover), and `--host`/`--lan` were retired while `--port` now selects the iroh
+endpoint's UDP port. mDNS still advertises `_livtet-sync._tcp` for app
+discovery; its SRV port is informational and is never dialled as an HTTP
+surface.
+
+Revision 2 hardens what revision 1 proved out, and keeps the same operations.
+The ALPN carries the revision (`livtet/sync/2`) and `Identity` restates it. A
+message is now chunked (`u32` total, then `u32`-length chunks) so a whole-library
+push no longer has to fit one 8 MiB frame. Authorization is bound to the
+connection: a session token only works from the `paired_devices.node_id` it was
+issued to, and a pairing claim is keyed by that same identity rather than a
+payload field. Pairing is two-phase — `Pair` files the claim and answers with a
+claim secret, `PairStatus` resumes it after a dropped connection — with a
+per-node fixed-window budget on both calls. Files gained metadata and
+`if_range` continuation, and structured `ErrorCode`s replace the old
+`denied`/`missing` replies. `requests.recent`, the request log, its counters and
+`request.received`/`sync.completed` came back for the framed transport, and
+`server.rebind` moves the endpoint's UDP port without restarting the daemon.
 
 ## Context
 
@@ -52,7 +66,8 @@ a current address (direct, hole-punched, or relayed), so that class disappears.
 
 Sync moves onto iroh request/response streams and `livtet-sync-http` is deleted.
 
-- **One ALPN, framed messages.** `livtet/sync/1` on the existing endpoint.
+- **One ALPN, framed messages.** `livtet/sync/1` on the existing endpoint
+  (revision 2 keeps the shape and renames the ALPN to `livtet/sync/2`).
   Each operation is a `u32` length-prefixed JSON request on a fresh
   bidirectional stream and one JSON response on the same stream; file and cover
   reads append a raw byte phase after the response header. The operations mirror

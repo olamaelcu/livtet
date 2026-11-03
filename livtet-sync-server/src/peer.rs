@@ -4,25 +4,33 @@
 //! under [`livtet_sync_iroh::SYNC_ALPN`], so neither side needs a reachable
 //! inbound port and no address is stored on the pairing row. iroh resolves the
 //! node id to a current path on every dial.
+//!
+//! The typed [`livtet_sync_iroh::Client`] does the framing; this module only
+//! resolves a pairing row to the node id and token it holds, and keeps the
+//! daemon's longer-standing return types.
 
 use std::sync::Arc;
 
 use camino::Utf8Path;
 use livtet_sync::PullResponse;
+use livtet_sync_iroh::{Client, ClientError};
 use livtet_types::DbId;
 
 use crate::daemon::DaemonState;
 use crate::error::ServerError;
-use livtet_sync_iroh::{Request, Response};
 
 /// One peer's framed stream.
 pub struct Peer {
-    connection: livtet_sync_iroh::Connection,
-    token: String,
+    client: Client,
 }
 
 impl Peer {
-    /// Dial a paired device by node id.
+    /// Build a peer transport around `client`.
+    pub fn new(client: Client) -> Self {
+        Self { client }
+    }
+
+    /// Dial a paired device by node id, authenticating with `token`.
     pub async fn connect(
         state: &Arc<DaemonState>,
         node_id: &str,
@@ -45,13 +53,9 @@ impl Peer {
                     "peer discovery is not bound, so the peer cannot be dialled".to_string(),
                 )
             })?;
-        let connection = livtet_sync_iroh::dial(&endpoint, node_id)
-            .await
-            .map_err(|error| ServerError::Server(format!("reach the peer: {error}")))?;
-        Ok(Peer {
-            connection,
-            token: token.to_string(),
-        })
+        Ok(Peer::new(
+            Client::new(endpoint, node_id).with_token(token.to_string()),
+        ))
     }
 
     /// Changes after `since_version`, addressed to this device.
@@ -60,23 +64,10 @@ impl Peer {
         since_version: i64,
         limit: i64,
     ) -> Result<PullResponse, ServerError> {
-        let exchange = livtet_sync_iroh::call(
-            &self.connection,
-            &Request::Changes {
-                token: self.token.clone(),
-                since_version,
-                limit: Some(limit),
-            },
-        )
-        .await
-        .map_err(|error| ServerError::Server(format!("pull changes: {error}")))?;
-        match exchange.response {
-            Response::Changes(pull) => Ok(pull),
-            Response::Denied { reason } => Err(ServerError::Server(format!(
-                "pull changes refused: {reason}"
-            ))),
-            other => Err(unexpected(&other, "changes")),
-        }
+        self.client
+            .changes(since_version, Some(limit))
+            .await
+            .map_err(|error| remote("pull changes", error))
     }
 
     /// Write one inventory file to `dest`.
@@ -85,110 +76,47 @@ impl Peer {
         inventory_id: &str,
         dest: &Utf8Path,
     ) -> Result<(), ServerError> {
-        let exchange = livtet_sync_iroh::call(
-            &self.connection,
-            &Request::File {
-                token: self.token.clone(),
-                inventory_id: inventory_id.to_string(),
-                offset: 0,
-                length: None,
-            },
-        )
-        .await
-        .map_err(|error| ServerError::Server(format!("download file: {error}")))?;
-        match &exchange.response {
-            Response::File(_) => {}
-            Response::Denied { reason } => {
-                return Err(ServerError::Server(format!(
-                    "download file refused: {reason}"
-                )));
-            }
-            other => return Err(unexpected(other, "file")),
-        }
-        let mut stream = exchange
-            .bytes
-            .ok_or_else(|| ServerError::Server("file reply had no bytes".to_string()))?;
+        let (_header, body) = self
+            .client
+            .file(inventory_id, 0, None, None)
+            .await
+            .map_err(|error| remote("download file", error))?;
         let mut file = fs_err::tokio::File::create(dest.as_std_path())
             .await
             .map_err(|error| ServerError::Server(format!("write received file: {error}")))?;
-        tokio::io::copy(&mut stream, &mut file)
+        body.copy_to(&mut file)
             .await
-            .map_err(|error| ServerError::Server(format!("receive file: {error}")))?;
+            .map_err(|error| remote("receive file", error))?;
         Ok(())
     }
 
     /// The extracted cover for `inventory_id`, as `(content type, bytes)`.
+    ///
+    /// `None` when the peer has no cover for it: that is a normal answer, not a
+    /// failure, because plenty of books have none.
     pub async fn cover(
         &self,
         inventory_id: &str,
     ) -> Result<Option<(String, Vec<u8>)>, ServerError> {
-        let exchange = livtet_sync_iroh::call(
-            &self.connection,
-            &Request::Cover {
-                token: self.token.clone(),
-                inventory_id: inventory_id.to_string(),
-            },
-        )
-        .await
-        .map_err(|error| ServerError::Server(format!("download cover: {error}")))?;
-        let header = match &exchange.response {
-            Response::Cover(header) => header.clone(),
-            Response::Missing { .. } | Response::Denied { .. } => return Ok(None),
-            other => return Err(unexpected(other, "cover")),
-        };
-        let mut stream = exchange
-            .bytes
-            .ok_or_else(|| ServerError::Server("cover reply had no bytes".to_string()))?;
-        let mut bytes = Vec::with_capacity(header.length as usize);
-        tokio::io::AsyncReadExt::read_to_end(&mut stream, &mut bytes)
-            .await
-            .map_err(|error| ServerError::Server(format!("receive cover: {error}")))?;
-        Ok(Some((header.content_type, bytes)))
+        match self.client.cover(inventory_id).await {
+            Ok(Some((header, bytes))) => Ok(Some((header.content_type, bytes))),
+            Ok(None) => Ok(None),
+            Err(error) => Err(remote("download cover", error)),
+        }
     }
 
     /// Tell the sender what became of an offer it made.
     pub async fn offer_decision(&self, offer_id: &str, accepted: bool) -> Result<(), ServerError> {
-        let exchange = livtet_sync_iroh::call(
-            &self.connection,
-            &Request::OfferDecision {
-                token: self.token.clone(),
-                offer_id: offer_id.to_string(),
-                accepted,
-            },
-        )
-        .await
-        .map_err(|error| ServerError::Server(format!("offer decision: {error}")))?;
-        match exchange.response {
-            Response::OfferDecided => Ok(()),
-            Response::Denied { reason } => Err(ServerError::Server(format!(
-                "offer decision refused: {reason}"
-            ))),
-            other => Err(unexpected(&other, "offer decision")),
-        }
+        self.client
+            .offer_decision(offer_id, accepted)
+            .await
+            .map_err(|error| remote("offer decision", error))
     }
 }
 
-/// A reply this operation cannot use.
-fn unexpected(response: &Response, operation: &str) -> ServerError {
-    ServerError::Server(format!(
-        "{operation}: unexpected reply {}",
-        match response {
-            Response::Identity(_) => "identity",
-            Response::Status(_) => "status",
-            Response::Changes(_) => "changes",
-            Response::Full(_) => "pull-full",
-            Response::Pushed(_) => "push",
-            Response::Paired { .. } => "paired",
-            Response::Refused { .. } => "refused",
-            Response::Conflicts(_) => "conflicts",
-            Response::Resolved(_) => "resolved",
-            Response::File(_) => "file",
-            Response::Cover(_) => "cover",
-            Response::OfferDecided => "offer decided",
-            Response::Missing { .. } => "missing",
-            Response::Denied { .. } => "denied",
-        }
-    ))
+/// A typed client failure, as the daemon reports it.
+fn remote(operation: &str, error: ClientError) -> ServerError {
+    ServerError::Server(format!("{operation}: {error}"))
 }
 
 /// The transport for a device referenced by the ULID string of a pairing row.

@@ -10,6 +10,7 @@ use std::time::Duration;
 
 use camino::{Utf8Path, Utf8PathBuf};
 use fs_err as fs;
+use livtet_iroh::{DiscoveryService, SecretKey};
 use livtet_sync_server::rpc::{self, StdioClient};
 use livtet_types::{DbId, PairingStatus};
 
@@ -269,7 +270,7 @@ async fn the_dispatcher_rejects_unknown_methods_and_unusable_params() {
     );
 
     // The HTTP lifecycle is gone, not merely unhandled.
-    for method in ["server.start", "server.stop", "requests.recent"] {
+    for method in ["server.start", "server.stop"] {
         assert_eq!(
             error_code(&mut client, method, serde_json::json!({})).await,
             rpc::error_code::METHOD_NOT_FOUND,
@@ -601,6 +602,126 @@ async fn starting_up_promotes_pairings_with_a_node_id() {
 
     pool.close().await;
     shutdown(&mut restarted).await;
+}
+
+/// One served sync request is enough for `requests.recent` to report it, and
+/// for the counters `health` and `status` expose to move.
+#[tokio::test]
+async fn requests_recent_reports_a_served_request() {
+    let db_path = temp_db_path("requests");
+    let mut client = spawn(&db_path).await;
+
+    let health = ok_result(&mut client, rpc::method::HEALTH, serde_json::json!({})).await;
+    assert_eq!(
+        health["requests_served"].as_u64(),
+        Some(0),
+        "nothing has been served yet: {health}"
+    );
+    assert!(health["last_request_at"].is_null());
+    let node_id = health["node_id"].as_str().expect("node id").to_string();
+
+    // Ask the daemon who it is over the real transport. Identity is
+    // unauthenticated, so this needs no session token.
+    let peer = DiscoveryService::bind_with_secret(SecretKey::generate())
+        .await
+        .expect("peer endpoint");
+    let peer_client = livtet_sync_iroh::Client::new(peer.endpoint().clone(), node_id.clone());
+    // A freshly bound endpoint publishes its addresses in the background, so
+    // the first dial can race publication. Retry only dial failures: a served
+    // request would already have produced a record this test counts.
+    let mut identity = None;
+    for attempt in 0..50 {
+        match peer_client.identity().await {
+            Ok(answered) => {
+                identity = Some(answered);
+                break;
+            }
+            Err(livtet_sync_iroh::ClientError::Dial(_)) if attempt < 49 => {
+                tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+            }
+            Err(error) => panic!("identity over iroh: {error}"),
+        }
+    }
+    let identity = identity.expect("identity over iroh after the address published");
+    assert_eq!(
+        identity.protocol,
+        livtet_sync_iroh::PROTOCOL_VERSION,
+        "the handshake states the protocol revision"
+    );
+    assert_eq!(identity.node_id, node_id);
+
+    let recent = ok_result(
+        &mut client,
+        rpc::method::REQUESTS_RECENT,
+        serde_json::json!({ "limit": 10 }),
+    )
+    .await;
+    let records = recent.as_array().expect("request records");
+    assert_eq!(records.len(), 1, "one request was served: {recent}");
+    assert_eq!(records[0]["op"].as_str(), Some("identity"));
+    assert_eq!(records[0]["outcome"].as_str(), Some("ok"));
+    assert_eq!(
+        records[0]["node_id"].as_str(),
+        Some(peer.node_id().0.as_str())
+    );
+    assert!(records[0]["at"].as_str().is_some());
+    assert!(records[0]["elapsed_ms"].as_u64().is_some());
+
+    let health = ok_result(&mut client, rpc::method::HEALTH, serde_json::json!({})).await;
+    assert_eq!(health["requests_served"].as_u64(), Some(1));
+    assert!(
+        health["last_request_at"].as_str().is_some(),
+        "the timestamp is recorded: {health}"
+    );
+
+    shutdown(&mut client).await;
+    cleanup(&db_path);
+}
+
+/// Rebinding closes the old endpoint and serves on the new port without
+/// changing the node id a peer already knows.
+#[tokio::test]
+async fn server_rebind_moves_the_effective_port() {
+    let db_path = temp_db_path("rebind");
+    let mut client = spawn(&db_path).await;
+
+    let health = ok_result(&mut client, rpc::method::HEALTH, serde_json::json!({})).await;
+    let node_id = health["node_id"].as_str().expect("node id").to_string();
+    let before = health["port"].as_u64().expect("port");
+    assert_ne!(before, 0, "the startup bind is on a real port: {health}");
+
+    // Ask for a port the OS reports free right now. The probe socket is
+    // dropped before the rebind, so the daemon can take it.
+    let target = {
+        let probe = std::net::UdpSocket::bind("0.0.0.0:0").expect("probe socket");
+        probe.local_addr().expect("probe address").port()
+    };
+
+    let rebound = ok_result(
+        &mut client,
+        rpc::method::SERVER_REBIND,
+        serde_json::json!({ "port": target }),
+    )
+    .await;
+    assert_eq!(rebound["port"].as_u64(), Some(u64::from(target)));
+    assert_eq!(
+        rebound["node_id"].as_str(),
+        Some(node_id.as_str()),
+        "the secret-based identity survives the rebind: {rebound}"
+    );
+
+    for method in [rpc::method::HEALTH, rpc::method::STATUS] {
+        let report = ok_result(&mut client, method, serde_json::json!({})).await;
+        assert_eq!(
+            report["port"].as_u64(),
+            Some(u64::from(target)),
+            "{method} reports the new endpoint: {report}"
+        );
+        assert_eq!(report["node_id"].as_str(), Some(node_id.as_str()));
+    }
+
+    shutdown(&mut client).await;
+    cleanup(&db_path);
 }
 
 /// `kill` is the escape hatch for a daemon that will not answer `shutdown`.

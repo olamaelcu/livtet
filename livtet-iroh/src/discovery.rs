@@ -16,7 +16,9 @@ use crate::identity::{NodeId, PeerIdentity};
 /// Set on the endpoint at bind time: iroh refuses incoming connections whose
 /// ALPN the endpoint does not advertise, so without it this node can dial but
 /// never be dialled — which is exactly the direction a pull-free sync needs.
-pub const SYNC_ALPN: &[u8] = b"livtet/sync/1";
+/// The version is part of the ALPN: a v2 peer and a v1 peer refuse each other
+/// at the handshake instead of failing on a frame the other side cannot parse.
+pub const SYNC_ALPN: &[u8] = b"livtet/sync/2";
 
 /// A live `iroh` endpoint plus the identity it advertises.
 pub struct DiscoveryService {

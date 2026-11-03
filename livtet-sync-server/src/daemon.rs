@@ -3,6 +3,7 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use livtet_data::orm::{
@@ -18,11 +19,12 @@ use tokio::sync::{Mutex, mpsc};
 use crate::config::ServerConfig;
 use crate::error::ServerError;
 use crate::mdns::{Advertiser, NearbyPeer, browse_nearby};
-use crate::pairing::{OfferDecisionSink, PairWaiters};
-use crate::requests::{self, Notifier};
+use crate::pairing::{OfferDecisionSink, PairDecisions, PairWaiters, new_pair_decisions};
+use crate::requests::{self, Notifier, RequestLog, new_request_log};
 use crate::rpc::{
     self, DeviceNameParams, DeviceParams, OfferBookParams, OfferDecisionParams, OfferParams,
-    PairingBeginParams, PairingClaimParams, ResolveParams, TokenParams,
+    PairingBeginParams, PairingClaimParams, RebindParams, RequestsRecentParams, ResolveParams,
+    TokenParams,
 };
 
 /// Shared, long-lived daemon state.
@@ -45,6 +47,9 @@ pub struct DaemonState {
     pub started_at: time::OffsetDateTime,
     /// Outstanding pairing claims, keyed by the claimant's node id.
     pub pair_waiters: PairWaiters,
+    /// Answered claims, keyed by the claim secret, so a claimant can resume
+    /// after a dropped connection.
+    pub pair_decisions: PairDecisions,
     /// How an answered offer reaches the desktop, whichever transport carried it.
     pub offer_sink: OfferDecisionSink,
     /// Serialises this daemon's own writes.
@@ -53,10 +58,21 @@ pub struct DaemonState {
     /// one can both try to apply a page; SQLite allows one writer, and the
     /// loser gets `SQLITE_BUSY`. Waiting here is cheaper than failing there.
     pub write_gate: tokio::sync::Mutex<()>,
+    /// Serialises endpoint lifecycle changes (`server.rebind`) against
+    /// `shutdown`. RPCs run concurrently, so without this a shutdown can close
+    /// the endpoint a rebind is still binding, and the new endpoint is dropped
+    /// unclosed when the process exits.
+    pub lifecycle: tokio::sync::Mutex<()>,
     /// The `iroh` discovery endpoint, bound at startup when the network allows.
     pub discovery: Mutex<Option<Arc<DiscoveryService>>>,
     /// The mDNS discovery advertisement, while the daemon runs.
     pub advertiser: Mutex<Option<Advertiser>>,
+    /// The most recent answered requests, newest last.
+    pub request_log: RequestLog,
+    /// How many sync requests this daemon has answered.
+    pub requests_served: Arc<AtomicU64>,
+    /// When the last sync request was answered.
+    pub last_request_at: Arc<Mutex<Option<String>>>,
 }
 
 /// Keyring service under which the discovery secret is stored.
@@ -66,6 +82,15 @@ const DISCOVERY_KEYRING_ACCOUNT: &str = "discovery-node-key";
 /// Explicit key override for tests and headless debug runs; unset normally.
 #[cfg(debug_assertions)]
 const DISCOVERY_KEY_ENV: &str = "LIVTET_DISCOVERY_KEY";
+
+/// How long a filed claim may wait for the reader to decide.
+const PAIR_POLL_WINDOW: Duration = Duration::from_secs(300);
+
+/// How often the claimant asks whether the claim was decided.
+const PAIR_POLL_INTERVAL: Duration = Duration::from_secs(1);
+
+/// Most request records `requests.recent` will return in one answer.
+const REQUEST_RECENT_LIMIT: u64 = 200;
 
 /// Connect + migrate the database, bind the sync endpoint, and run the stdio
 /// RPC loop until the parent sends `shutdown` or closes stdin.
@@ -86,7 +111,7 @@ pub async fn run_async(config: ServerConfig) -> Result<(), ServerError> {
     let discovery_secret = discovery_secret_key();
     let engine = SyncEngine::new(db, device_id.clone());
 
-    let pair_waiters: PairWaiters = Arc::new(Mutex::new(HashMap::new()));
+    let pair_waiters: PairWaiters = crate::pairing::new_pair_waiters();
 
     let (out_tx, out_rx) = mpsc::unbounded_channel::<String>();
     let notifier: Notifier = {
@@ -133,10 +158,15 @@ pub async fn run_async(config: ServerConfig) -> Result<(), ServerError> {
         notifier,
         started_at: time::OffsetDateTime::now_utc(),
         pair_waiters,
+        pair_decisions: new_pair_decisions(),
         offer_sink,
         write_gate: tokio::sync::Mutex::new(()),
+        lifecycle: tokio::sync::Mutex::new(()),
         discovery: Mutex::new(discovery),
         advertiser: Mutex::new(None),
+        request_log: new_request_log(),
+        requests_served: Arc::new(AtomicU64::new(0)),
+        last_request_at: Arc::new(Mutex::new(None)),
     });
 
     let writer = tokio::spawn(writer_task(out_rx));
@@ -279,6 +309,15 @@ async fn read_loop(
                     let _ = out_tx.send(rpc::encode_response(&response));
                     break;
                 }
+                // `health` stays inline too. It is a liveness probe with no
+                // I/O, and dispatched concurrently it could run after a
+                // `shutdown` on the next input line had already closed the
+                // endpoint, reporting a port this daemon no longer serves.
+                if request.method == rpc::method::HEALTH {
+                    let response = dispatch(request, state, out_tx).await;
+                    let _ = out_tx.send(rpc::encode_response(&response));
+                    continue;
+                }
                 // Everything else runs concurrently. A pull holds the RPC for
                 // as long as its HTTP calls, file writes and `apply_changes`
                 // take, and dispatching inline starved every other call for
@@ -413,6 +452,10 @@ async fn dispatch(
         rpc::method::CONFLICTS_RESOLVE => {
             finish(&request, handle_conflicts_resolve(&request, state).await)
         }
+        rpc::method::REQUESTS_RECENT => {
+            finish(&request, handle_requests_recent(&request, state).await)
+        }
+        rpc::method::SERVER_REBIND => finish(&request, handle_server_rebind(&request, state).await),
         rpc::method::SHUTDOWN => finish(&request, handle_shutdown(state).await),
         other => rpc::RpcResponse::error(
             request.id.clone(),
@@ -431,6 +474,8 @@ async fn handle_health(state: &Arc<DaemonState>) -> Result<serde_json::Value, Rp
         "uptime_secs": uptime,
         "node_id": discovery_node_id(state).await,
         "port": endpoint_port(state).await,
+        "requests_served": state.requests_served.load(Ordering::Relaxed),
+        "last_request_at": state.last_request_at.lock().await.clone(),
     }))
 }
 
@@ -454,6 +499,8 @@ async fn handle_status(state: &Arc<DaemonState>) -> Result<serde_json::Value, Rp
         "latest_version": latest_version,
         "paired_device_count": paired_device_count,
         "pending_pairing_count": pending_pairing_count,
+        "requests_served": state.requests_served.load(Ordering::Relaxed),
+        "last_request_at": state.last_request_at.lock().await.clone(),
     }))
 }
 
@@ -590,6 +637,7 @@ async fn handle_pairing_approve(
 
     let session_token = ulid::Ulid::generate().to_string();
     let device_id = pending.device_id.unwrap_or_else(DbId::new);
+    let decided_device_id = device_id.to_string();
     let model = paired_devices::ActiveModel {
         device_id: Set(device_id),
         name: Set(pending.device_name.clone()),
@@ -636,9 +684,11 @@ async fn handle_pairing_approve(
 
     let _ = crate::pairing::apply_pairing_decision(
         &state.pair_waiters,
+        &state.pair_decisions,
         &pending_node_id,
         "approved",
         &session_token,
+        Some(decided_device_id.as_str()),
     )
     .await;
 
@@ -663,6 +713,7 @@ async fn handle_pairing_reject(
         .ok_or_else(|| invalid_params(format!("unknown pairing node id: {}", params.token)))?;
 
     let pending_node_id = pending.token.clone();
+    let decided_device_id = pending.device_id.map(|id| id.to_string());
 
     let mut model: pending_pairings::ActiveModel = pending.into();
     model.status_id = Set(Some(DbId::from(PairingStatus::Rejected)));
@@ -670,9 +721,11 @@ async fn handle_pairing_reject(
 
     let _ = crate::pairing::apply_pairing_decision(
         &state.pair_waiters,
+        &state.pair_decisions,
         &pending_node_id,
         "rejected",
         "",
+        decided_device_id.as_deref(),
     )
     .await;
 
@@ -695,15 +748,19 @@ async fn handle_pairing_claim(
     Ok(serde_json::json!({ "status": "pending" }))
 }
 
-/// Claim a discovered peer, wait for its decision on the same stream, and
-/// store the token it issues us as an outbound paired device.
+/// Claim a discovered peer, poll until it decides, and store the token it
+/// issues us as an outbound paired device.
+///
+/// The claim is two-phase: `Pair` answers with a claim secret immediately, and
+/// `PairStatus` carries the decision. No connection has to survive the reader's
+/// thinking time, so a dropped stream is retried rather than read as a refusal.
 async fn claim_peer(
     state: &Arc<DaemonState>,
     params: PairingClaimParams,
 ) -> Result<(), ServerError> {
     use livtet_data::client_entities::paired_devices;
     use livtet_data::orm::{EntityTrait, Set, sea_query::OnConflict};
-    use livtet_sync_iroh::{Request, Response};
+    use livtet_sync_iroh::{Client, PairingOutcome};
 
     // Pairing is dialled by node id, so the claimant needs no reachable port
     // and the approver's address never enters the exchange.
@@ -716,23 +773,14 @@ async fn claim_peer(
         .ok_or_else(|| {
             ServerError::Server("peer discovery is not bound, so pairing cannot dial".to_string())
         })?;
-    let connection = livtet_sync_iroh::dial(&endpoint, &params.node_id)
-        .await
-        .map_err(|error| ServerError::Server(format!("pairing dial: {error}")))?;
+    let client = Client::new(endpoint, params.node_id.clone());
 
     // Who is on the other end? The connection authenticates the node id, and
     // the identity frame names the device id the pairing row is keyed by.
-    let exchange = livtet_sync_iroh::call(&connection, &Request::Identity)
+    let identity = client
+        .identity()
         .await
         .map_err(|error| ServerError::Server(format!("peer identity: {error}")))?;
-    let identity = match exchange.response {
-        Response::Identity(identity) => identity,
-        other => {
-            return Err(ServerError::Server(format!(
-                "peer identity: unexpected reply {other:?}"
-            )));
-        }
-    };
     let peer_device_id = identity
         .device_id
         .parse::<DbId>()
@@ -742,40 +790,56 @@ async fn claim_peer(
             ServerError::Server(format!("invalid peer device id: {}", identity.device_id))
         })?;
 
-    let our_node = discovery_node_id(state).await;
     let our_name = state
         .device_name
         .lock()
         .await
         .clone()
         .unwrap_or_else(|| crate::mdns::friendly_name(&state.device_id));
-    let exchange = livtet_sync_iroh::call(
-        &connection,
-        &Request::Pair {
-            device_id: state.device_id.clone(),
-            name: our_name,
-            device_type: "desktop".to_string(),
-            node_id: our_node,
-        },
-    )
-    .await
-    .map_err(|error| ServerError::Server(format!("pairing claim: {error}")))?;
-    let session_token = match exchange.response {
-        Response::Paired { session_token, .. } if !session_token.is_empty() => session_token,
-        Response::Paired { .. } => {
-            return Err(ServerError::Server(
-                "approval carried no session token".to_string(),
-            ));
-        }
-        Response::Refused { reason } => {
+    let claim = match client
+        .pair(&state.device_id, &our_name, "desktop")
+        .await
+        .map_err(|error| ServerError::Server(format!("pairing claim: {error}")))?
+    {
+        PairingOutcome::Pending { claim } => claim,
+        PairingOutcome::Refused { reason } => {
             return Err(ServerError::Server(format!(
                 "pairing was refused: {reason}"
             )));
         }
-        other => {
-            return Err(ServerError::Server(format!(
-                "pairing claim: unexpected reply {other:?}"
-            )));
+        PairingOutcome::Paired { .. } => {
+            return Err(ServerError::Server(
+                "pairing claim: the peer answered with a decision and no claim".to_string(),
+            ));
+        }
+    };
+
+    // The reader is human-paced, so the claim is polled rather than held open.
+    let deadline = tokio::time::Instant::now() + PAIR_POLL_WINDOW;
+    let session_token = loop {
+        if tokio::time::Instant::now() >= deadline {
+            return Err(ServerError::Server(
+                "the pairing was not decided in time".to_string(),
+            ));
+        }
+        tokio::time::sleep(PAIR_POLL_INTERVAL).await;
+        match client.pair_status(&claim).await {
+            Ok(PairingOutcome::Paired { session_token, .. }) if !session_token.is_empty() => {
+                break session_token;
+            }
+            Ok(PairingOutcome::Paired { .. }) => {
+                return Err(ServerError::Server(
+                    "approval carried no session token".to_string(),
+                ));
+            }
+            Ok(PairingOutcome::Refused { reason }) => {
+                return Err(ServerError::Server(format!(
+                    "pairing was refused: {reason}"
+                )));
+            }
+            // Still pending, or the poll itself was rate-limited or lost its
+            // connection: the decision stays resumable, so try again.
+            Ok(PairingOutcome::Pending { .. }) | Err(_) => continue,
         }
     };
 
@@ -1693,7 +1757,64 @@ async fn handle_conflicts_resolve(
     Ok(serde_json::json!({ "ok": resolved }))
 }
 
+/// The most recent answered sync requests, newest first.
+async fn handle_requests_recent(
+    request: &rpc::RpcRequest,
+    state: &Arc<DaemonState>,
+) -> Result<serde_json::Value, RpcFailure> {
+    let params: RequestsRecentParams = parse_params(request)?;
+    let limit = params.limit.unwrap_or(50).min(REQUEST_RECENT_LIMIT) as usize;
+    Ok(serde_json::to_value(requests::recent(
+        &state.request_log,
+        limit,
+    ))?)
+}
+
+/// Rebind the iroh endpoint on a new UDP port without restarting the daemon.
+///
+/// The old endpoint is closed first: a failed bind must not leave this daemon
+/// advertising an endpoint it no longer serves. When the bind fails there is no
+/// endpoint left, and the error says so.
+async fn handle_server_rebind(
+    request: &rpc::RpcRequest,
+    state: &Arc<DaemonState>,
+) -> Result<serde_json::Value, RpcFailure> {
+    let _lifecycle = state.lifecycle.lock().await;
+    let params: RebindParams = parse_params(request)?;
+
+    stop_advertiser(state).await;
+    if let Some(service) = state.discovery.lock().await.take() {
+        service.shutdown().await;
+    }
+
+    match DiscoveryService::bind_with_secret_and_port(discovery_secret_key(), Some(params.port))
+        .await
+    {
+        Ok(service) => {
+            let service = Arc::new(service);
+            let endpoint = service.endpoint().clone();
+            let node_id = service.node_id().0;
+            let port = service.bound_port().unwrap_or(params.port);
+            *state.discovery.lock().await = Some(Arc::clone(&service));
+            livtet_sync_iroh::spawn_server(endpoint, crate::wire::handler(Arc::clone(state)));
+            advertise(state).await;
+            tracing::info!(%node_id, port, "sync endpoint rebound");
+            Ok(serde_json::json!({ "node_id": node_id, "port": port }))
+        }
+        Err(error) => Err(RpcFailure {
+            code: rpc::error_code::INTERNAL_ERROR,
+            message: format!(
+                "could not bind the sync endpoint on port {}: {error}; no endpoint is bound",
+                params.port
+            ),
+        }),
+    }
+}
+
 async fn handle_shutdown(state: &Arc<DaemonState>) -> Result<serde_json::Value, RpcFailure> {
+    // Wait for an in-flight `server.rebind` to finish storing its endpoint, so
+    // the close below covers the endpoint that is actually current.
+    let _lifecycle = state.lifecycle.lock().await;
     stop_advertiser(state).await;
     shutdown_discovery(state).await;
     Ok(serde_json::json!({ "ok": true }))
@@ -1704,7 +1825,7 @@ fn primitive_now() -> time::PrimitiveDateTime {
     time::PrimitiveDateTime::new(now.date(), now.time())
 }
 
-fn now_string() -> String {
+pub(crate) fn now_string() -> String {
     format_offset(time::OffsetDateTime::now_utc())
 }
 
