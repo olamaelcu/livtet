@@ -956,10 +956,10 @@ mod tests {
     use tokio::sync::{Mutex, mpsc};
 
     use super::*;
-    use crate::rpc;
     use crate::config::ServerConfig;
     use crate::pairing::{apply_pairing_decision, new_pair_decisions, no_offer_decision_sink};
     use crate::requests::{new_request_log, recent};
+    use crate::rpc;
 
     const LOCAL_DEVICE: &str = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
     const REMOTE_NODE: &str = "aa11bb22cc33dd44ee55ff6677889900aabbccddeeff00112233445566778899";

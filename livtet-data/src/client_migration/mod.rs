@@ -15,6 +15,7 @@ pub mod m0009_inbound_offers;
 pub mod m0010_paired_devices_node_id;
 pub mod m0011_trigger_suppression;
 pub mod m0012_change_log_identity;
+pub mod m0013_paired_devices_peer_token;
 pub mod schema;
 
 pub use sea_orm_migration::MigratorTrait;
@@ -41,6 +42,7 @@ impl MigratorTrait for Migrator {
             Box::new(crate::client_migration::m0010_paired_devices_node_id::Migration),
             Box::new(crate::client_migration::m0011_trigger_suppression::Migration),
             Box::new(crate::client_migration::m0012_change_log_identity::Migration),
+            Box::new(crate::client_migration::m0013_paired_devices_peer_token::Migration),
         ]
     }
 }
@@ -59,6 +61,7 @@ impl Migrator {
 mod tests {
     use std::str::FromStr;
 
+    use sea_orm_migration::MigratorTrait;
     use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 
     use super::Migrator;
@@ -209,5 +212,52 @@ mod tests {
 
         insert_log_row(&pool, None).await.expect("first local row");
         insert_log_row(&pool, None).await.expect("second local row");
+    }
+
+    /// A pairing made before the token split keeps working: the single token it
+    /// stored is copied into the outbound slot, which is where the old code read
+    /// it from when dialling.
+    #[tokio::test]
+    async fn peer_session_token_is_added_and_backfilled() {
+        let pool = memory_pool().await;
+        crate::migration::Migrator::run(&pool)
+            .await
+            .expect("business migrations");
+
+        let db =
+            sea_orm_migration::sea_orm::SqlxSqliteConnector::from_sqlx_sqlite_pool(pool.clone());
+        // Stop one migration short, then pair a device the way the old code did:
+        // one token, no peer slot.
+        Migrator::up(&db, Some(12))
+            .await
+            .expect("client migrations to 12");
+        sqlx::query(
+            "INSERT INTO paired_devices (device_id, paired_at, session_token) \
+             VALUES (x'00', datetime('now'), 'tok-before-the-split')",
+        )
+        .execute(&pool)
+        .await
+        .expect("insert a pre-split pairing");
+
+        Migrator::up(&db, None).await.expect("the rest");
+
+        let peer: Option<String> = sqlx::query_scalar(
+            "SELECT peer_session_token FROM paired_devices WHERE device_id = x'00'",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("read the peer token");
+        assert_eq!(peer.as_deref(), Some("tok-before-the-split"));
+
+        let issued: Option<String> =
+            sqlx::query_scalar("SELECT session_token FROM paired_devices WHERE device_id = x'00'")
+                .fetch_one(&pool)
+                .await
+                .expect("read the issued token");
+        assert_eq!(
+            issued.as_deref(),
+            Some("tok-before-the-split"),
+            "the inbound slot is left as it was"
+        );
     }
 }

@@ -153,6 +153,7 @@ const EXPECTED_TYPES: &[&str] = &[
 const EXPECTED_SYNC_FUNCTIONS: &[&str] = &[
     "pairSyncDevice",
     "syncPairingStatus",
+    "peerSyncIdentity",
     "advertiseSyncDevice",
     "stopAdvertisingSyncDevice",
 ];

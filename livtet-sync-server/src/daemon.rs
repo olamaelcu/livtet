@@ -18,7 +18,6 @@ use tokio::sync::{Mutex, mpsc, oneshot};
 
 use crate::config::ServerConfig;
 use crate::error::ServerError;
-use crate::mdns::{Advertiser, NearbyPeer, browse_nearby};
 use crate::pairing::{OfferDecisionSink, PairDecisions, PairWaiters, new_pair_decisions};
 use crate::requests::{self, Notifier, RequestLog, new_request_log};
 use crate::rpc::{
@@ -26,6 +25,7 @@ use crate::rpc::{
     PairingBeginParams, PairingClaimParams, RebindParams, RequestsRecentParams, ResolveParams,
     RpcResponse, TokenParams,
 };
+use livtet_mdns::{Advertiser, NearbyPeer, browse_nearby};
 
 /// Shared, long-lived daemon state.
 pub struct DaemonState {
@@ -461,6 +461,15 @@ struct RpcFailure {
 
 impl From<ServerError> for RpcFailure {
     fn from(error: ServerError) -> Self {
+        Self {
+            code: rpc::error_code::INTERNAL_ERROR,
+            message: error.to_string(),
+        }
+    }
+}
+
+impl From<livtet_mdns::MdnsError> for RpcFailure {
+    fn from(error: livtet_mdns::MdnsError) -> Self {
         Self {
             code: rpc::error_code::INTERNAL_ERROR,
             message: error.to_string(),
@@ -905,7 +914,7 @@ async fn claim_peer(
         .lock()
         .await
         .clone()
-        .unwrap_or_else(|| crate::mdns::friendly_name(&state.device_id));
+        .unwrap_or_else(|| livtet_mdns::friendly_name(&state.device_id));
     let claim = match client
         .pair(&state.device_id, &our_name, "desktop")
         .await
@@ -2018,7 +2027,14 @@ async fn advertise(state: &Arc<DaemonState>) {
     };
     let node_id = discovery_node_id(state).await;
     let device_name = state.device_name.lock().await.clone();
-    match Advertiser::start(&node_id, &state.device_id, device_name.as_deref(), ip, port) {
+    match Advertiser::start(
+        &node_id,
+        &state.device_id,
+        device_name.as_deref(),
+        "desktop",
+        ip,
+        port,
+    ) {
         Ok(advertiser) => *state.advertiser.lock().await = Some(advertiser),
         Err(error) => tracing::warn!(%error, "mDNS advertising failed"),
     }

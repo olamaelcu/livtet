@@ -3782,6 +3782,7 @@ dependencies = [
  "keyring",
  "livtet-data",
  "livtet-iroh",
+ "livtet-mdns",
  "livtet-sync",
  "livtet-sync-iroh",
  "livtet-types",

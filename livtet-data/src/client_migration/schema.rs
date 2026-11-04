@@ -57,6 +57,7 @@ pub enum PairedDevices {
     PairedAt,
     LastSyncAt,
     SessionToken,
+    PeerSessionToken,
 }
 
 #[derive(DeriveIden)]

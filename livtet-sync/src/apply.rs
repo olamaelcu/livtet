@@ -212,10 +212,7 @@ fn json_to_sql(
     match column_type {
         ColumnType::Binary(_) | ColumnType::VarBinary(_) | ColumnType::Blob => {
             let text = value.as_str().ok_or_else(invalid)?;
-            let id = match DbId::from_hex(text) {
-                Ok(id) => id,
-                Err(_) => text.parse::<DbId>().map_err(|_| invalid())?,
-            };
+            let id = DbId::from_wire(text).ok_or_else(invalid)?;
             Ok(Value::Bytes(Some(id.to_bytes().to_vec())))
         }
         ColumnType::TinyInteger

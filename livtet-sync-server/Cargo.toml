@@ -21,6 +21,7 @@ path = "src/main.rs"
 livtet-iroh = { workspace = true }
 livtet-sync = { workspace = true }
 livtet-sync-iroh = { workspace = true }
+livtet-mdns = { workspace = true }
 livtet-data = { workspace = true }
 livtet-types = { workspace = true }
 tokio = { workspace = true, features = [

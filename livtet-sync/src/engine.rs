@@ -748,10 +748,10 @@ fn sql_value(column: &str, value: &Value) -> SqlValue {
             // as SQL NULL, not a zero-length blob: no `DbId` can decode zero
             // bytes, so a blob there poisons every read of the row.
             Value::String(text) if text.is_empty() => return SqlValue::Bytes(None),
-            Value::String(text)
-                if text.len() == 32 && text.bytes().all(|byte| byte.is_ascii_hexdigit()) =>
-            {
-                if let Ok(id) = DbId::from_hex(text) {
+            // Ids arrive as ULID text from a serialized model and as hex from a
+            // change payload; the column is `BLOB`, so both forms must decode.
+            Value::String(text) => {
+                if let Some(id) = DbId::from_wire(text) {
                     return SqlValue::Bytes(Some(id.to_bytes().to_vec()));
                 }
             }

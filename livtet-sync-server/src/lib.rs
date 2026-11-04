@@ -10,7 +10,6 @@
 pub mod config;
 pub mod daemon;
 pub mod error;
-pub mod mdns;
 pub mod pairing;
 pub mod peer;
 pub mod rate_limit;

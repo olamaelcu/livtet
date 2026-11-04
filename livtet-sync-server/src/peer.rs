@@ -131,8 +131,10 @@ pub async fn peer_by_id(state: &Arc<DaemonState>, device_id: &str) -> Result<Pee
 
 /// Load the transport details for a paired device.
 ///
-/// Only an outbound row can be dialled: its session token was issued by the
-/// peer, so it authenticates there. The row's node id is the address.
+/// Only a row we claimed can be dialled, and the token it presents is the one
+/// the peer issued — `peer_session_token`, never `session_token`, which holds
+/// the token this installation issues and accepts. The row's node id is the
+/// address.
 pub async fn peer_for(state: &Arc<DaemonState>, device_id: DbId) -> Result<Peer, ServerError> {
     use livtet_data::client_entities::paired_devices;
     use livtet_data::orm::EntityTrait;
@@ -148,7 +150,7 @@ pub async fn peer_for(state: &Arc<DaemonState>, device_id: DbId) -> Result<Peer,
         ));
     }
     let token: String = livtet_data::sql::query_scalar(
-        "SELECT session_token FROM paired_devices WHERE device_id = ?",
+        "SELECT peer_session_token FROM paired_devices WHERE device_id = ?",
     )
     .bind(device_id.to_bytes().to_vec())
     .fetch_one(&state.pool)
