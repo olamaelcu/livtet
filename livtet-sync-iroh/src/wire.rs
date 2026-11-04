@@ -12,6 +12,12 @@
 //! They are carried here, not in `livtet-sync`, because the envelopes are this
 //! transport's business: the domain types (`SyncChange`, `PullResponse`, …)
 //! stay where they are and are reused unchanged.
+//!
+//! One operation is not a sync operation: [`Request::Opds`] forwards an OPDS
+//! request to a paired desktop and [`Response::Opds`] carries the route's HTTP
+//! answer back. Its body is bytes, encoded inside the frame by serde's byte
+//! array, so a PDF or an EPUB needs no UTF-8 conversion; because it rides in
+//! the frame it is bounded by [`MAX_MESSAGE_BYTES`].
 
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -108,6 +114,25 @@ pub enum Request {
     FileInfo { token: String, inventory_id: String },
     /// The extracted cover of one inventory item.
     Cover { token: String, inventory_id: String },
+    /// An OPDS request for a paired desktop to serve in-process.
+    ///
+    /// `path` carries the query string with the path (`/search?query=dune`),
+    /// so a page, a search, or a feed is one field. `headers` carries the
+    /// negotiation headers that change what the route returns. `body` is raw
+    /// bytes for a method that has one and empty for a `GET`; it is encoded as
+    /// a byte array, never as text, and counts against [`MAX_MESSAGE_BYTES`]
+    /// like every other frame payload. The answer is [`Response::Opds`].
+    Opds {
+        /// The HTTP method, upper-case (`GET`, `POST`, …).
+        method: String,
+        /// Path and query, starting with `/`.
+        path: String,
+        /// The headers the route consults to pick a representation.
+        headers: OpdsHeaders,
+        /// Request body bytes; empty when the method carries none.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        body: Vec<u8>,
+    },
     /// What became of an offer this peer sent.
     OfferDecision {
         token: String,
@@ -146,6 +171,14 @@ pub enum Response {
     FileInfo(FileMetadata),
     /// A cover header; the caller reads `length` raw bytes next.
     Cover(FileHeader),
+    /// An OPDS answer: the route's HTTP status, its media type, and its body.
+    ///
+    /// A non-2xx status is an ordinary answer, not [`Response::Error`]: a 404
+    /// for an unknown publication or a 304 for an unchanged feed is exactly
+    /// what the e-reader must see. The body is raw bytes inside the frame, so
+    /// it is charged against [`MAX_MESSAGE_BYTES`]; callers serving a larger
+    /// publication must chunk it across several `Opds` requests.
+    Opds(OpdsResponse),
     /// The sender recorded the decision.
     OfferDecided,
     /// The request could not be served. The code says why without the caller
@@ -218,6 +251,47 @@ pub struct FileMetadata {
     pub content_type: String,
     pub size: u64,
     pub etag: String,
+}
+
+/// The negotiation headers of an OPDS request.
+///
+/// Only headers that change the representation travel: `Host` is rewritten by
+/// the desktop itself, `Authorization` would duplicate the authenticated QUIC
+/// connection, and hop-by-hop headers mean nothing across a frame. An absent
+/// header is `None` rather than an empty string, so a route can tell "not
+/// sent" from "sent empty".
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OpdsHeaders {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub accept: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub accept_language: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub accept_encoding: Option<String>,
+}
+
+/// An OPDS route's answer, as one HTTP-shaped value.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OpdsResponse {
+    /// The HTTP status the route produced.
+    pub status: u16,
+    /// Media type of `body`, e.g. `application/atom+xml;profile=opds-catalog`.
+    pub content_type: String,
+    /// Raw response bytes: a feed document or a publication, never text-only.
+    pub body: Vec<u8>,
+}
+
+impl Response {
+    /// Whether this answer fits one framed message.
+    ///
+    /// The body rides inside the frame, so the whole encoded response — not
+    /// just `body` — is charged against [`MAX_MESSAGE_BYTES`], which lives in
+    /// this module and is 256 MiB (`MAX_MESSAGE_BYTES = 256 * 1024 * 1024`).
+    /// `false` is the signal to split the body across several `Opds` requests
+    /// rather than hand `write_frame` a message it must refuse.
+    pub fn fits_one_frame(&self) -> bool {
+        serde_json::to_vec(self).is_ok_and(|encoded| encoded.len() <= MAX_MESSAGE_BYTES)
+    }
 }
 
 /// Why a frame could not be read or written.
@@ -453,6 +527,120 @@ mod tests {
         })
         .unwrap();
         assert_eq!(file_info["op"], "file_info");
+
+        let opds = serde_json::to_value(Request::Opds {
+            method: "GET".to_string(),
+            path: "/search?query=dune".to_string(),
+            headers: OpdsHeaders::default(),
+            body: Vec::new(),
+        })
+        .unwrap();
+        assert_eq!(opds["op"], "opds");
+        assert_eq!(opds["path"], "/search?query=dune");
+    }
+
+    /// OPDS bodies are arbitrary bytes: a publication download must survive
+    /// the frame without a UTF-8 conversion turning it into mojibake.
+    #[tokio::test]
+    async fn an_opds_request_round_trips_a_query_and_binary_body() {
+        let (mut client, mut server) = tokio::io::duplex(64 * 1024);
+        let body = vec![0x00, 0xff, 0x80, b'%', 0xc3, 0x28, 0x00, 0x9f, 0x92, 0x96];
+        let request = Request::Opds {
+            method: "POST".to_string(),
+            path: "/search?query=dune&page=2".to_string(),
+            headers: OpdsHeaders {
+                accept: Some("application/atom+xml;profile=opds-catalog".to_string()),
+                accept_language: Some("de".to_string()),
+                accept_encoding: None,
+            },
+            body: body.clone(),
+        };
+
+        write_frame(&mut client, &request).await.unwrap();
+        let read: Request = read_frame(&mut server).await.unwrap();
+
+        match read {
+            Request::Opds {
+                method,
+                path,
+                headers,
+                body: read_body,
+            } => {
+                assert_eq!(method, "POST");
+                assert_eq!(path, "/search?query=dune&page=2");
+                assert_eq!(
+                    headers.accept.as_deref(),
+                    Some("application/atom+xml;profile=opds-catalog")
+                );
+                assert_eq!(headers.accept_language.as_deref(), Some("de"));
+                assert_eq!(headers.accept_encoding, None);
+                assert_eq!(read_body, body);
+            }
+            other => panic!("expected an opds request, got {other:?}"),
+        }
+    }
+
+    /// A non-2xx OPDS status is a served answer, and its body is bytes too.
+    #[tokio::test]
+    async fn an_opds_response_round_trips_a_non_200_status() {
+        let (mut server, mut client) = tokio::io::duplex(64 * 1024);
+        let body = vec![0x00, 0x9f, 0x92, 0x96, 0xff];
+        let response = Response::Opds(OpdsResponse {
+            status: 404,
+            content_type: "application/atom+xml;profile=opds-catalog".to_string(),
+            body: body.clone(),
+        });
+
+        write_frame(&mut server, &response).await.unwrap();
+        let read: Response = read_frame(&mut client).await.unwrap();
+
+        match read {
+            Response::Opds(opds) => {
+                assert_eq!(opds.status, 404);
+                assert_eq!(
+                    opds.content_type,
+                    "application/atom+xml;profile=opds-catalog"
+                );
+                assert_eq!(opds.body, body);
+                assert!(Response::Opds(opds).fits_one_frame());
+            }
+            other => panic!("expected an opds response, got {other:?}"),
+        }
+    }
+
+    /// A publication body larger than one chunk is carried as several chunks of
+    /// one framed message, and arrives byte for byte: the 8 MiB chunk cap
+    /// bounds a write syscall, not the answer.
+    #[tokio::test]
+    async fn an_opds_body_larger_than_one_chunk_round_trips() {
+        let body: Vec<u8> = (0..MAX_CHUNK_BYTES + 1024)
+            .map(|i| (i % 251) as u8)
+            .collect();
+        let expected = body.clone();
+        let response = Response::Opds(OpdsResponse {
+            status: 200,
+            content_type: "application/epub+zip".to_string(),
+            body,
+        });
+        assert!(
+            response.fits_one_frame(),
+            "a body past one chunk still fits one framed message"
+        );
+
+        let (mut writer, mut reader) = tokio::io::duplex(64 * 1024);
+        let sending = tokio::spawn(async move {
+            write_frame(&mut writer, &response).await.unwrap();
+        });
+        let read: Response = read_frame(&mut reader).await.unwrap();
+        sending.await.unwrap();
+
+        match read {
+            Response::Opds(opds) => {
+                assert_eq!(opds.body.len(), expected.len());
+                assert_eq!(opds.body, expected);
+            }
+            other => panic!("expected the publication, got {other:?}"),
+        }
     }
 
     #[test]
@@ -470,6 +658,15 @@ mod tests {
         })
         .unwrap();
         assert_eq!(pending["result"], "pairing_pending");
+
+        let opds = serde_json::to_value(Response::Opds(OpdsResponse {
+            status: 404,
+            content_type: "application/atom+xml".to_string(),
+            body: Vec::new(),
+        }))
+        .unwrap();
+        assert_eq!(opds["result"], "opds");
+        assert_eq!(opds["status"], 404);
     }
 
     /// A range failure carries the size the caller needs to restart from.
