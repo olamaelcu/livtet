@@ -1218,20 +1218,36 @@ mod tests {
     }
 
     /// Seed a paired device holding `token`, bound to `node_id`.
+    /// Seed a paired device holding `token`, bound to `node_id`.
     async fn seed_paired(
         state: &Arc<DaemonState>,
         device_id: DbId,
         node_id: Option<&str>,
         token: &str,
     ) {
+        seed_pairing(state, device_id, node_id, token, Some(token)).await;
+    }
+
+    /// Seed a pairing row with the two tokens a real pairing ends up holding.
+    ///
+    /// `issued` is the token this side minted and checks inbound requests
+    /// against; `peer` is the one the other side minted for us to present.
+    async fn seed_pairing(
+        state: &Arc<DaemonState>,
+        device_id: DbId,
+        node_id: Option<&str>,
+        issued: &str,
+        peer: Option<&str>,
+    ) {
         livtet_data::sql::query(
             "INSERT INTO paired_devices \
                  (device_id, name, listen_on, device_type_id, paired_at, last_sync_at, \
-                  session_token, node_id, outbound) \
-             VALUES (?, 'Peer', NULL, NULL, datetime('now'), NULL, ?, ?, 1)",
+                  session_token, peer_session_token, node_id, outbound) \
+             VALUES (?, 'Peer', NULL, NULL, datetime('now'), NULL, ?, ?, ?, 1)",
         )
         .bind(device_id.to_bytes().to_vec())
-        .bind(token)
+        .bind(issued)
+        .bind(peer.map(str::to_string))
         .bind(node_id.map(str::to_string))
         .execute(&state.pool)
         .await
@@ -1273,6 +1289,58 @@ mod tests {
                 }
             ),
             "another node presenting the token is refused: {response:?}"
+        );
+    }
+
+    /// A pairing holds a token minted on each side, and storing one must not
+    /// shadow the other.
+    ///
+    /// Both used to share `session_token`, so a claim — which stores the token
+    /// the peer issued — overwrote the token we had issued at approval. Every
+    /// later request from that peer then failed as `Unauthorized`, which is what
+    /// a phone hit on its first pull after pairing.
+    #[tokio::test]
+    async fn the_peers_token_does_not_displace_the_one_we_issued() {
+        let (state, _root) = test_state().await;
+        seed_pairing(
+            &state,
+            DbId::new(),
+            Some(REMOTE_NODE),
+            "issued-by-us",
+            Some("issued-by-them"),
+        )
+        .await;
+
+        let response = ask(
+            &state,
+            Request::Status {
+                token: "issued-by-us".to_string(),
+            },
+            REMOTE_NODE,
+        )
+        .await;
+        assert!(
+            matches!(response, Response::Status(_)),
+            "the token we issued still authorizes inbound: {response:?}"
+        );
+
+        let response = ask(
+            &state,
+            Request::Status {
+                token: "issued-by-them".to_string(),
+            },
+            REMOTE_NODE,
+        )
+        .await;
+        assert!(
+            matches!(
+                response,
+                Response::Error {
+                    code: ErrorCode::Unauthorized,
+                    ..
+                }
+            ),
+            "the peer's own token is not ours to accept: {response:?}"
         );
     }
 

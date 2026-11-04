@@ -766,8 +766,10 @@ async fn handle_pairing_approve(
         device_type_id: Set(pending.device_type_id),
         paired_at: Set(primitive_now()),
         last_sync_at: Set(None),
-        // A pairing is mutual: both sides hold the same token, and the node id
-        // recorded below is enough to dial the claimant.
+        // Approving lets the claimant dial us, so the row is dial-addressable in
+        // principle; the token recorded below is the one *we* issue and check
+        // their requests against. Pulling from them needs their token instead,
+        // which only a claim (`sync_pair_claim`) can supply.
         outbound: Set(true),
     };
     paired_devices::Entity::insert(model)
@@ -786,7 +788,9 @@ async fn handle_pairing_approve(
         .await?;
 
     // `session_token` is added by a later client migration and is not on the
-    // entity, so persist it with a targeted statement through the pool.
+    // entity, so persist it with a targeted statement through the pool. It is
+    // the token we just minted: inbound requests present it, and the peer holds
+    // its own separate token for anything it accepts from us.
     livtet_data::sql::query(
         "UPDATE paired_devices SET session_token = ?, node_id = ? WHERE device_id = ?",
     )
@@ -987,17 +991,19 @@ async fn claim_peer(
         .await
         .map_err(|error| ServerError::Server(format!("storing paired device: {error}")))?;
 
-    // `session_token` and `node_id` are not on the entity; write them through
-    // the pool. The node id is what every later dial addresses.
+    // `peer_session_token` and `node_id` are not on the entity; write them through
+    // the pool. This token was issued by the peer, so it only authenticates when
+    // we dial them — it must not sit in `session_token`, which inbound requests
+    // are checked against.
     livtet_data::sql::query(
-        "UPDATE paired_devices SET session_token = ?, node_id = ? WHERE device_id = ?",
+        "UPDATE paired_devices SET peer_session_token = ?, node_id = ? WHERE device_id = ?",
     )
     .bind(session_token)
     .bind(params.node_id.clone())
     .bind(peer_device_id.to_bytes().to_vec())
     .execute(&state.pool)
     .await
-    .map_err(|error| ServerError::Server(format!("storing session token: {error}")))?;
+    .map_err(|error| ServerError::Server(format!("storing the peer's session token: {error}")))?;
 
     requests::notify(
         &state.notifier,
