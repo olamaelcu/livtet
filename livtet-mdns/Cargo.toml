@@ -1,0 +1,18 @@
+# Vendored from olamaelcu/livtet-mobile (core/livtet-mdns) so the workspace
+# resolves: `livtet-ffi` advertises this node over mDNS, and a member cannot
+# depend on a crate that lives in another workspace. Keep the two copies in
+# step, or delete this one and publish the crate.
+[package]
+name = "livtet-mdns"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+mdns-sd = "0.21"
+serde = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }

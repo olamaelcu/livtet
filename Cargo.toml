@@ -13,6 +13,7 @@ members = [
   "livtet-sync-server",
   "livtet-search",
   "livtet-cite",
+  "livtet-mdns",
   "livtet-types",
   "livtet-test-utils",
   "livtet-ruby",
@@ -44,6 +45,7 @@ livtet-sync-server = { path = "livtet-sync-server" }
 livtet-ffi = { path = "livtet-ffi" }
 livtet-search = { path = "livtet-search" }
 livtet-cite = { path = "livtet-cite" }
+livtet-mdns = { path = "livtet-mdns" }
 livtet-temporal-quotes = { path = "livtet-temporal-quotes" }
 livtet-test-utils = { path = "livtet-test-utils" }
 livtet-types = { path = "livtet-types" }

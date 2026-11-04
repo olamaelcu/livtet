@@ -3672,6 +3672,7 @@ dependencies = [
  "livtet-core",
  "livtet-covers",
  "livtet-iroh",
+ "livtet-mdns",
  "livtet-sync-iroh",
  "thiserror 2.0.19",
  "time",
@@ -3685,6 +3686,16 @@ version = "0.1.0"
 dependencies = [
  "iroh",
  "iroh-mdns-address-lookup",
+ "serde",
+ "thiserror 2.0.19",
+ "tracing",
+]
+
+[[package]]
+name = "livtet-mdns"
+version = "0.1.0"
+dependencies = [
+ "mdns-sd",
  "serde",
  "thiserror 2.0.19",
  "tracing",
