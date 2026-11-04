@@ -12,6 +12,7 @@ members = [
   "livtet-sync-iroh",
   "livtet-sync-server",
   "livtet-search",
+  "livtet-cite",
   "livtet-types",
   "livtet-test-utils",
   "livtet-ruby",
@@ -42,6 +43,7 @@ livtet-sync-iroh = { path = "livtet-sync-iroh" }
 livtet-sync-server = { path = "livtet-sync-server" }
 livtet-ffi = { path = "livtet-ffi" }
 livtet-search = { path = "livtet-search" }
+livtet-cite = { path = "livtet-cite" }
 livtet-temporal-quotes = { path = "livtet-temporal-quotes" }
 livtet-test-utils = { path = "livtet-test-utils" }
 livtet-types = { path = "livtet-types" }
