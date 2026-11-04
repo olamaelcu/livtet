@@ -43,6 +43,16 @@ impl DbId {
             .map_err(|_| hex::FromHexError::InvalidStringLength)?;
         Ok(DbId::from_bytes(arr))
     }
+
+    /// Parse either form an id takes on the wire.
+    ///
+    /// An entity id on the change log is 32-char hex (`to_hex`), while a field
+    /// of a model serialized to JSON is the 26-char ULID string (`Display`).
+    /// Both name the same 16 bytes, and the id columns are declared `BLOB`, so
+    /// every reader has to accept both or it will try to bind text.
+    pub fn from_wire(s: &str) -> Option<Self> {
+        Self::from_hex(s).ok().or_else(|| s.parse::<DbId>().ok())
+    }
 }
 
 #[cfg(feature = "uniffi")]
