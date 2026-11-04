@@ -130,6 +130,7 @@ async fn seed_work_with_two_editions(db: &DatabaseConnection) -> (DbId, DbId, Db
     let author = authors::ActiveModel {
         id: Set(author_id),
         name: Set("Patrick Rothfuss".into()),
+        ..Default::default()
     };
     author.insert(db).await.expect("insert author");
 
@@ -611,6 +612,7 @@ async fn seed_comprehensive(db: &DatabaseConnection) -> Seed {
         authors::ActiveModel {
             id: Set(aid),
             name: Set(name.into()),
+            ..Default::default()
         }
         .insert(db)
         .await
@@ -799,6 +801,7 @@ async fn seed_comprehensive(db: &DatabaseConnection) -> Seed {
         edition_publishers::ActiveModel {
             edition_id: Set(eid),
             publisher_id: Set(publisher_id),
+            ..Default::default()
         }
         .insert(db)
         .await
@@ -808,6 +811,7 @@ async fn seed_comprehensive(db: &DatabaseConnection) -> Seed {
         edition_publishers::ActiveModel {
             edition_id: Set(eid),
             publisher_id: Set(publisher2_id),
+            ..Default::default()
         }
         .insert(db)
         .await
@@ -2210,6 +2214,7 @@ async fn reindex_uses_work_level_fallbacks_and_nonisbn_identifiers() {
     authors::ActiveModel {
         id: Set(author_id),
         name: Set("Zephyr Author".into()),
+        ..Default::default()
     }
     .insert(&db)
     .await

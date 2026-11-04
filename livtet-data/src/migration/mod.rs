@@ -19,6 +19,8 @@ pub mod m0015_reading_bookmarks;
 pub mod m0016_progress_unit_vocabulary;
 pub mod m0017_edition_cover_url;
 pub mod m0018_drop_edition_specific_covers;
+pub mod m0019_author_name_parts;
+pub mod m0020_publisher_place;
 pub mod schema;
 
 pub use sea_orm_migration::MigratorTrait;
@@ -49,6 +51,8 @@ impl MigratorTrait for Migrator {
             Box::new(crate::migration::m0016_progress_unit_vocabulary::Migration),
             Box::new(crate::migration::m0017_edition_cover_url::Migration),
             Box::new(crate::migration::m0018_drop_edition_specific_covers::Migration),
+            Box::new(crate::migration::m0019_author_name_parts::Migration),
+            Box::new(crate::migration::m0020_publisher_place::Migration),
         ]
     }
 }

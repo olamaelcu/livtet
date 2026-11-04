@@ -31,6 +31,7 @@ impl LivtetStore {
         let model = authors::ActiveModel {
             id: Set(DbId::new()),
             name: Set(name),
+            ..Default::default()
         }
         .insert(&db)
         .await?;

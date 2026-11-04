@@ -128,6 +128,7 @@ async fn seed_catalog(conn: &DatabaseConnection, dir: &Utf8Path) -> Vec<FixtureE
         authors::ActiveModel {
             id: Set(id),
             name: Set(name.to_string()),
+            ..Default::default()
         }
         .insert(conn)
         .await

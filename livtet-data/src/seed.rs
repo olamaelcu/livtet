@@ -460,6 +460,7 @@ async fn seed_authors(
         let model = AuthorActiveModel {
             id: Set(author_id),
             name: Set(name),
+            ..Default::default()
         };
         AuthorsEntity::insert(model).exec(pool).await?;
         result.authors_created += 1;
@@ -680,6 +681,7 @@ async fn link_edition_publishers(
         let model = EditionPublisherActiveModel {
             edition_id: Set(*edition_id),
             publisher_id: Set(publisher_id),
+            ..Default::default()
         };
         EditionPublishersEntity::insert(model).exec(pool).await?;
     }

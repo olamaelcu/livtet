@@ -78,6 +78,7 @@ async fn seed_minimal(db: &DatabaseConnection) {
     authors::ActiveModel {
         id: Set(author_id),
         name: Set("Progress Author".into()),
+        ..Default::default()
     }
     .insert(db)
     .await

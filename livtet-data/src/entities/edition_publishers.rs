@@ -10,6 +10,9 @@ pub struct Model {
     pub edition_id: DbId,
     #[sea_orm(primary_key)]
     pub publisher_id: DbId,
+    /// Place of publication for this edition, written by the importer
+    /// (`NULL` on links imported before `m0018`).
+    pub place: Option<String>,
 }
 
 #[cfg_attr(feature = "fake", derive(fake::Dummy))]
