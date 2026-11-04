@@ -14,7 +14,7 @@ use livtet_iroh::{DiscoveryService, NodeId, PeerIdentity, SecretKey};
 use livtet_sync::SyncEngine;
 use livtet_types::{DbId, PairingStatus};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::sync::{Mutex, mpsc};
+use tokio::sync::{Mutex, mpsc, oneshot};
 
 use crate::config::ServerConfig;
 use crate::error::ServerError;
@@ -24,7 +24,7 @@ use crate::requests::{self, Notifier, RequestLog, new_request_log};
 use crate::rpc::{
     self, DeviceNameParams, DeviceParams, OfferBookParams, OfferDecisionParams, OfferParams,
     PairingBeginParams, PairingClaimParams, RebindParams, RequestsRecentParams, ResolveParams,
-    TokenParams,
+    RpcResponse, TokenParams,
 };
 
 /// Shared, long-lived daemon state.
@@ -69,10 +69,117 @@ pub struct DaemonState {
     pub advertiser: Mutex<Option<Advertiser>>,
     /// The most recent answered requests, newest last.
     pub request_log: RequestLog,
+    /// The pipe back to the desktop, for the requests only it can answer.
+    ///
+    /// The OPDS route table lives there, so a forwarded `Opds` wire request
+    /// becomes a reverse JSON-RPC call rather than an answer this process
+    /// could produce.
+    pub host: HostBridge,
     /// How many sync requests this daemon has answered.
     pub requests_served: Arc<AtomicU64>,
     /// When the last sync request was answered.
     pub last_request_at: Arc<Mutex<Option<String>>>,
+}
+
+/// A request the daemon sends its parent and waits on.
+///
+/// The stdio pipe normally flows one way: the desktop calls, the daemon
+/// answers. OPDS pass-through needs the opposite direction — the desktop owns
+/// the route table — so this keeps a second registry of in-flight ids and
+/// [`crate::daemon::read_loop`] hands responses to it. Ids are daemon-owned and
+/// unrelated to the parent's, because the two directions never share a call.
+#[derive(Clone)]
+pub struct HostBridge {
+    inner: Arc<HostBridgeInner>,
+}
+
+struct HostBridgeInner {
+    /// The stdout writer every line goes through.
+    out: mpsc::UnboundedSender<String>,
+    /// Requests waiting on an answer, keyed by the id the request carried.
+    pending: std::sync::Mutex<HashMap<u64, oneshot::Sender<RpcResponse>>>,
+    next_id: AtomicU64,
+}
+
+impl HostBridge {
+    /// Build a bridge over the stdout line channel.
+    pub fn new(out: mpsc::UnboundedSender<String>) -> Self {
+        Self {
+            inner: Arc::new(HostBridgeInner {
+                out,
+                pending: std::sync::Mutex::new(HashMap::new()),
+                next_id: AtomicU64::new(1),
+            }),
+        }
+    }
+
+    /// Send `method` to the desktop and wait for its answer.
+    ///
+    /// An answer is a [`rpc::RpcResponse`]; a `result` is returned, an `error`
+    /// becomes the `Err` message. A timeout forgets the id, so a late answer is
+    /// logged as unmatched rather than delivered to the next request.
+    pub async fn request(
+        &self,
+        method: &str,
+        params: serde_json::Value,
+        timeout: Duration,
+    ) -> Result<serde_json::Value, String> {
+        let id = self.inner.next_id.fetch_add(1, Ordering::Relaxed);
+        let (tx, rx) = oneshot::channel();
+        {
+            let mut pending = self
+                .inner
+                .pending
+                .lock()
+                .map_err(|_| "the host bridge is poisoned".to_string())?;
+            pending.insert(id, tx);
+        }
+
+        if self
+            .inner
+            .out
+            .send(rpc::encode_request(id, method, params))
+            .is_err()
+        {
+            self.forget(id);
+            return Err("the control channel to the desktop is closed".to_string());
+        }
+
+        match tokio::time::timeout(timeout, rx).await {
+            Ok(Ok(response)) => match (response.result, response.error) {
+                (_, Some(error)) => Err(error.message),
+                (Some(result), None) => Ok(result),
+                (None, None) => Err("the desktop returned an empty response".to_string()),
+            },
+            Ok(Err(_)) => Err("the desktop dropped the request".to_string()),
+            Err(_) => {
+                self.forget(id);
+                Err("the desktop did not answer in time".to_string())
+            }
+        }
+    }
+
+    /// Deliver `response` to the request waiting on its id, if any.
+    pub fn answer(&self, response: RpcResponse) {
+        let Some(id) = response.id.as_ref().and_then(serde_json::Value::as_u64) else {
+            return;
+        };
+        let sender = self
+            .inner
+            .pending
+            .lock()
+            .ok()
+            .and_then(|mut pending| pending.remove(&id));
+        if let Some(sender) = sender {
+            let _ = sender.send(response);
+        }
+    }
+
+    fn forget(&self, id: u64) {
+        if let Ok(mut pending) = self.inner.pending.lock() {
+            pending.remove(&id);
+        }
+    }
 }
 
 /// Keyring service under which the discovery secret is stored.
@@ -165,6 +272,7 @@ pub async fn run_async(config: ServerConfig) -> Result<(), ServerError> {
         discovery: Mutex::new(discovery),
         advertiser: Mutex::new(None),
         request_log: new_request_log(),
+        host: HostBridge::new(out_tx.clone()),
         requests_served: Arc::new(AtomicU64::new(0)),
         last_request_at: Arc::new(Mutex::new(None)),
     });
@@ -330,7 +438,9 @@ async fn read_loop(
                     let _ = out_tx.send(rpc::encode_response(&response));
                 });
             }
-            // Inbound notifications/responses from the parent are ignored.
+            // An answer to a request this daemon made (OPDS pass-through).
+            Ok(rpc::RpcMessage::Response(response)) => state.host.answer(response),
+            // Notifications from the parent carry nothing this daemon acts on.
             Ok(_) => {}
             Err(error) => {
                 let response =

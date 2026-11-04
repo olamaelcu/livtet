@@ -64,6 +64,14 @@ pub mod method {
     /// Stop the server and exit the daemon loop.
     pub const SHUTDOWN: &str = "shutdown";
 
+    /// Ask the desktop to serve one OPDS request in-process.
+    ///
+    /// This is the one method the daemon sends *up* the stdio pipe: the OPDS
+    /// route table lives in the desktop process, which owns the live database
+    /// and search index, so a forwarded `Opds` wire request is answered there
+    /// and its answer returns as this request's response.
+    pub const OPDS_FETCH: &str = "opds.fetch";
+
     /// Notification: a remote device filed a pairing claim.
     pub const NOTIFY_PAIRING_REQUESTED: &str = "pairing.requested";
     /// Notification: this device's own claim was approved and stored.

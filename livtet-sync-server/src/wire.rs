@@ -12,14 +12,14 @@
 
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use camino::Utf8PathBuf;
 use livtet_data::orm::{ConnectionTrait, DbBackend, EntityTrait, Statement};
 use livtet_sync::{SyncChange, SyncStatus};
 use livtet_sync_iroh::{
-    ErrorCode, FileHeader, FileMetadata, Handler, Identity, Outcome, PROTOCOL_VERSION, Request,
-    Response,
+    ErrorCode, FileHeader, FileMetadata, Handler, Identity, MAX_MESSAGE_BYTES, OpdsHeaders,
+    OpdsResponse, Outcome, PROTOCOL_VERSION, Request, Response,
 };
 use livtet_types::DbId;
 
@@ -175,6 +175,7 @@ fn op_name(request: &Request) -> &'static str {
         Request::File { .. } => "file",
         Request::FileInfo { .. } => "file_info",
         Request::Cover { .. } => "cover",
+        Request::Opds { .. } => "opds",
         Request::OfferDecision { .. } => "offer_decision",
     }
 }
@@ -385,6 +386,28 @@ async fn dispatch(state: &Arc<DaemonState>, request: Request, remote: String) ->
             inventory_id,
         } => cover(state, token, &remote, inventory_id).await,
 
+        // The OPDS route table lives in the desktop process, which owns the
+        // live database and search index; this daemon forwards the request
+        // over the stdio control channel and carries the answer back.
+        //
+        // The operation carries no token, so the connection's node id is the
+        // whole credential: only a device this daemon has paired is allowed to
+        // read the catalog. Refusal happens here, before the desktop is asked;
+        // an unpaired caller learns nothing about the library.
+        Request::Opds {
+            method,
+            path,
+            headers,
+            body,
+        } => match paired_node(state, &remote).await {
+            Ok(true) => opds(state, method, path, headers, body).await,
+            Ok(false) => Answered::error(
+                ErrorCode::Unauthorized,
+                "this node is not paired with this device",
+            ),
+            Err(failure) => failure.into(),
+        },
+
         Request::OfferDecision {
             token,
             offer_id,
@@ -434,6 +457,32 @@ async fn authorize(state: &Arc<DaemonState>, token: &str, remote: &str) -> Resul
         Err(error) => Err(Failure::new(
             ErrorCode::Internal,
             format!("authorization: {error}"),
+        )),
+    }
+}
+
+/// Whether `remote` is a device this daemon has paired with.
+///
+/// [`authorize`] proves a token *and* the connection's node id belong together;
+/// a wire operation that carries no token
+/// ([`Request::Opds`]) has only the node id to stand on, so membership in the
+/// same `paired_devices` set is the requirement. Approval writes `node_id` and
+/// `session_token` together, in both directions (see
+/// `handle_pairing_approve` and `handle_pairing_claim`), so a row that names
+/// the node id is a real pairing; the token check only excludes a row left
+/// half-written.
+async fn paired_node(state: &Arc<DaemonState>, remote: &str) -> Result<bool, Failure> {
+    let statement = Statement::from_sql_and_values(
+        DbBackend::Sqlite,
+        "SELECT 1 FROM paired_devices \
+         WHERE node_id = ? AND session_token IS NOT NULL AND session_token != '' LIMIT 1",
+        [remote.into()],
+    );
+    match state.engine.db().query_one_raw(statement).await {
+        Ok(row) => Ok(row.is_some()),
+        Err(error) => Err(Failure::new(
+            ErrorCode::Internal,
+            format!("pairing lookup: {error}"),
         )),
     }
 }
@@ -629,6 +678,79 @@ async fn cover(
         etag,
     };
     Answered::cover(header, Utf8PathBuf::from(path)).with_device(Some(device))
+}
+
+/// How long the desktop has to answer one OPDS request.
+///
+/// A control call is sized for one SQLite query; an OPDS answer is a route
+/// call plus, for a download, reading the publication off disk. The platform
+/// chunks anything past one frame, so this bounds one range, not a whole book.
+const OPDS_TIMEOUT: Duration = Duration::from_secs(120);
+
+/// Forward one OPDS request to the desktop and return the route's answer.
+///
+/// The route table runs in the desktop process (`make_routes` over the live
+/// repository), so no socket is opened here: the request travels the same stdio
+/// pipe the desktop already drives this daemon with. A non-2xx status is an
+/// ordinary answer and is passed through — an e-reader needs the 404.
+async fn opds(
+    state: &Arc<DaemonState>,
+    method: String,
+    path: String,
+    headers: OpdsHeaders,
+    body: Vec<u8>,
+) -> Answered {
+    let params = serde_json::json!({
+        "method": method,
+        "path": path,
+        "headers": headers,
+        "body": body,
+    });
+
+    let value = match state
+        .host
+        .request(crate::rpc::method::OPDS_FETCH, params, OPDS_TIMEOUT)
+        .await
+    {
+        Ok(value) => value,
+        Err(message) => return Answered::error(ErrorCode::Internal, format!("opds: {message}")),
+    };
+
+    let response: OpdsResponse = match serde_json::from_value(value) {
+        Ok(response) => response,
+        Err(error) => {
+            return Answered::error(
+                ErrorCode::Internal,
+                format!("opds: the desktop answered with an unreadable response: {error}"),
+            );
+        }
+    };
+
+    // The body rides inside one framed message. `write_frame` splits that
+    // message at `MAX_CHUNK_BYTES` and the reader reassembles it, so a body
+    // larger than a chunk is ordinary; only an answer whose encoding passes
+    // `MAX_MESSAGE_BYTES` cannot be carried at all.
+    let body_len = response.body.len();
+    if body_len > MAX_MESSAGE_BYTES {
+        return Answered::error(
+            ErrorCode::BadRequest,
+            format!(
+                "opds: a {body_len}-byte body exceeds the {MAX_MESSAGE_BYTES}-byte message \
+                 limit; request the body in ranges"
+            ),
+        );
+    }
+    let answer = Response::Opds(response);
+    if !answer.fits_one_frame() {
+        return Answered::error(
+            ErrorCode::BadRequest,
+            format!(
+                "opds: the answer exceeds the {MAX_MESSAGE_BYTES}-byte message limit; \
+                 request the body in ranges"
+            ),
+        );
+    }
+    Answered::reply(answer)
 }
 
 /// Record a paired device's answer to an offer this desktop sent.
@@ -830,10 +952,11 @@ mod tests {
     use camino::Utf8PathBuf;
     use livtet_data::orm::SqlxSqliteConnector;
     use livtet_sync::SyncEngine;
-    use livtet_sync_iroh::{Request, Response};
-    use tokio::sync::Mutex;
+    use livtet_sync_iroh::{MAX_CHUNK_BYTES, OpdsHeaders, OpdsResponse, Request, Response};
+    use tokio::sync::{Mutex, mpsc};
 
     use super::*;
+    use crate::rpc;
     use crate::config::ServerConfig;
     use crate::pairing::{apply_pairing_decision, new_pair_decisions, no_offer_decision_sink};
     use crate::requests::{new_request_log, recent};
@@ -848,6 +971,17 @@ mod tests {
 
     /// A daemon state over a throwaway database, with no endpoint bound.
     async fn test_state() -> (Arc<DaemonState>, Utf8PathBuf) {
+        let (state, root, _out) = test_state_with_host().await;
+        (state, root)
+    }
+
+    /// Like [`test_state`], but keeps the daemon's outbound lines so a test can
+    /// play the desktop and answer a reverse request.
+    async fn test_state_with_host() -> (
+        Arc<DaemonState>,
+        Utf8PathBuf,
+        mpsc::UnboundedReceiver<String>,
+    ) {
         let root = temp_dir();
         let db_path = root.join("sync.db");
         let pool = livtet_data::connect_with_migrations_foreign_keys(
@@ -859,6 +993,7 @@ mod tests {
         .expect("migrate");
         let db = SqlxSqliteConnector::from_sqlx_sqlite_pool(pool.clone());
         let engine = SyncEngine::new(db, LOCAL_DEVICE.to_string());
+        let (out, out_rx) = mpsc::unbounded_channel();
         let state = Arc::new(DaemonState {
             config: ServerConfig {
                 db_path,
@@ -878,10 +1013,11 @@ mod tests {
             discovery: Mutex::new(None),
             advertiser: Mutex::new(None),
             request_log: new_request_log(),
+            host: crate::daemon::HostBridge::new(out),
             requests_served: Arc::new(AtomicU64::new(0)),
             last_request_at: Arc::new(Mutex::new(None)),
         });
-        (state, root)
+        (state, root, out_rx)
     }
 
     fn temp_dir() -> Utf8PathBuf {
@@ -901,6 +1037,184 @@ mod tests {
 
     async fn ask(state: &Arc<DaemonState>, request: Request, remote: &str) -> Response {
         answer(state, request, remote.to_string()).await.response
+    }
+
+    /// One OPDS request as the wire carries it.
+    fn opds_request(path: &str) -> Request {
+        Request::Opds {
+            method: "GET".to_string(),
+            path: path.to_string(),
+            headers: OpdsHeaders {
+                accept: Some("application/atom+xml;profile=opds-catalog".to_string()),
+                ..OpdsHeaders::default()
+            },
+            body: Vec::new(),
+        }
+    }
+
+    /// Play the desktop for one reverse request and answer it with `response`.
+    fn answer_opds_with(
+        bridge: crate::daemon::HostBridge,
+        mut out: mpsc::UnboundedReceiver<String>,
+        response: OpdsResponse,
+    ) -> tokio::task::JoinHandle<serde_json::Value> {
+        tokio::spawn(async move {
+            let line = out.recv().await.expect("the daemon asks the desktop");
+            let rpc::RpcMessage::Request(request) =
+                rpc::parse_message(&line).expect("the line is JSON-RPC")
+            else {
+                panic!("the daemon asked with a non-request message");
+            };
+            assert_eq!(request.method, rpc::method::OPDS_FETCH);
+            let params = request.params.clone().expect("the request carries params");
+            bridge.answer(rpc::RpcResponse::ok(
+                request.id,
+                serde_json::to_value(&response).expect("an OPDS answer encodes"),
+            ));
+            params
+        })
+    }
+
+    /// A non-2xx status is the route's answer, not a transport failure: the
+    /// caller must see the 404 an e-reader would act on.
+    #[tokio::test]
+    async fn an_opds_404_is_forwarded_and_passed_through() {
+        let (state, _root, out) = test_state_with_host().await;
+        seed_paired(&state, DbId::new(), Some(REMOTE_NODE), "tok").await;
+        let answer = OpdsResponse {
+            status: 404,
+            content_type: "application/json".to_string(),
+            body: b"{\"error\":\"not found\"}".to_vec(),
+        };
+        let responder = answer_opds_with(state.host.clone(), out, answer.clone());
+
+        let response = ask(&state, opds_request("/publications/missing"), REMOTE_NODE).await;
+        let params = responder.await.expect("the desktop answered");
+
+        assert_eq!(
+            params.get("path").and_then(serde_json::Value::as_str),
+            Some("/publications/missing")
+        );
+        assert_eq!(
+            params.get("method").and_then(serde_json::Value::as_str),
+            Some("GET")
+        );
+        match response {
+            Response::Opds(opds) => {
+                assert_eq!(opds.status, 404);
+                assert_eq!(opds.content_type, answer.content_type);
+                assert_eq!(opds.body, answer.body);
+            }
+            other => panic!("expected the route's answer, got {other:?}"),
+        }
+    }
+
+    /// A body larger than one frame chunk crosses several chunks of the same
+    /// framed message and arrives whole: nothing is truncated at 8 MiB.
+    #[tokio::test]
+    async fn an_opds_body_larger_than_one_chunk_arrives_whole() {
+        let (state, _root, out) = test_state_with_host().await;
+        seed_paired(&state, DbId::new(), Some(REMOTE_NODE), "tok").await;
+        let body: Vec<u8> = (0..MAX_CHUNK_BYTES + 1024)
+            .map(|i| (i % 251) as u8)
+            .collect();
+        let expected = body.clone();
+        let answer = OpdsResponse {
+            status: 200,
+            content_type: "application/epub+zip".to_string(),
+            body,
+        };
+        let responder = answer_opds_with(state.host.clone(), out, answer);
+
+        let response = ask(
+            &state,
+            opds_request("/publications/work/download"),
+            REMOTE_NODE,
+        )
+        .await;
+        responder.await.expect("the desktop answered");
+
+        match response {
+            Response::Opds(opds) => {
+                assert_eq!(opds.body.len(), expected.len());
+                assert_eq!(opds.body, expected);
+                assert!(
+                    opds.body.len() > MAX_CHUNK_BYTES,
+                    "the body spans more than one chunk"
+                );
+            }
+            other => panic!("expected the publication, got {other:?}"),
+        }
+    }
+
+    /// A paired device reads the catalog: the request reaches the desktop and
+    /// the route's answer comes back unchanged.
+    #[tokio::test]
+    async fn a_paired_peer_opds_request_is_forwarded_and_answered() {
+        let (state, _root, out) = test_state_with_host().await;
+        seed_paired(&state, DbId::new(), Some(REMOTE_NODE), "tok").await;
+        let answer = OpdsResponse {
+            status: 200,
+            content_type: "application/atom+xml;profile=opds-catalog".to_string(),
+            body: b"<feed/>".to_vec(),
+        };
+        let responder = answer_opds_with(state.host.clone(), out, answer.clone());
+
+        let response = ask(&state, opds_request("/"), REMOTE_NODE).await;
+        let params = responder.await.expect("the desktop was asked");
+
+        assert_eq!(
+            params.get("path").and_then(serde_json::Value::as_str),
+            Some("/")
+        );
+        match response {
+            Response::Opds(opds) => assert_eq!(opds, answer),
+            other => panic!("expected the route's answer, got {other:?}"),
+        }
+    }
+
+    /// OPDS carries no token, so an unpaired node has no claim on the catalog:
+    /// it is refused before the desktop is asked, and learns nothing.
+    #[tokio::test]
+    async fn an_unpaired_peer_is_refused_before_the_desktop_is_asked() {
+        let (state, _root, mut out) = test_state_with_host().await;
+
+        let response = ask(&state, opds_request("/"), OTHER_NODE).await;
+
+        match response {
+            Response::Error { code, .. } => assert_eq!(code, ErrorCode::Unauthorized),
+            other => panic!("expected an unauthorized refusal, got {other:?}"),
+        }
+        assert!(
+            out.try_recv().is_err(),
+            "the desktop must not be asked for an unpaired peer"
+        );
+    }
+
+    /// A node that was approved then never wrote a token is not a usable
+    /// pairing: the refusal rule is the same as `authorize`'s.
+    #[tokio::test]
+    async fn a_half_written_pairing_row_does_not_authorize_opds() {
+        let (state, _root, mut out) = test_state_with_host().await;
+        livtet_data::sql::query(
+            "INSERT INTO paired_devices \
+                 (device_id, name, listen_on, device_type_id, paired_at, last_sync_at, \
+                  session_token, node_id, outbound) \
+             VALUES (?, 'Peer', NULL, NULL, datetime('now'), NULL, NULL, ?, 1)",
+        )
+        .bind(DbId::new().to_bytes().to_vec())
+        .bind(OTHER_NODE.to_string())
+        .execute(&state.pool)
+        .await
+        .expect("seed a pairing row with no token");
+
+        let response = ask(&state, opds_request("/"), OTHER_NODE).await;
+
+        match response {
+            Response::Error { code, .. } => assert_eq!(code, ErrorCode::Unauthorized),
+            other => panic!("expected an unauthorized refusal, got {other:?}"),
+        }
+        assert!(out.try_recv().is_err(), "the desktop must not be asked");
     }
 
     /// Seed a paired device holding `token`, bound to `node_id`.
