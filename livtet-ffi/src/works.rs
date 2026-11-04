@@ -3,8 +3,9 @@
 use std::collections::HashMap;
 
 use livtet_core::data::entities::{
-    authors, current_work_status, edition_covers, digital_inventory, edition_authors, edition_identifiers,
-    edition_publishers, editions, formats, identifiers, languages, publishers, work_authors, works,
+    authors, current_work_status, digital_inventory, edition_authors, edition_covers,
+    edition_identifiers, edition_publishers, editions, formats, identifiers, languages, publishers,
+    work_authors, works,
 };
 use livtet_core::data::orm::{
     ColumnTrait, Condition, DatabaseConnection, EntityTrait, Order, PaginatorTrait, QueryFilter,

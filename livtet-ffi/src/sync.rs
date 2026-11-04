@@ -94,8 +94,44 @@ pub async fn sync_pairing_status(
     await_decision(&client, claim, wait_secs).await
 }
 
+/// What a peer says about itself, as returned by [`peer_sync_identity`].
+///
+/// The node id is the pairing key already known to the caller; the device id is
+/// the peer's own ULID, which is what a paired-devices list needs to show.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct SyncPeerIdentity {
+    pub node_id: String,
+    pub device_id: String,
+    pub protocol: u32,
+}
+
+/// Ask `node_id` who it is, over the sync protocol.
+///
+/// Pairing replies with the *claiming* device's id, not the peer's, so the app
+/// uses this to learn the identity of the device it just paired with. Failure is
+/// not fatal to pairing: the caller keeps the node id and shows what it has.
+#[uniffi::export(async_runtime = "tokio")]
+pub async fn peer_sync_identity(
+    secret_key_path: String,
+    peer_node_id: String,
+) -> Result<SyncPeerIdentity, LivtetError> {
+    let client = connect(secret_key_path, peer_node_id).await?;
+    let identity = client
+        .identity()
+        .await
+        .map_err(|error| LivtetError::Sync(format!("could not read the peer identity: {error}")))?;
+    Ok(SyncPeerIdentity {
+        node_id: identity.node_id,
+        device_id: identity.device_id,
+        protocol: identity.protocol,
+    })
+}
+
 /// Bind a sync endpoint from the persisted key and aim a client at `node_id`.
-async fn connect(secret_key_path: String, peer_node_id: String) -> Result<Client, LivtetError> {
+pub(crate) async fn connect(
+    secret_key_path: String,
+    peer_node_id: String,
+) -> Result<Client, LivtetError> {
     let secret = load_or_create_secret(Utf8Path::new(&secret_key_path))?;
     let discovery = DiscoveryService::bind_with_secret(secret)
         .await
@@ -295,6 +331,133 @@ fn advertised_endpoint(discovery: &DiscoveryService) -> (std::net::IpAddr, u16) 
 mod tests {
     use super::*;
     use std::time::Duration;
+
+    /// How many `PairStatus` polls this fake peer answers `Pending` before approving.
+    const DECIDES_AFTER_POLLS: u32 = 2;
+
+    /// A slow reader is normal, so a claim has to survive being asked about again.
+    ///
+    /// The app loops `sync_pairing_status` while it waits, one call per round.
+    /// This peer stays undecided for the first rounds and only then approves, so
+    /// the test fails if polling restarts the claim, loses it, or reports the
+    /// first answer forever.
+    #[tokio::test]
+    async fn a_pending_claim_keeps_polling_until_the_peer_approves() {
+        use std::sync::atomic::{AtomicU32, Ordering};
+
+        let peer = DiscoveryService::bind().await.expect("peer endpoint");
+        let peer_node_id = peer.node_id().as_str().to_string();
+        let polls = Arc::new(AtomicU32::new(0));
+
+        let handler: Handler = Arc::new({
+            let polls = Arc::clone(&polls);
+            move |request, _remote| {
+                let polls = Arc::clone(&polls);
+                Box::pin(async move {
+                    match request {
+                        Request::Pair { .. } => Outcome::reply(Response::PairingPending {
+                            claim: "claim-9".to_string(),
+                        }),
+                        Request::PairStatus { .. } => {
+                            let round = polls.fetch_add(1, Ordering::SeqCst);
+                            if round < DECIDES_AFTER_POLLS {
+                                Outcome::reply(Response::PairingPending {
+                                    claim: "claim-9".to_string(),
+                                })
+                            } else {
+                                Outcome::reply(Response::Paired {
+                                    device_id: "01ARZ3NDEKTSV4RRFFQ69G5FAV".to_string(),
+                                    session_token: "token-after-wait".to_string(),
+                                })
+                            }
+                        }
+                        other => Outcome::reply(Response::Refused {
+                            reason: format!("unexpected request: {other:?}"),
+                        }),
+                    }
+                })
+            }
+        });
+        let _serving = spawn_server(peer.endpoint().clone(), handler);
+
+        let dir = camino_tempfile::Utf8TempDir::new().expect("temp dir");
+        let key_path = dir.path().join("sync.key").to_string();
+        let filed = pair_sync_device(
+            key_path.clone(),
+            peer_node_id.clone(),
+            "01ARZ3NDEKTSV4RRFFQ69G5FAW".to_string(),
+            "Reader's phone".to_string(),
+            "android".to_string(),
+            0,
+        )
+        .await
+        .expect("pair call");
+        let SyncPairingResult::Pending { claim } = filed else {
+            panic!("a zero-second wait should return the claim, not {filed:?}");
+        };
+
+        let first = sync_pairing_status(key_path.clone(), peer_node_id.clone(), claim.clone(), 1)
+            .await
+            .expect("first round");
+        assert!(
+            matches!(first, SyncPairingResult::Pending { .. }),
+            "an undecided peer must stay pending, got {first:?}"
+        );
+
+        let mut claim = match first {
+            SyncPairingResult::Pending { claim } => claim,
+            other => panic!("expected pending, got {other:?}"),
+        };
+        for _ in 0..8 {
+            match sync_pairing_status(key_path.clone(), peer_node_id.clone(), claim.clone(), 2)
+                .await
+                .expect("later round")
+            {
+                SyncPairingResult::Pending { claim: next } => claim = next,
+                SyncPairingResult::Paired { session_token, .. } => {
+                    assert_eq!(session_token, "token-after-wait");
+                    return;
+                }
+                other => panic!("peer refused unexpectedly: {other:?}"),
+            }
+        }
+        panic!("the approval never arrived across polling rounds");
+    }
+
+    /// A paired-devices row must show the peer's own device id, not the phone's.
+    ///
+    /// The pairing reply carries the claiming device's id, which is why the app
+    /// asks `peer_sync_identity` separately; this pins the value that comes back.
+    #[tokio::test]
+    async fn the_peer_identity_reports_the_peers_own_device_id() {
+        let peer = DiscoveryService::bind().await.expect("peer endpoint");
+        let peer_node_id = peer.node_id().as_str().to_string();
+
+        let handler: Handler = Arc::new(|request, _remote| {
+            Box::pin(async move {
+                match request {
+                    Request::Identity => Outcome::reply(Response::Identity(Identity {
+                        protocol: PROTOCOL_VERSION,
+                        node_id: "aa11bb22cc33dd44ee55ff6677889900".to_string(),
+                        device_id: "01ARZ3NDEKTSV4RRFFQ69G5FAV".to_string(),
+                    })),
+                    other => Outcome::reply(Response::Refused {
+                        reason: format!("unexpected request: {other:?}"),
+                    }),
+                }
+            })
+        });
+        let _serving = spawn_server(peer.endpoint().clone(), handler);
+
+        let dir = camino_tempfile::Utf8TempDir::new().expect("temp dir");
+        let identity = peer_sync_identity(dir.path().join("sync.key").to_string(), peer_node_id)
+            .await
+            .expect("identity");
+
+        assert_eq!(identity.node_id, "aa11bb22cc33dd44ee55ff6677889900");
+        assert_eq!(identity.device_id, "01ARZ3NDEKTSV4RRFFQ69G5FAV");
+        assert_eq!(identity.protocol, PROTOCOL_VERSION);
+    }
 
     /// The phone must show up in the same browse the desktop's nearby list runs.
     ///
