@@ -15,9 +15,9 @@ pub mod types;
 // Re-export types for convenience
 pub use engine::{ApplyOptions, ApplyOutcome, InventoryPaths, SyncEngine};
 pub use types::{
-    ChangeLogEntity, Conflict, ENTITY_DUMP_TYPES, EntityDump, FullDump, PullResponse, PushResponse,
-    Result, SyncChange, SyncError, SyncStatus, SyncableEntity, SyncableEntityKind, SyncedEntity,
-    entity_type_to_table,
+    ChangeLogEntity, Conflict, ENTITY_DUMP_TYPES, EntityDump, FullDump, PairLink, PairLinkError,
+    PullResponse, PushResponse, Result, SyncChange, SyncError, SyncStatus, SyncableEntity,
+    SyncableEntityKind, SyncedEntity, entity_type_to_table,
 };
 
 /// Supported entity types for sync operations.
