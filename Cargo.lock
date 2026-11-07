@@ -3675,6 +3675,7 @@ dependencies = [
  "livtet-mdns",
  "livtet-sync",
  "livtet-sync-iroh",
+ "livtet-sync-server",
  "serde_json",
  "thiserror 2.0.19",
  "time",

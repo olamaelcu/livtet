@@ -16,11 +16,14 @@ use std::sync::{Arc, LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
 use camino::Utf8Path;
+use livtet_core::data::SharedState;
+use livtet_core::data::migrator::Kind;
 use livtet_iroh::{DiscoveryService, SecretKey};
 use livtet_mdns::Advertiser;
+use livtet_sync::SyncEngine;
+use livtet_sync_server::wire_state::WireState;
 use livtet_sync_iroh::{
-    Client, Handler, Identity, Outcome, PROTOCOL_VERSION, PairingOutcome, Request, Response,
-    spawn_server,
+    Client, PairingOutcome, spawn_server,
 };
 
 use crate::error::LivtetError;
@@ -213,6 +216,9 @@ struct RunningAdvertisement {
     discovery: DiscoveryService,
     advertiser: Advertiser,
     serving: tokio::task::JoinHandle<()>,
+    /// The wire this endpoint answers from, so a decision made on this device
+    /// reaches the claimant polling the same endpoint.
+    wire: Arc<WireState>,
 }
 
 /// Announce this device on `_livtet-sync._tcp` so peers list it.
@@ -225,14 +231,15 @@ struct RunningAdvertisement {
 /// advertised instead of binding another endpoint, so re-opening the screen
 /// does not leave duplicate records on the network.
 ///
-/// The endpoint answers `Identity` — so a peer can confirm who it dialled — and
-/// refuses pairing claims. This build only pairs outward; the reader approves on
-/// the desktop. A refusal with a reason ends the peer's wait immediately and
-/// tells the reader where to pair from, rather than leaving it hanging on a
-/// device that will never decide.
+/// The endpoint answers the sync wire from this device's own library, so a peer
+/// that claims it — the desktop, to pull books the phone holds — gets the same
+/// authorization and file handling the desktop's own daemon serves. Claims wait
+/// on this device's reader: [`sync_pending_pairings`] lists them and
+/// [`sync_decide_pairing`] answers.
 #[uniffi::export(async_runtime = "tokio")]
 pub async fn advertise_sync_device(
     secret_key_path: String,
+    db_path: String,
     device_id: String,
     name: String,
     device_type: String,
@@ -252,30 +259,15 @@ pub async fn advertise_sync_device(
     let node_id = discovery.node_id().as_str().to_string();
     let (ip, port) = advertised_endpoint(&discovery);
 
-    let identity = Identity {
-        protocol: PROTOCOL_VERSION,
-        node_id: node_id.clone(),
-        device_id: device_id.clone(),
-    };
-    let handler: Handler = Arc::new(move |request, _remote| {
-        let identity = identity.clone();
-        Box::pin(async move {
-            match request {
-                Request::Identity => Outcome::reply(Response::Identity(identity)),
-                Request::Pair { .. } | Request::PairStatus { .. } => {
-                    Outcome::reply(Response::Refused {
-                        reason: "pair from the phone: Settings, Sync & Discovery, then this \
-                                 device's node ID. This build does not approve requests sent to it."
-                            .to_string(),
-                    })
-                }
-                _ => Outcome::reply(Response::Refused {
-                    reason: "this device only answers pairing".to_string(),
-                }),
-            }
-        })
-    });
-    let serving = spawn_server(discovery.endpoint().clone(), handler);
+    let wire = Arc::new(
+        wire_state(&db_path, &device_id, Some(node_id.clone()))
+            .await?
+            .counting(),
+    );
+    let serving = spawn_server(
+        discovery.endpoint().clone(),
+        livtet_sync_server::wire::handler(Arc::clone(&wire)),
+    );
 
     let advertiser = Advertiser::start(&node_id, &device_id, Some(&name), &device_type, ip, port)
         .map_err(|error| {
@@ -290,6 +282,7 @@ pub async fn advertise_sync_device(
                 discovery,
                 advertiser,
                 serving,
+                wire,
             },
         );
     }
@@ -313,6 +306,203 @@ pub fn stop_advertising_sync_device(secret_key_path: String) {
     }
 }
 
+/// One peer waiting on this device's reader to approve a pairing.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct SyncPendingPairing {
+    /// The claiming peer's node id; what [`sync_decide_pairing`] is addressed to.
+    pub node_id: String,
+    /// The claimant's own device id, when it sent one.
+    pub device_id: Option<String>,
+    /// The name it advertises.
+    pub name: Option<String>,
+}
+
+/// One device this endpoint has paired with.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct SyncPairedDevice {
+    /// The peer's device id: what [`sync_send_book`] is addressed to.
+    pub device_id: String,
+    /// The peer's iroh node id, when the pairing recorded one.
+    pub node_id: Option<String>,
+    /// The name it advertises.
+    pub name: Option<String>,
+    /// Whether this device may dial the peer, or only be dialled by it.
+    pub outbound: bool,
+}
+
+/// A book this device offered to a peer.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct SyncSentBook {
+    /// The offer id the peer echoes when it decides.
+    pub offer_id: String,
+    /// The inventory row whose bytes the peer will fetch from this device.
+    pub inventory_id: String,
+}
+
+/// The wire for an advertised endpoint.
+fn advertisement(secret_key_path: &str) -> Result<Arc<WireState>, LivtetError> {
+    ADVERTISED
+        .lock()
+        .ok()
+        .and_then(|hosts| hosts.get(secret_key_path).map(|host| Arc::clone(&host.wire)))
+        .ok_or_else(|| {
+            LivtetError::Sync(
+                "this device is not advertising a sync endpoint; call \
+                 advertise_sync_device first"
+                    .to_string(),
+            )
+        })
+}
+
+/// The peers waiting on this device's reader to approve a pairing.
+#[uniffi::export(async_runtime = "tokio")]
+pub async fn sync_pending_pairings(
+    secret_key_path: String,
+) -> Result<Vec<SyncPendingPairing>, LivtetError> {
+    let wire = advertisement(&secret_key_path)?;
+    let claims = livtet_sync_server::pairs::pending_claims(&wire)
+        .await
+        .map_err(|error| LivtetError::Sync(error.to_string()))?;
+    Ok(claims
+        .into_iter()
+        .map(|claim| SyncPendingPairing {
+            node_id: claim.node_id,
+            device_id: claim.device_id,
+            name: claim.name,
+        })
+        .collect())
+}
+
+/// Answer the claim `node_id` filed.
+///
+/// Approving mints the session token the peer presents on every later request
+/// and returns it, so the caller can record which device it just let in. A
+/// rejection returns `None`; the claimant's next poll learns it was refused.
+#[uniffi::export(async_runtime = "tokio")]
+pub async fn sync_decide_pairing(
+    secret_key_path: String,
+    node_id: String,
+    accept: bool,
+) -> Result<Option<String>, LivtetError> {
+    let wire = advertisement(&secret_key_path)?;
+    if accept {
+        let approval = livtet_sync_server::pairs::approve_claim(&wire, &node_id)
+            .await
+            .map_err(|error| LivtetError::Sync(error.to_string()))?;
+        Ok(Some(approval.session_token))
+    } else {
+        livtet_sync_server::pairs::reject_claim(&wire, &node_id)
+            .await
+            .map_err(|error| LivtetError::Sync(error.to_string()))?;
+        Ok(None)
+    }
+}
+
+/// The devices this endpoint has paired with.
+#[uniffi::export(async_runtime = "tokio")]
+pub async fn sync_paired_devices(
+    secret_key_path: String,
+) -> Result<Vec<SyncPairedDevice>, LivtetError> {
+    use livtet_core::data::orm::EntityTrait;
+
+    let wire = advertisement(&secret_key_path)?;
+    let rows = livtet_core::data::client_entities::paired_devices::Entity::find()
+        .all(wire.engine.db())
+        .await
+        .map_err(|error| LivtetError::Database(error.to_string()))?;
+
+    Ok(rows
+        .into_iter()
+        .map(|row| SyncPairedDevice {
+            device_id: row.device_id.to_string(),
+            node_id: None,
+            name: row.name,
+            outbound: row.outbound,
+        })
+        .collect())
+}
+
+/// Offer `edition_id`'s file to a paired device.
+///
+/// The offer is a change-log row here, so it travels the same version cursor the
+/// peer already pulls: the next pull it makes from this device carries the offer
+/// and the catalog rows that describe it. The peer then fetches the bytes from
+/// this device, which is why the pairing has to be one it can dial.
+#[uniffi::export(async_runtime = "tokio")]
+pub async fn sync_send_book(
+    secret_key_path: String,
+    edition_id: String,
+    device_id: String,
+) -> Result<SyncSentBook, LivtetError> {
+    let wire = advertisement(&secret_key_path)?;
+    let offer = livtet_sync_server::pairs::offer_book(&wire, &edition_id, &device_id)
+        .await
+        .map_err(|error| LivtetError::Sync(error.to_string()))?;
+    Ok(SyncSentBook {
+        offer_id: offer.offer_id,
+        inventory_id: offer.inventory_id,
+    })
+}
+
+/// This device's pairing link, and the code a QR encoder renders.
+///
+/// The format lives in `livtet-sync` so every client writes and reads the same
+/// string; see [`PairLink`](livtet_sync::PairLink) for the shapes it accepts.
+#[uniffi::export]
+pub fn pair_link(node_id: String, name: Option<String>) -> String {
+    livtet_sync::PairLink::new(node_id, name).to_uri()
+}
+
+/// A pairing link taken apart.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct SyncPairLink {
+    /// The protocol version the link was written for.
+    pub version: u16,
+    /// The node to dial.
+    pub node_id: String,
+    /// The name the code advertised, when it carried one.
+    pub name: Option<String>,
+}
+
+/// Read a pairing link a scanner handed over.
+///
+/// Accepts the current `livtet://sync?v=2&nodeId=` form, the older
+/// `livtet://pair?node=` one, and the web form of either.
+#[uniffi::export]
+pub fn parse_pair_link(link: String) -> Result<SyncPairLink, LivtetError> {
+    let parsed = livtet_sync::PairLink::parse(&link)
+        .map_err(|error| LivtetError::InvalidInput(error.to_string()))?;
+    Ok(SyncPairLink {
+        version: parsed.version,
+        node_id: parsed.node_id,
+        name: parsed.name,
+    })
+}
+
+/// The wire state an advertised endpoint answers from.
+///
+/// Opens the library the same way a pull does — business and client migrations
+/// over one connection — so the engine, the pool the pairing columns live in,
+/// and the file paths all describe the library the reader sees.
+async fn wire_state(
+    db_path: &str,
+    device_id: &str,
+    node_id: Option<String>,
+) -> Result<WireState, LivtetError> {
+    let shared = SharedState::connect(db_path, &[Kind::Business, Kind::Client])
+        .await
+        .map_err(|error| LivtetError::Database(error.to_string()))?;
+    // `SyncEngine` works over SeaORM's connection, not the raw sqlx pool.
+    let db =
+        livtet_core::data::orm::SqlxSqliteConnector::from_sqlx_sqlite_pool(shared.pool.clone());
+    let engine = SyncEngine::new(db, device_id.to_string());
+    let state = WireState::new(engine, shared.pool.clone(), device_id).counting();
+    Ok(match node_id {
+        Some(node_id) => state.with_node_id(node_id),
+        None => state,
+    })
+}
+
 /// The address and port to publish: the endpoint's IPv4 socket when it bound
 /// one, else whatever it bound, else "all interfaces" at the parsed port.
 fn advertised_endpoint(discovery: &DiscoveryService) -> (std::net::IpAddr, u16) {
@@ -331,6 +521,7 @@ fn advertised_endpoint(discovery: &DiscoveryService) -> (std::net::IpAddr, u16) 
 mod tests {
     use super::*;
     use std::time::Duration;
+    use livtet_sync_iroh::{Handler, Identity, Outcome, PROTOCOL_VERSION, Request, Response};
 
     /// How many `PairStatus` polls this fake peer answers `Pending` before approving.
     const DECIDES_AFTER_POLLS: u32 = 2;
@@ -468,9 +659,11 @@ mod tests {
     async fn an_advertised_device_appears_to_a_nearby_browse() {
         let dir = camino_tempfile::Utf8TempDir::new().expect("temp dir");
         let key_path = dir.path().join("sync.key").to_string();
+        let db_path = dir.path().join("livtet.db").to_string();
 
         let node_id = advertise_sync_device(
             key_path.clone(),
+            db_path,
             "01ARZ3NDEKTSV4RRFFQ69G5FAW".to_string(),
             "Reader's phone".to_string(),
             "android".to_string(),
@@ -501,9 +694,11 @@ mod tests {
     async fn advertising_stops_and_restarts_with_the_same_identity() {
         let dir = camino_tempfile::Utf8TempDir::new().expect("temp dir");
         let key_path = dir.path().join("sync.key").to_string();
+        let db_path = dir.path().join("livtet.db").to_string();
 
         let first = advertise_sync_device(
             key_path.clone(),
+            db_path.clone(),
             "01ARZ3NDEKTSV4RRFFQ69G5FAW".to_string(),
             "Reader's phone".to_string(),
             "android".to_string(),
@@ -515,6 +710,7 @@ mod tests {
 
         let second = advertise_sync_device(
             key_path.clone(),
+            db_path,
             "01ARZ3NDEKTSV4RRFFQ69G5FAW".to_string(),
             "Reader's phone".to_string(),
             "android".to_string(),
@@ -596,6 +792,143 @@ mod tests {
             std::fs::read_to_string(&path).expect("read"),
             hex::encode(first.to_bytes())
         );
+    }
+
+    /// A phone holds a book, a peer claims it, and the book arrives on the peer.
+    ///
+    /// This is the direction the build did not have: pairing was outward-only, so
+    /// a desktop could offer a book to a phone and never the reverse. The peer
+    /// claims the phone, the phone approves on its own screen, the offer rides the
+    /// change log the peer pulls, and the bytes come back over the same wire.
+    #[tokio::test]
+    async fn a_peer_that_claims_this_device_receives_an_offered_book() {
+        use crate::mutations::NewEdition;
+        use crate::LivtetStore;
+
+        let phone_dir = camino_tempfile::Utf8TempDir::new().expect("phone dir");
+        let peer_dir = camino_tempfile::Utf8TempDir::new().expect("peer dir");
+
+        let phone_db = phone_dir.path().join("livtet.db").to_string();
+        let phone_key = phone_dir.path().join("sync.key").to_string();
+        let peer_key = peer_dir.path().join("sync.key").to_string();
+
+        // The phone's library: one work, one edition, one real file.
+        let store = LivtetStore::open(
+            phone_db.clone(),
+            phone_dir.path().join("index").to_string(),
+        )
+        .await
+        .expect("store");
+        let work = store
+            .create_work("Reverse Direction".to_string(), None, None)
+            .await
+            .expect("work");
+        let edition = store
+            .create_edition(NewEdition {
+                work_id: work.id,
+                title: None,
+                description: None,
+                published_date: None,
+                format_id: None,
+                language_id: None,
+                notes: None,
+                cover_image_url: None,
+            })
+            .await
+            .expect("edition");
+        let bytes = b"an epub the desktop asked for".to_vec();
+        let book = phone_dir.path().join("reverse.epub");
+        std::fs::write(&book, &bytes).expect("write book");
+        store
+            .set_edition_file(
+                edition.id,
+                livtet_core::types::DiskPath::from_path(book.as_path()),
+                Some("epub".to_string()),
+                Some(bytes.len() as i64),
+            )
+            .await
+            .expect("attach the file");
+        drop(store);
+
+        let phone_node = advertise_sync_device(
+            phone_key.clone(),
+            phone_db.clone(),
+            "01ARZ3NDEKTSV4RRFFQ69G5FAW".to_string(),
+            "Reader's phone".to_string(),
+            "android".to_string(),
+        )
+        .await
+        .expect("advertise");
+
+        // The peer files the claim; the phone never reaches out.
+        let peer_device = "01ARZ3NDEKTSV4RRFFQ69G5FAX".to_string();
+        let claim = match pair_sync_device(
+            peer_key.clone(),
+            phone_node.clone(),
+            peer_device.clone(),
+            "Studio".to_string(),
+            "desktop".to_string(),
+            0,
+        )
+        .await
+        .expect("claim")
+        {
+            SyncPairingResult::Pending { claim } => claim,
+            other => panic!("a fresh claim is pending, got {other:?}"),
+        };
+
+        let pending = sync_pending_pairings(phone_key.clone())
+            .await
+            .expect("pending claims");
+        let claimer = pending
+            .iter()
+            .find(|entry| entry.device_id.as_deref() == Some(peer_device.as_str()))
+            .unwrap_or_else(|| panic!("the claim is listed: {pending:?}"))
+            .node_id
+            .clone();
+
+        let issued = sync_decide_pairing(phone_key.clone(), claimer, true)
+            .await
+            .expect("approve")
+            .expect("an approval mints a token");
+
+        match sync_pairing_status(peer_key.clone(), phone_node.clone(), claim, 5)
+            .await
+            .expect("poll")
+        {
+            SyncPairingResult::Paired { session_token, .. } => assert_eq!(
+                session_token, issued,
+                "the claimant is handed the token the phone minted"
+            ),
+            other => panic!("the approval reaches the claimant, got {other:?}"),
+        }
+
+        // The offer rides the change log; the peer is the one that pulls.
+        let sent = sync_send_book(phone_key.clone(), edition.id.to_string(), peer_device)
+            .await
+            .expect("offer the book");
+
+        let client = connect(peer_key.clone(), phone_node.clone())
+            .await
+            .expect("connect")
+            .with_token(issued);
+        let page = client.changes(0, None).await.expect("changes");
+        assert!(
+            page.changes.iter().any(|change| {
+                change.entity_type == "file_offer" && change.entity_id == sent.inventory_id
+            }),
+            "the offer travels the cursor, {} changes seen",
+            page.changes.len()
+        );
+
+        let (header, body) = client
+            .file(&sent.inventory_id, 0, None, None)
+            .await
+            .expect("fetch the file");
+        assert_eq!(header.length, bytes.len() as u64);
+        assert_eq!(body.read_all().await.expect("body"), bytes);
+
+        stop_advertising_sync_device(phone_key);
     }
 
     #[test]
