@@ -41,6 +41,8 @@ const CHUNK_BYTES: usize = 256 * 1024;
 /// Keys an offer payload uses, as written by the offering daemon.
 const OFFER_ID: &str = "offer_id";
 const INVENTORY_ID: &str = "inventory_id";
+const OFFER_TITLE: &str = "title";
+const OFFER_AUTHORS: &str = "authors";
 const EDITION_ID: &str = "edition_id";
 const WORK_ID: &str = "work_id";
 const FILE_NAME: &str = "file_name";
@@ -107,6 +109,8 @@ pub async fn sync_pull(
     since_version: i64,
     limit: i64,
 ) -> Result<SyncPullReport, LivtetError> {
+    // The cursor is keyed by the peer, so the node id outlives the connection.
+    let peer = peer_node_id.clone();
     let client = connect(secret_key_path, peer_node_id)
         .await?
         .with_token(session_token);
@@ -115,15 +119,23 @@ pub async fn sync_pull(
     // on foreign keys that were never created here. Bootstrap from the full dump
     // instead, which is every syncable row in dependency order.
     if since_version <= 0 {
-        return bootstrap(&client, db_path, limit).await;
+        return bootstrap(&client, db_path, limit, peer).await;
     }
     let pull = client
         .changes(since_version, Some(limit))
         .await
         .map_err(|error| LivtetError::Sync(format!("could not pull changes: {error}")))?;
 
-    let engine = engine(db_path, device_id).await?;
+    let state = SharedState::connect(&db_path, &[Kind::Business, Kind::Client])
+        .await
+        .map_err(|error| LivtetError::Database(error.to_string()))?;
+    let engine = SyncEngine::new(
+        livtet_core::data::orm::SqlxSqliteConnector::from_sqlx_sqlite_pool(state.pool.clone()),
+        device_id.clone(),
+    );
     let (offers, metadata) = split_offers(pull.changes);
+    remember_offers(&state.pool, &offers).await?;
+    remember_cursor(&state.pool, &peer, pull.latest_version).await?;
 
     let mut applied = 0;
     let mut conflicts = 0;
@@ -146,7 +158,7 @@ pub async fn sync_pull(
         conflicts,
         cursor: pull.latest_version,
         has_more: pull.has_more,
-        offers,
+        offers: offers.into_iter().map(|pulled| pulled.offer).collect(),
     })
 }
 
@@ -240,7 +252,7 @@ pub async fn sync_offer_accept(
         .map_err(|error| LivtetError::Sync(format!("offer rows are unreadable: {error}")))?;
     let mut applied = 0;
     if !deferred.is_empty() {
-        let engine = engine(db_path, device_id).await?;
+        let engine = engine(db_path.clone(), device_id).await?;
         let outcome = engine
             .apply_changes(
                 deferred,
@@ -259,6 +271,10 @@ pub async fn sync_offer_accept(
         applied = outcome.applied as u32;
     }
 
+    // The decision closes the offer out of the inbox; the book is in the library
+    // now, so the row is history the screen no longer shows.
+    mark_offer(&db_path, &offer.offer_id, "accepted").await?;
+
     Ok(SyncReceivedBook {
         file_path: file_path.to_string(),
         cover_path,
@@ -271,6 +287,7 @@ pub async fn sync_offer_accept(
 pub async fn sync_offer_reject(
     secret_key_path: String,
     session_token: String,
+    db_path: String,
     peer_node_id: String,
     offer_id: String,
 ) -> Result<(), LivtetError> {
@@ -280,7 +297,8 @@ pub async fn sync_offer_reject(
     client
         .offer_decision(&offer_id, false)
         .await
-        .map_err(|error| LivtetError::Sync(format!("could not decline the offer: {error}")))
+        .map_err(|error| LivtetError::Sync(format!("could not decline the offer: {error}")))?;
+    mark_offer(&db_path, &offer_id, "rejected").await
 }
 
 /// How many change-log pages to scan for offers after a bootstrap.
@@ -296,6 +314,7 @@ async fn bootstrap(
     client: &livtet_sync_iroh::Client,
     db_path: String,
     limit: i64,
+    peer_node_id: String,
 ) -> Result<SyncPullReport, LivtetError> {
     let dump = client
         .pull_full()
@@ -303,7 +322,7 @@ async fn bootstrap(
         .map_err(|error| LivtetError::Sync(format!("could not fetch the library: {error}")))?;
     let applied = apply_dump(&db_path, &dump).await?;
 
-    let mut offers: Vec<SyncOffer> = Vec::new();
+    let mut offers: Vec<PulledOffer> = Vec::new();
     let mut cursor = dump.version;
     let mut probe = 0i64;
     for _ in 0..MAX_BOOTSTRAP_PAGES {
@@ -312,9 +331,9 @@ async fn bootstrap(
             .await
             .map_err(|error| LivtetError::Sync(format!("could not read offers: {error}")))?;
         let (page_offers, _rows) = split_offers(page.changes);
-        for offer in page_offers {
-            if !offers.iter().any(|seen| seen.offer_id == offer.offer_id) {
-                offers.push(offer);
+        for pulled in page_offers {
+            if !offers.iter().any(|seen| seen.offer.offer_id == pulled.offer.offer_id) {
+                offers.push(pulled);
             }
         }
         cursor = cursor.max(page.latest_version);
@@ -324,12 +343,20 @@ async fn bootstrap(
         probe = page.latest_version;
     }
 
+    // A bootstrap is also the first look at whatever is waiting, so it records
+    // both the offers it found and where the next pull should resume.
+    let state = SharedState::connect(&db_path, &[Kind::Business, Kind::Client])
+        .await
+        .map_err(|error| LivtetError::Database(error.to_string()))?;
+    remember_offers(&state.pool, &offers).await?;
+    remember_cursor(&state.pool, &peer_node_id, cursor).await?;
+
     Ok(SyncPullReport {
         applied,
         conflicts: 0,
         cursor,
         has_more: false,
-        offers,
+        offers: offers.into_iter().map(|pulled| pulled.offer).collect(),
     })
 }
 
@@ -464,10 +491,183 @@ async fn engine(db_path: String, device_id: String) -> Result<SyncEngine, Livtet
     Ok(SyncEngine::new(db, device_id))
 }
 
+/// One offer as the pull found it, with the fields only its payload carries.
+///
+/// The wire record ([`SyncOffer`]) is the accept payload; the inbox needs to show
+/// a book before any catalog row exists, so the display fields are read out of
+/// the payload here rather than left for the UI to parse.
+struct PulledOffer {
+    offer: SyncOffer,
+    from_device_id: String,
+    title: String,
+    /// Author names as a JSON array, which is how the row stores them.
+    authors: String,
+    offered_at: String,
+}
+
+/// One book a peer is offering, as the inbox shows it.
+///
+/// Read from `inbound_offers`, so an offer survives the app closing: it is a
+/// decision the reader has not made yet, not a message in a buffer.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct SyncOfferSummary {
+    pub offer_id: String,
+    /// The device that offered it, as its `DbId` string.
+    pub from_device_id: String,
+    pub title: String,
+    pub authors: Vec<String>,
+    /// The sender's file name, which is where the format shows.
+    pub file_name: Option<String>,
+    pub has_cover: bool,
+    pub offered_at: String,
+    pub inventory_id: String,
+    pub edition_id: String,
+    pub work_id: String,
+    /// Opaque rows applied on acceptance; echo back to [`sync_offer_accept`].
+    pub deferred_changes: String,
+}
+
+/// Keep the offers a pull found, without resurrecting ones already decided.
+async fn remember_offers(
+    pool: &livtet_core::data::sql::SqlitePool,
+    offers: &[PulledOffer],
+) -> Result<(), LivtetError> {
+    for pulled in offers {
+        let offer = &pulled.offer;
+        livtet_core::data::sql::query(
+            "INSERT INTO inbound_offers \
+             (offer_id, from_device_id, inventory_id, edition_id, work_id, title, authors, \
+              file_name, has_cover, offered_at, received_at, status, decided_at, deferred_changes) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), 'pending', NULL, ?) \
+             ON CONFLICT(offer_id) DO NOTHING",
+        )
+        .bind(offer.offer_id.clone())
+        .bind(pulled.from_device_id.clone())
+        .bind(offer.inventory_id.clone())
+        .bind(offer.edition_id.clone())
+        .bind(offer.work_id.clone())
+        .bind(pulled.title.clone())
+        .bind(pulled.authors.clone())
+        .bind(Some(offer.file_name.clone()).filter(|name| !name.is_empty()))
+        .bind(offer.has_cover)
+        .bind(pulled.offered_at.clone())
+        .bind(offer.deferred_changes.clone())
+        .execute(pool)
+        .await
+        .map_err(|error| LivtetError::Database(error.to_string()))?;
+    }
+    Ok(())
+}
+
+/// Store where the next pull from `device_id` should resume.
+async fn remember_cursor(
+    pool: &livtet_core::data::sql::SqlitePool,
+    peer_node_id: &str,
+    cursor: i64,
+) -> Result<(), LivtetError> {
+    livtet_core::data::sql::query(
+        "INSERT INTO client_settings (key, value, updated_at) VALUES (?, ?, datetime('now')) \
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
+    )
+    .bind(cursor_key(peer_node_id))
+    .bind(cursor.to_string())
+    .execute(pool)
+    .await
+    .map_err(|error| LivtetError::Database(error.to_string()))?;
+    Ok(())
+}
+
+/// The settings key the daemon uses for the same cursor.
+///
+/// Keyed by node id rather than device id: the node id is what a dial starts
+/// from and the one this device always has, while a peer's ULID is only known
+/// once it identifies itself — a cursor must not depend on that answer.
+fn cursor_key(peer_node_id: &str) -> String {
+    format!("sync.cursor.{peer_node_id}")
+}
+
+/// Where the next pull from `peer_node_id` should resume.
+///
+/// Zero means nothing has been pulled from it yet, which makes the next pull a
+/// bootstrap.
+#[uniffi::export(async_runtime = "tokio")]
+pub async fn sync_cursor(db_path: String, peer_node_id: String) -> Result<i64, LivtetError> {
+    use livtet_core::data::sql::Row;
+
+    let state = SharedState::connect(&db_path, &[Kind::Business, Kind::Client])
+        .await
+        .map_err(|error| LivtetError::Database(error.to_string()))?;
+    let row = livtet_core::data::sql::query(
+        "SELECT value FROM client_settings WHERE key = ?",
+    )
+    .bind(cursor_key(&peer_node_id))
+    .fetch_optional(&state.pool)
+    .await
+    .map_err(|error| LivtetError::Database(error.to_string()))?;
+
+    Ok(row
+        .and_then(|row| row.try_get::<String, _>("value").ok())
+        .and_then(|value| value.parse::<i64>().ok())
+        .unwrap_or(0))
+}
+
+/// The offers nobody has decided yet, newest first.
+#[uniffi::export(async_runtime = "tokio")]
+pub async fn sync_offers(db_path: String) -> Result<Vec<SyncOfferSummary>, LivtetError> {
+    use livtet_core::data::sql::Row;
+
+    let state = SharedState::connect(&db_path, &[Kind::Business, Kind::Client])
+        .await
+        .map_err(|error| LivtetError::Database(error.to_string()))?;
+    let rows = livtet_core::data::sql::query(
+        "SELECT offer_id, from_device_id, inventory_id, edition_id, work_id, title, authors, \
+         file_name, has_cover, offered_at, deferred_changes \
+         FROM inbound_offers WHERE status = 'pending' ORDER BY received_at DESC",
+    )
+    .fetch_all(&state.pool)
+    .await
+    .map_err(|error| LivtetError::Database(error.to_string()))?;
+
+    let mut offers = Vec::with_capacity(rows.len());
+    for row in rows {
+        let text = |column: &str| row.try_get::<String, _>(column).unwrap_or_default();
+        offers.push(SyncOfferSummary {
+            offer_id: text("offer_id"),
+            from_device_id: text("from_device_id"),
+            title: text("title"),
+            authors: serde_json::from_str::<Vec<String>>(&text("authors")).unwrap_or_default(),
+            file_name: row.try_get::<Option<String>, _>("file_name").ok().flatten(),
+            has_cover: row.try_get::<bool, _>("has_cover").unwrap_or(false),
+            offered_at: text("offered_at"),
+            inventory_id: text("inventory_id"),
+            edition_id: text("edition_id"),
+            work_id: text("work_id"),
+            deferred_changes: text("deferred_changes"),
+        });
+    }
+    Ok(offers)
+}
+
+/// Record a decision so the inbox stops showing it.
+async fn mark_offer(db_path: &str, offer_id: &str, status: &str) -> Result<(), LivtetError> {
+    let state = SharedState::connect(db_path, &[Kind::Business, Kind::Client])
+        .await
+        .map_err(|error| LivtetError::Database(error.to_string()))?;
+    livtet_core::data::sql::query(
+        "UPDATE inbound_offers SET status = ?, decided_at = datetime('now') WHERE offer_id = ?",
+    )
+    .bind(status.to_string())
+    .bind(offer_id.to_string())
+    .execute(&state.pool)
+    .await
+    .map_err(|error| LivtetError::Database(error.to_string()))?;
+    Ok(())
+}
+
 /// Split a pulled page into offers (with the rows describing them) and the rows
 /// that can be applied straight away.
-fn split_offers(changes: Vec<SyncChange>) -> (Vec<SyncOffer>, Vec<SyncChange>) {
-    let parsed: Vec<(SyncChange, SyncOffer)> = changes
+fn split_offers(changes: Vec<SyncChange>) -> (Vec<PulledOffer>, Vec<SyncChange>) {
+    let parsed: Vec<(SyncChange, PulledOffer)> = changes
         .iter()
         .filter(|change| change.entity_type == OFFER_ENTITY_TYPE)
         .filter_map(|change| {
@@ -485,17 +685,36 @@ fn split_offers(changes: Vec<SyncChange>) -> (Vec<SyncOffer>, Vec<SyncChange>) {
             }
             Some((
                 change.clone(),
-                SyncOffer {
-                    offer_id,
-                    inventory_id: text(INVENTORY_ID),
-                    edition_id: text(EDITION_ID),
-                    work_id: text(WORK_ID),
-                    file_name: text(FILE_NAME),
-                    has_cover: payload
-                        .get(HAS_COVER)
-                        .and_then(serde_json::Value::as_bool)
-                        .unwrap_or(false),
-                    deferred_changes: String::new(),
+                PulledOffer {
+                    from_device_id: change.device_id.clone(),
+                    offered_at: change.changed_at.clone(),
+                    title: text(OFFER_TITLE),
+                    authors: serde_json::to_string(
+                        &payload
+                            .get(OFFER_AUTHORS)
+                            .and_then(serde_json::Value::as_array)
+                            .map(|names| {
+                                names
+                                    .iter()
+                                    .filter_map(serde_json::Value::as_str)
+                                    .map(str::to_string)
+                                    .collect::<Vec<_>>()
+                            })
+                            .unwrap_or_default(),
+                    )
+                    .unwrap_or_else(|_| "[]".to_string()),
+                    offer: SyncOffer {
+                        offer_id,
+                        inventory_id: text(INVENTORY_ID),
+                        edition_id: text(EDITION_ID),
+                        work_id: text(WORK_ID),
+                        file_name: text(FILE_NAME),
+                        has_cover: payload
+                            .get(HAS_COVER)
+                            .and_then(serde_json::Value::as_bool)
+                            .unwrap_or(false),
+                        deferred_changes: String::new(),
+                    },
                 },
             ))
         })
@@ -506,8 +725,12 @@ fn split_offers(changes: Vec<SyncChange>) -> (Vec<SyncOffer>, Vec<SyncChange>) {
     // the book appear with no file behind it.
     let held_ids: HashSet<String> = parsed
         .iter()
-        .flat_map(|(_, offer)| {
-            [&offer.inventory_id, &offer.edition_id, &offer.work_id]
+        .flat_map(|(_, pulled)| {
+            [
+                &pulled.offer.inventory_id,
+                &pulled.offer.edition_id,
+                &pulled.offer.work_id,
+            ]
                 .into_iter()
                 .filter(|id| !id.is_empty())
                 .cloned()
@@ -521,7 +744,8 @@ fn split_offers(changes: Vec<SyncChange>) -> (Vec<SyncOffer>, Vec<SyncChange>) {
 
     let offers = parsed
         .into_iter()
-        .map(|(_, mut offer)| {
+        .map(|(_, mut pulled)| {
+            let offer = &mut pulled.offer;
             let held: Vec<SyncChange> = deferred
                 .iter()
                 .filter(|change| {
@@ -532,7 +756,7 @@ fn split_offers(changes: Vec<SyncChange>) -> (Vec<SyncOffer>, Vec<SyncChange>) {
                 .cloned()
                 .collect();
             offer.deferred_changes = serde_json::to_string(&held).unwrap_or_else(|_| "[]".into());
-            offer
+            pulled
         })
         .collect();
 
@@ -606,6 +830,8 @@ mod tests {
             "work_id": "wor-1",
             "file_name": "Designing Data-Intensive Applications.epub",
             "has_cover": true,
+            "title": "The Reverse Direction",
+            "authors": ["Jacky Alcine"],
         })
         .to_string();
         let changes = vec![SyncChange {
@@ -705,12 +931,29 @@ mod tests {
         assert_eq!(offer.edition_id, "edi-1");
         assert!(offer.has_cover);
 
+        // The offer is now the reader's pending decision, so it is in the inbox
+        // with the fields its payload carried — not just in this return value.
+        let inbox = sync_offers(db_path.clone()).await.expect("list offers");
+        assert_eq!(inbox.len(), 1, "one book is waiting: {inbox:?}");
+        assert_eq!(inbox[0].title, "The Reverse Direction");
+        assert_eq!(inbox[0].authors, vec!["Jacky Alcine".to_string()]);
+        assert_eq!(inbox[0].from_device_id, "desk-device");
+
+        // And the pull recorded where to resume, so the next one is incremental.
+        assert_eq!(
+            sync_cursor(db_path.clone(), peer_node_id.clone())
+                .await
+                .expect("read the cursor"),
+            7,
+            "the cursor must be stored per peer"
+        );
+
         let books_dir = dir.path().join("books").to_string();
         let covers_dir = dir.path().join("covers").to_string();
         let received = sync_offer_accept(
             key_path,
             "session-token".to_string(),
-            db_path,
+            db_path.clone(),
             "phone-device".to_string(),
             peer_node_id,
             offer,
@@ -736,6 +979,13 @@ mod tests {
         assert!(
             decided.load(Ordering::SeqCst),
             "the peer must be told the offer was accepted"
+        );
+
+        // A decided offer leaves the inbox: the book is in the library now, and a
+        // list that kept asking would be a list the reader stops reading.
+        assert!(
+            sync_offers(db_path).await.expect("list offers").is_empty(),
+            "an accepted offer is no longer pending"
         );
     }
 
