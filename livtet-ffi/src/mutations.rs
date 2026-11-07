@@ -5,7 +5,7 @@
 //! `search_*` see the change immediately.
 
 use livtet_core::data::entities::{
-    digital_inventory, edition_identifiers, editions, identifiers, works,
+    digital_inventory, edition_identifiers, editions, formats, identifiers, works,
 };
 use livtet_core::data::orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, Set};
 use livtet_core::types::{DbId, DiskPath, Identifier, PublishedDate, now_primitive};
@@ -59,6 +59,10 @@ impl LivtetStore {
         let db = self.state.db_conn();
         require_edition(&db, edition_id).await?;
 
+        // Kept for the format adoption below: the label is moved into the
+        // inventory row, and the edition's format is decided after that write.
+        let format_label = file_format.clone();
+
         let existing = digital_inventory::Entity::find()
             .filter(digital_inventory::Column::EditionId.eq(edition_id))
             .one(&db)
@@ -96,7 +100,56 @@ impl LivtetStore {
             }
         }
 
+        // Attaching a file is often the first time an edition learns what it is:
+        // a book a peer sent, or a file dropped in by hand, arrives with no
+        // format row. `reading_progress.format_id` is a foreign key into
+        // `formats`, and the filtered `list_formats` only reports formats an
+        // edition already carries, so leaving this null would make the book
+        // impossible to record progress against.
+        if let Some(format) = format_label.as_deref() {
+            self.adopt_file_format(edition_id, format).await?;
+        }
+
         self.sync_edition_index(edition_id).await
+    }
+
+    /// Set the edition's format from a file's own format label, when it has none.
+    ///
+    /// An edition that already names a format keeps it: the file is an attribute
+    /// of the edition, not a correction to it.
+    async fn adopt_file_format(
+        &self,
+        edition_id: DbId,
+        file_format: &str,
+    ) -> Result<(), LivtetError> {
+        let db = self.state.db_conn();
+        let Some(edition) = editions::Entity::find_by_id(edition_id).one(&db).await? else {
+            return Ok(());
+        };
+        if edition.format_id.is_some() {
+            return Ok(());
+        }
+
+        // The table is nine rows of known formats, so matching in Rust is both
+        // cheaper than a case-insensitive SQL expression and honest about the
+        // labels: "EPUB" is stored, "epub" is what a file and a caller say.
+        let wanted = file_format.trim();
+        let format = formats::Entity::find()
+            .all(&db)
+            .await?
+            .into_iter()
+            .find(|format| format.name.eq_ignore_ascii_case(wanted));
+        let Some(format) = format else {
+            // An unknown label is not an error: the file is still attached, and
+            // the reader reports "no format" if it tries to record progress.
+            return Ok(());
+        };
+
+        let mut active: editions::ActiveModel = edition.into();
+        active.format_id = Set(Some(format.id));
+        active.updated_at = Set(Some(now_primitive()));
+        active.update(&db).await?;
+        Ok(())
     }
 
     /// Detach the digital file by deleting the edition's
@@ -528,6 +581,66 @@ mod tests {
         let work = &store.list_works(1, 0, None, None, None).await.unwrap()[0];
         let edition = store.list_editions(work.id).await.unwrap()[0].id;
         (tmp, store, edition)
+    }
+
+    /// A book that arrives without a format still names one once its file is attached.
+    ///
+    /// This is the path a peer's book takes: `syncOfferAccept` attaches the file,
+    /// and `reading_progress.format_id` is a foreign key into `formats`. Without
+    /// this, the row can never be written and the reader has nowhere to save a
+    /// position — the bug this covers.
+    #[tokio::test]
+    async fn attaching_a_file_names_the_edition_format() {
+        let (_tmp, store, _edition) = seeded_store_with_edition().await;
+
+        let work = store
+            .create_work("Formatless".to_string(), None, None)
+            .await
+            .unwrap();
+        let edition = store
+            .create_edition(NewEdition {
+                work_id: work.id,
+                title: None,
+                description: None,
+                published_date: None,
+                format_id: None,
+                language_id: None,
+                notes: None,
+                cover_image_url: None,
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            store.get_edition(edition.id).await.unwrap().unwrap().format,
+            None,
+            "a fresh edition names no format"
+        );
+
+        store
+            .set_edition_file(
+                edition.id,
+                DiskPath::from_path(camino::Utf8Path::new("/books/b.epub")),
+                Some("epub".to_string()),
+                Some(7),
+            )
+            .await
+            .unwrap();
+
+        let detail = store.get_edition(edition.id).await.unwrap().unwrap();
+        assert_eq!(
+            detail.format.as_deref(),
+            Some("EPUB"),
+            "the file's own label names the edition, and the stored row is the canonical name"
+        );
+        assert!(
+            store
+                .list_formats()
+                .await
+                .unwrap()
+                .iter()
+                .any(|format| format.name == "EPUB"),
+            "the format is now reportable, which is what the reader asks for"
+        );
     }
 
     #[tokio::test]
