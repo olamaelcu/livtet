@@ -137,6 +137,29 @@ impl ByteBody {
         self.remaining -= copied;
         Ok(copied)
     }
+
+    /// Read up to `out.len()` more bytes, returning how many were read.
+    ///
+    /// Zero means the body is spent. A caller writing to disk in a loop can use
+    /// this to report how far a transfer has got; [`read_all`](Self::read_all)
+    /// only offers the finished buffer.
+    pub async fn read_chunk(&mut self, out: &mut [u8]) -> Result<usize, ClientError> {
+        if self.remaining == 0 || out.is_empty() {
+            return Ok(0);
+        }
+        let take = (out.len() as u64).min(self.remaining) as usize;
+        self.stream
+            .read_exact(&mut out[..take])
+            .await
+            .map_err(|error| {
+                WireError::Io(std::io::Error::new(
+                    std::io::ErrorKind::UnexpectedEof,
+                    error,
+                ))
+            })?;
+        self.remaining -= take as u64;
+        Ok(take)
+    }
 }
 
 /// One peer's typed sync client.
