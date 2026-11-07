@@ -23,11 +23,11 @@ use livtet_sync_iroh::{
 };
 use livtet_types::DbId;
 
-use crate::daemon::{DaemonState, discovery_node_id};
 use crate::requests::{RequestRecord, record};
+use crate::wire_state::WireState;
 
 /// Build the handler the accept loop runs.
-pub fn handler(state: Arc<DaemonState>) -> Handler {
+pub fn handler(state: Arc<WireState>) -> Handler {
     Arc::new(move |request, remote| {
         let state = Arc::clone(&state);
         Box::pin(async move { answer(&state, request, remote).await })
@@ -114,7 +114,7 @@ impl From<Failure> for Answered {
 ///
 /// No path here panics: a bad request becomes an `error` frame, which the peer
 /// surfaces as a classified failure rather than a dropped stream.
-async fn answer(state: &Arc<DaemonState>, request: Request, remote: String) -> Outcome {
+async fn answer(state: &Arc<WireState>, request: Request, remote: String) -> Outcome {
     let op = op_name(&request);
     let started = Instant::now();
     let answered = dispatch(state, request, remote.clone()).await;
@@ -122,21 +122,26 @@ async fn answer(state: &Arc<DaemonState>, request: Request, remote: String) -> O
     let outcome = outcome_label(&answered.outcome.response);
     let at = crate::daemon::now_string();
 
-    state.requests_served.fetch_add(1, Ordering::Relaxed);
-    *state.last_request_at.lock().await = Some(at.clone());
-    record(
-        &state.request_log,
-        RequestRecord {
-            op: op.to_string(),
-            node_id: remote.clone(),
-            device_id: answered.device_id.clone(),
-            outcome: outcome.clone(),
-            at: at.clone(),
-            elapsed_ms,
-        },
-    );
-    crate::requests::notify(
-        &state.notifier,
+    if let Some(counters) = &state.counters {
+        counters.served.fetch_add(1, Ordering::Relaxed);
+        *counters.last_at.lock().await = Some(at.clone());
+    }
+    if let Some(log) = &state.request_log {
+        record(
+            log,
+            RequestRecord {
+                op: op.to_string(),
+                node_id: remote.clone(),
+                device_id: answered.device_id.clone(),
+                outcome: outcome.clone(),
+                at: at.clone(),
+                elapsed_ms,
+            },
+        );
+    }
+    if let Some(notifier) = &state.notifier {
+        crate::requests::notify(
+            notifier,
         crate::rpc::method::NOTIFY_REQUEST_RECEIVED,
         serde_json::json!({
             "op": op,
@@ -146,15 +151,16 @@ async fn answer(state: &Arc<DaemonState>, request: Request, remote: String) -> O
             "at": at,
             "elapsed_ms": elapsed_ms,
         }),
-    );
-    if let Some(completed) =
-        sync_completed(&answered.outcome.response, answered.device_id.as_deref())
-    {
-        crate::requests::notify(
-            &state.notifier,
-            crate::rpc::method::NOTIFY_SYNC_COMPLETED,
-            completed,
         );
+        if let Some(completed) =
+            sync_completed(&answered.outcome.response, answered.device_id.as_deref())
+        {
+            crate::requests::notify(
+                notifier,
+                crate::rpc::method::NOTIFY_SYNC_COMPLETED,
+                completed,
+            );
+        }
     }
 
     answered.outcome
@@ -221,10 +227,10 @@ fn sync_completed(response: &Response, device_id: Option<&str>) -> Option<serde_
 }
 
 /// Route one request to its handler.
-async fn dispatch(state: &Arc<DaemonState>, request: Request, remote: String) -> Answered {
+async fn dispatch(state: &Arc<WireState>, request: Request, remote: String) -> Answered {
     // The connection's node id is the caller's identity. A frame claiming to be
     // someone else is refused before it reaches the engine.
-    let self_node = discovery_node_id(state).await;
+    let self_node = state.self_node();
     if remote == self_node {
         return Answered::error(ErrorCode::BadRequest, "a device cannot sync with itself");
     }
@@ -432,7 +438,7 @@ async fn dispatch(state: &Arc<DaemonState>, request: Request, remote: String) ->
 /// migrations and are not on the SeaORM entity, so this is a targeted
 /// statement. `node_id = ?` never matches a `NULL`, so a row that predates node
 /// ids is unauthorized rather than trusted.
-async fn authorize(state: &Arc<DaemonState>, token: &str, remote: &str) -> Result<String, Failure> {
+async fn authorize(state: &Arc<WireState>, token: &str, remote: &str) -> Result<String, Failure> {
     let token = token.trim();
     if token.is_empty() {
         return Err(Failure::unauthorized());
@@ -471,7 +477,7 @@ async fn authorize(state: &Arc<DaemonState>, token: &str, remote: &str) -> Resul
 /// `handle_pairing_approve` and `handle_pairing_claim`), so a row that names
 /// the node id is a real pairing; the token check only excludes a row left
 /// half-written.
-async fn paired_node(state: &Arc<DaemonState>, remote: &str) -> Result<bool, Failure> {
+async fn paired_node(state: &Arc<WireState>, remote: &str) -> Result<bool, Failure> {
     let statement = Statement::from_sql_and_values(
         DbBackend::Sqlite,
         "SELECT 1 FROM paired_devices \
@@ -512,7 +518,7 @@ fn parse_inventory_id(raw: &str) -> Option<DbId> {
 
 /// Read one inventory row's file or cover path.
 async fn inventory_paths(
-    state: &Arc<DaemonState>,
+    state: &Arc<WireState>,
     inventory_id: &str,
 ) -> Result<(Option<String>, Option<String>), Failure> {
     use livtet_data::entities::digital_inventory;
@@ -568,7 +574,7 @@ async fn file_metadata(path: &str) -> Result<(u64, String), Failure> {
 
 /// Serve bytes of one inventory file, honouring a range and its precondition.
 async fn file(
-    state: &Arc<DaemonState>,
+    state: &Arc<WireState>,
     token: String,
     remote: &str,
     inventory_id: String,
@@ -620,7 +626,7 @@ async fn file(
 
 /// Report one inventory file's size, content type and etag.
 async fn file_info(
-    state: &Arc<DaemonState>,
+    state: &Arc<WireState>,
     token: String,
     remote: &str,
     inventory_id: String,
@@ -650,7 +656,7 @@ async fn file_info(
 
 /// Serve the extracted cover for one inventory row.
 async fn cover(
-    state: &Arc<DaemonState>,
+    state: &Arc<WireState>,
     token: String,
     remote: &str,
     inventory_id: String,
@@ -694,7 +700,7 @@ const OPDS_TIMEOUT: Duration = Duration::from_secs(120);
 /// pipe the desktop already drives this daemon with. A non-2xx status is an
 /// ordinary answer and is passed through — an e-reader needs the 404.
 async fn opds(
-    state: &Arc<DaemonState>,
+    state: &Arc<WireState>,
     method: String,
     path: String,
     headers: OpdsHeaders,
@@ -707,8 +713,15 @@ async fn opds(
         "body": body,
     });
 
-    let value = match state
-        .host
+    // An embedded endpoint has no route table behind it, so OPDS is refused
+    // rather than answered with an empty feed the caller would cache.
+    let Some(host) = &state.host else {
+        return Answered::error(
+            ErrorCode::Internal,
+            "opds: this endpoint serves no route table",
+        );
+    };
+    let value = match host
         .request(crate::rpc::method::OPDS_FETCH, params, OPDS_TIMEOUT)
         .await
     {
@@ -755,7 +768,7 @@ async fn opds(
 
 /// Record a paired device's answer to an offer this desktop sent.
 async fn offer_decision(
-    state: &Arc<DaemonState>,
+    state: &Arc<WireState>,
     offer_id: &str,
     device_id: &str,
     accepted: bool,
@@ -805,7 +818,7 @@ async fn offer_decision(
 /// that was decided can be claimed again: that just files a fresh request for a
 /// fresh human decision.
 async fn pair(
-    state: &Arc<DaemonState>,
+    state: &Arc<WireState>,
     remote: &str,
     device_id: String,
     name: String,
@@ -905,15 +918,17 @@ async fn pair(
             },
         );
     }
-    crate::requests::notify(
-        &state.notifier,
-        crate::rpc::method::NOTIFY_PAIRING_REQUESTED,
-        serde_json::json!({
-            "node_id": remote,
-            "device_id": &device_id,
-            "name": &name,
-        }),
-    );
+    if let Some(notifier) = &state.notifier {
+        crate::requests::notify(
+            notifier,
+            crate::rpc::method::NOTIFY_PAIRING_REQUESTED,
+            serde_json::json!({
+                "node_id": remote,
+                "device_id": &device_id,
+                "name": &name,
+            }),
+        );
+    }
     tracing::info!(
         device = %device_id,
         name = %name,
@@ -925,7 +940,7 @@ async fn pair(
 }
 
 /// Report what became of a claim this connection's node filed.
-async fn pair_status(state: &Arc<DaemonState>, remote: &str, claim: String) -> Answered {
+async fn pair_status(state: &Arc<WireState>, remote: &str, claim: String) -> Answered {
     let waiting = {
         let waiters = state.pair_waiters.lock().await;
         waiters
@@ -947,17 +962,15 @@ mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
 
     use std::sync::Arc;
-    use std::sync::atomic::AtomicU64;
 
     use camino::Utf8PathBuf;
     use livtet_data::orm::SqlxSqliteConnector;
     use livtet_sync::SyncEngine;
     use livtet_sync_iroh::{MAX_CHUNK_BYTES, OpdsHeaders, OpdsResponse, Request, Response};
-    use tokio::sync::{Mutex, mpsc};
+    use tokio::sync::mpsc;
 
     use super::*;
-    use crate::config::ServerConfig;
-    use crate::pairing::{apply_pairing_decision, new_pair_decisions, no_offer_decision_sink};
+    use crate::pairing::apply_pairing_decision;
     use crate::requests::{new_request_log, recent};
     use crate::rpc;
 
@@ -970,7 +983,7 @@ mod tests {
         "cc11bb22cc33dd44ee55ff6677889900aabbccddeeff00112233445566778899";
 
     /// A daemon state over a throwaway database, with no endpoint bound.
-    async fn test_state() -> (Arc<DaemonState>, Utf8PathBuf) {
+    async fn test_state() -> (Arc<WireState>, Utf8PathBuf) {
         let (state, root, _out) = test_state_with_host().await;
         (state, root)
     }
@@ -978,7 +991,7 @@ mod tests {
     /// Like [`test_state`], but keeps the daemon's outbound lines so a test can
     /// play the desktop and answer a reverse request.
     async fn test_state_with_host() -> (
-        Arc<DaemonState>,
+        Arc<WireState>,
         Utf8PathBuf,
         mpsc::UnboundedReceiver<String>,
     ) {
@@ -994,29 +1007,15 @@ mod tests {
         let db = SqlxSqliteConnector::from_sqlx_sqlite_pool(pool.clone());
         let engine = SyncEngine::new(db, LOCAL_DEVICE.to_string());
         let (out, out_rx) = mpsc::unbounded_channel();
-        let state = Arc::new(DaemonState {
-            config: ServerConfig {
-                db_path,
-                ..ServerConfig::default()
-            },
-            pool,
-            engine,
-            device_id: LOCAL_DEVICE.to_string(),
-            device_name: Mutex::new(None),
-            notifier: Arc::new(|_method: &str, _params: serde_json::Value| {}),
-            started_at: time::OffsetDateTime::now_utc(),
-            pair_waiters: crate::pairing::new_pair_waiters(),
-            pair_decisions: new_pair_decisions(),
-            offer_sink: no_offer_decision_sink(),
-            write_gate: Mutex::new(()),
-            lifecycle: Mutex::new(()),
-            discovery: Mutex::new(None),
-            advertiser: Mutex::new(None),
-            request_log: new_request_log(),
-            host: crate::daemon::HostBridge::new(out),
-            requests_served: Arc::new(AtomicU64::new(0)),
-            last_request_at: Arc::new(Mutex::new(None)),
-        });
+        let state = Arc::new(
+            WireState::new(engine, pool, LOCAL_DEVICE.to_string())
+                .with_notifier(Arc::new(
+                    |_method: &str, _params: serde_json::Value| {},
+                ))
+                .with_host(crate::daemon::HostBridge::new(out))
+                .with_request_log(new_request_log())
+                .counting(),
+        );
         (state, root, out_rx)
     }
 
@@ -1035,8 +1034,24 @@ mod tests {
         Utf8PathBuf::from_path_buf(path).expect("temp path is UTF-8")
     }
 
-    async fn ask(state: &Arc<DaemonState>, request: Request, remote: &str) -> Response {
+    async fn ask(state: &Arc<WireState>, request: Request, remote: &str) -> Response {
         answer(state, request, remote.to_string()).await.response
+    }
+
+    /// The host bridge the fixture wires, which plays the desktop's route table.
+    fn wired_host(state: &Arc<WireState>) -> crate::daemon::HostBridge {
+        state
+            .host
+            .clone()
+            .expect("the fixture wires a host bridge")
+    }
+
+    /// The request log the fixture keeps.
+    fn wired_log(state: &Arc<WireState>) -> &crate::requests::RequestLog {
+        state
+            .request_log
+            .as_ref()
+            .expect("the fixture keeps a request log")
     }
 
     /// One OPDS request as the wire carries it.
@@ -1086,7 +1101,7 @@ mod tests {
             content_type: "application/json".to_string(),
             body: b"{\"error\":\"not found\"}".to_vec(),
         };
-        let responder = answer_opds_with(state.host.clone(), out, answer.clone());
+        let responder = answer_opds_with(wired_host(&state), out, answer.clone());
 
         let response = ask(&state, opds_request("/publications/missing"), REMOTE_NODE).await;
         let params = responder.await.expect("the desktop answered");
@@ -1124,7 +1139,7 @@ mod tests {
             content_type: "application/epub+zip".to_string(),
             body,
         };
-        let responder = answer_opds_with(state.host.clone(), out, answer);
+        let responder = answer_opds_with(wired_host(&state), out, answer);
 
         let response = ask(
             &state,
@@ -1158,7 +1173,7 @@ mod tests {
             content_type: "application/atom+xml;profile=opds-catalog".to_string(),
             body: b"<feed/>".to_vec(),
         };
-        let responder = answer_opds_with(state.host.clone(), out, answer.clone());
+        let responder = answer_opds_with(wired_host(&state), out, answer.clone());
 
         let response = ask(&state, opds_request("/"), REMOTE_NODE).await;
         let params = responder.await.expect("the desktop was asked");
@@ -1220,7 +1235,7 @@ mod tests {
     /// Seed a paired device holding `token`, bound to `node_id`.
     /// Seed a paired device holding `token`, bound to `node_id`.
     async fn seed_paired(
-        state: &Arc<DaemonState>,
+        state: &Arc<WireState>,
         device_id: DbId,
         node_id: Option<&str>,
         token: &str,
@@ -1233,7 +1248,7 @@ mod tests {
     /// `issued` is the token this side minted and checks inbound requests
     /// against; `peer` is the one the other side minted for us to present.
     async fn seed_pairing(
-        state: &Arc<DaemonState>,
+        state: &Arc<WireState>,
         device_id: DbId,
         node_id: Option<&str>,
         issued: &str,
@@ -1517,7 +1532,7 @@ mod tests {
 
     /// Seed one inventory row whose file and cover are real files.
     async fn seed_inventory(
-        state: &Arc<DaemonState>,
+        state: &Arc<WireState>,
         directory: &camino::Utf8Path,
     ) -> (DbId, Vec<u8>) {
         let bytes = b"0123456789".to_vec();
@@ -1722,10 +1737,11 @@ mod tests {
         )
         .await;
         assert!(matches!(response, Response::Status(_)));
-        assert_eq!(state.requests_served.load(Ordering::Relaxed), 1);
-        assert!(state.last_request_at.lock().await.is_some());
+        let counters = state.counters.as_ref().expect("the fixture counts");
+        assert_eq!(counters.served.load(Ordering::Relaxed), 1);
+        assert!(counters.last_at.lock().await.is_some());
 
-        let entries = recent(&state.request_log, 10);
+        let entries = recent(wired_log(&state), 10);
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].op, "status");
         assert_eq!(entries[0].node_id, REMOTE_NODE);
@@ -1748,7 +1764,7 @@ mod tests {
         .await;
         assert!(matches!(response, Response::Error { .. }));
 
-        let entries = recent(&state.request_log, 10);
+        let entries = recent(wired_log(&state), 10);
         assert_eq!(entries[0].outcome, "error:unauthorized");
         assert_eq!(entries[0].device_id, None);
     }

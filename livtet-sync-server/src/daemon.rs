@@ -20,6 +20,7 @@ use crate::config::ServerConfig;
 use crate::error::ServerError;
 use crate::pairing::{OfferDecisionSink, PairDecisions, PairWaiters, new_pair_decisions};
 use crate::requests::{self, Notifier, RequestLog, new_request_log};
+use crate::wire_state::{RequestCounters, WireState};
 use crate::rpc::{
     self, DeviceNameParams, DeviceParams, OfferBookParams, OfferDecisionParams, OfferParams,
     PairingBeginParams, PairingClaimParams, RebindParams, RequestsRecentParams, ResolveParams,
@@ -79,6 +80,47 @@ pub struct DaemonState {
     pub requests_served: Arc<AtomicU64>,
     /// When the last sync request was answered.
     pub last_request_at: Arc<Mutex<Option<String>>>,
+}
+
+impl DaemonState {
+    /// The state the sync wire answers from, sharing this daemon's engine,
+    /// pool, pairing maps and reporting seams.
+    ///
+    /// The wire takes [`WireState`] rather than `DaemonState` so an embedder can
+    /// serve the same protocol without inventing a stdio pipe. Everything a peer
+    /// can observe — approvals, offer decisions, the request log — is shared, so
+    /// the daemon's RPCs still drive the answers the endpoint gives.
+    pub async fn wire_state(&self) -> Arc<WireState> {
+        let node_id = self
+            .discovery
+            .lock()
+            .await
+            .as_ref()
+            .map(|service| service.node_id().0.clone());
+
+        let state = WireState::new(
+            self.engine.clone(),
+            self.pool.clone(),
+            self.device_id.clone(),
+        )
+        .with_notifier(Arc::clone(&self.notifier))
+        .with_host(self.host.clone())
+        .with_request_log(Arc::clone(&self.request_log))
+        .with_counters(RequestCounters {
+            served: Arc::clone(&self.requests_served),
+            last_at: Arc::clone(&self.last_request_at),
+        })
+        .with_offer_sink(Arc::clone(&self.offer_sink))
+        .with_pairing(
+            Arc::clone(&self.pair_waiters),
+            Arc::clone(&self.pair_decisions),
+        );
+
+        Arc::new(match node_id {
+            Some(node_id) => state.with_node_id(node_id),
+            None => state,
+        })
+    }
 }
 
 /// A request the daemon sends its parent and waits on.
@@ -291,7 +333,7 @@ pub async fn run_async(config: ServerConfig) -> Result<(), ServerError> {
         .as_ref()
         .map(|service| service.endpoint().clone());
     if let Some(endpoint) = endpoint {
-        livtet_sync_iroh::spawn_server(endpoint, crate::wire::handler(Arc::clone(&state)));
+        livtet_sync_iroh::spawn_server(endpoint, crate::wire::handler(state.wire_state().await));
     }
     spawn_pull_loop(Arc::clone(&state));
     let _ = cleanup_old_pairings(&state).await;
@@ -741,83 +783,14 @@ async fn handle_pairing_approve(
     request: &rpc::RpcRequest,
     state: &Arc<DaemonState>,
 ) -> Result<serde_json::Value, RpcFailure> {
-    use livtet_data::client_entities::{paired_devices, pending_pairings};
-    use livtet_data::orm::sea_query::OnConflict;
-
     let params: TokenParams = parse_params(request)?;
-    let db = state.engine.db();
-
-    let pending = pending_pairings::Entity::find_by_id(params.token.clone())
-        .one(db)
-        .await?
-        .ok_or_else(|| invalid_params(format!("unknown pairing node id: {}", params.token)))?;
-
-    let pending_node_id = pending.token.clone();
-
-    let session_token = ulid::Ulid::generate().to_string();
-    let device_id = pending.device_id.unwrap_or_else(DbId::new);
-    let decided_device_id = device_id.to_string();
-    let model = paired_devices::ActiveModel {
-        device_id: Set(device_id),
-        name: Set(pending.device_name.clone()),
-        // The peer's node id is its address; there is no HTTP endpoint to
-        // store. Legacy rows keep whatever they recorded.
-        listen_on: Set(None),
-        device_type_id: Set(pending.device_type_id),
-        paired_at: Set(primitive_now()),
-        last_sync_at: Set(None),
-        // Approving lets the claimant dial us, so the row is dial-addressable in
-        // principle; the token recorded below is the one *we* issue and check
-        // their requests against. Pulling from them needs their token instead,
-        // which only a claim (`sync_pair_claim`) can supply.
-        outbound: Set(true),
-    };
-    paired_devices::Entity::insert(model)
-        .on_conflict(
-            OnConflict::column(paired_devices::Column::DeviceId)
-                .update_columns([
-                    paired_devices::Column::Name,
-                    paired_devices::Column::ListenOn,
-                    paired_devices::Column::DeviceTypeId,
-                    paired_devices::Column::PairedAt,
-                    paired_devices::Column::Outbound,
-                ])
-                .to_owned(),
-        )
-        .exec(db)
-        .await?;
-
-    // `session_token` is added by a later client migration and is not on the
-    // entity, so persist it with a targeted statement through the pool. It is
-    // the token we just minted: inbound requests present it, and the peer holds
-    // its own separate token for anything it accepts from us.
-    livtet_data::sql::query(
-        "UPDATE paired_devices SET session_token = ?, node_id = ? WHERE device_id = ?",
-    )
-    .bind(session_token.clone())
-    .bind(pending_node_id.clone())
-    .bind(device_id.to_bytes().to_vec())
-    .execute(&state.pool)
-    .await
-    .map_err(|e| ServerError::Db(e.to_string()))?;
-
-    let mut pending_model: pending_pairings::ActiveModel = pending.into();
-    pending_model.status_id = Set(Some(DbId::from(PairingStatus::Approved)));
-    pending_model.update(db).await?;
-
-    let _ = crate::pairing::apply_pairing_decision(
-        &state.pair_waiters,
-        &state.pair_decisions,
-        &pending_node_id,
-        "approved",
-        &session_token,
-        Some(decided_device_id.as_str()),
-    )
-    .await;
-
+    let wire = state.wire_state().await;
+    let approval = crate::pairs::approve_claim(&wire, &params.token)
+        .await
+        .map_err(claim_failure)?;
     Ok(serde_json::json!({
-        "device_id": device_id.to_string(),
-        "session_token": session_token,
+        "device_id": approval.device_id,
+        "session_token": approval.session_token,
     }))
 }
 
@@ -825,33 +798,11 @@ async fn handle_pairing_reject(
     request: &rpc::RpcRequest,
     state: &Arc<DaemonState>,
 ) -> Result<serde_json::Value, RpcFailure> {
-    use livtet_data::client_entities::pending_pairings;
-
     let params: TokenParams = parse_params(request)?;
-    let db = state.engine.db();
-
-    let pending = pending_pairings::Entity::find_by_id(params.token.clone())
-        .one(db)
-        .await?
-        .ok_or_else(|| invalid_params(format!("unknown pairing node id: {}", params.token)))?;
-
-    let pending_node_id = pending.token.clone();
-    let decided_device_id = pending.device_id.map(|id| id.to_string());
-
-    let mut model: pending_pairings::ActiveModel = pending.into();
-    model.status_id = Set(Some(DbId::from(PairingStatus::Rejected)));
-    model.update(db).await?;
-
-    let _ = crate::pairing::apply_pairing_decision(
-        &state.pair_waiters,
-        &state.pair_decisions,
-        &pending_node_id,
-        "rejected",
-        "",
-        decided_device_id.as_deref(),
-    )
-    .await;
-
+    let wire = state.wire_state().await;
+    crate::pairs::reject_claim(&wire, &params.token)
+        .await
+        .map_err(claim_failure)?;
     Ok(serde_json::json!({ "ok": true }))
 }
 
@@ -1054,155 +1005,27 @@ async fn handle_devices_offer_book(
     request: &rpc::RpcRequest,
     state: &Arc<DaemonState>,
 ) -> Result<serde_json::Value, RpcFailure> {
-    use livtet_data::client_entities::paired_devices;
-    use livtet_data::entities::{authors, digital_inventory, editions, work_authors, works};
-
     let params: OfferBookParams = parse_params(request)?;
-    let device_id = params
-        .device_id
-        .parse::<DbId>()
-        .ok()
-        .or_else(|| DbId::from_hex(&params.device_id).ok())
-        .ok_or_else(|| invalid_params(format!("invalid device id: {}", params.device_id)))?;
-    let edition_id = params
-        .edition_id
-        .parse::<DbId>()
-        .ok()
-        .or_else(|| DbId::from_hex(&params.edition_id).ok())
-        .ok_or_else(|| invalid_params(format!("invalid edition id: {}", params.edition_id)))?;
-
-    let db = state.engine.db();
-    if paired_devices::Entity::find_by_id(device_id)
-        .one(db)
-        .await?
-        .is_none()
-    {
-        return Err(invalid_params(format!(
-            "device is not paired: {}",
-            params.device_id
-        )));
-    }
-
-    let edition = editions::Entity::find_by_id(edition_id)
-        .one(db)
-        .await?
-        .ok_or_else(|| invalid_params(format!("unknown edition: {}", params.edition_id)))?;
-    let inventory = digital_inventory::Entity::find()
-        .filter(digital_inventory::Column::EditionId.eq(edition_id))
-        .one(db)
-        .await?
-        .ok_or_else(|| invalid_params("this edition has no file to send"))?;
-    let Some(file_path) = inventory.file_path.as_deref() else {
-        return Err(invalid_params("this edition has no file to send"));
-    };
-    if !camino::Utf8Path::new(file_path).is_file() {
-        return Err(invalid_params("the book file is missing from disk"));
-    }
-
-    let offer_id = ulid::Ulid::generate().to_string();
-    let inventory_id = inventory.id.to_hex();
-    // The reader on the other side is asked about this book before any catalog
-    // row lands, so the title and authors cannot come from its own tables: the
-    // offer carries them.
-    let work = works::Entity::find_by_id(edition.work_id)
-        .one(db)
-        .await?
-        .ok_or_else(|| invalid_params(format!("unknown work: {}", edition.work_id)))?;
-    let title = edition
-        .title
-        .clone()
-        .filter(|title| !title.trim().is_empty())
-        .unwrap_or_else(|| work.title.clone());
-    let mut authors: Vec<String> = authors::Entity::find()
-        .filter(
-            authors::Column::Id.is_in(
-                work_authors::Entity::find()
-                    .filter(work_authors::Column::WorkId.eq(edition.work_id))
-                    .all(db)
-                    .await?
-                    .into_iter()
-                    .map(|link| link.author_id)
-                    .collect::<Vec<_>>(),
-            ),
-        )
-        .all(db)
-        .await?
-        .into_iter()
-        .map(|author| author.name)
-        .collect();
-    authors.sort();
-    let payload = serde_json::json!({
-        "offer_id": offer_id,
-        "inventory_id": inventory_id,
-        "edition_id": edition_id.to_hex(),
-        "work_id": edition.work_id.to_hex(),
-        "to_device_id": device_id.to_string(),
-        "title": title,
-        "authors": authors,
-        "file_name": camino::Utf8Path::new(file_path)
-            .file_name()
-            .unwrap_or("book"),
-        "file_size_bytes": inventory.file_size_bytes,
-        "file_hash": inventory.file_hash,
-        "has_cover": inventory
-            .cover_path
-            .as_deref()
-            .is_some_and(|path| camino::Utf8Path::new(path).is_file()),
-    })
-    .to_string();
-
-    // An offer is a change-log row so it rides the same version cursor the
-    // receiver already pulls. `OFFER` is deliberately not an apply operation:
-    // the receiver handles the row itself and must not replay it as a table
-    // mutation.
-    livtet_data::sql::query(
-        "INSERT INTO change_log (entity_type, entity_id, operation, version, payload, changed_at, device_id) \
-         VALUES ('file_offer', ?, 'OFFER', (SELECT COALESCE(MAX(version), 0) + 1 FROM change_log), ?, datetime('now'), ?)",
-    )
-    .bind(inventory_id.clone())
-    .bind(payload)
-    .bind(state.device_id.clone())
-    .execute(&state.pool)
-    .await
-    .map_err(|error| RpcFailure {
-        code: rpc::error_code::INTERNAL_ERROR,
-        message: format!("could not record the file offer: {error}"),
-    })?;
-
-    // Touching `updated_at` makes the existing audit triggers emit full
-    // UPDATE payloads for the work, edition, and file, so a normal pull also
-    // carries the catalog record and cover path.
-    livtet_data::sql::query(
-        "UPDATE digital_inventory SET updated_at = datetime('now') WHERE id = ?",
-    )
-    .bind(inventory.id.to_bytes().to_vec())
-    .execute(&state.pool)
-    .await
-    .map_err(offer_touch_error)?;
-    livtet_data::sql::query("UPDATE editions SET updated_at = datetime('now') WHERE id = ?")
-        .bind(edition_id.to_bytes().to_vec())
-        .execute(&state.pool)
+    let wire = state.wire_state().await;
+    let offer = crate::pairs::offer_book(&wire, &params.edition_id, &params.device_id)
         .await
-        .map_err(offer_touch_error)?;
-    livtet_data::sql::query(
-        "UPDATE works SET updated_at = datetime('now') WHERE id = (SELECT work_id FROM editions WHERE id = ?)",
-    )
-    .bind(edition_id.to_bytes().to_vec())
-    .execute(&state.pool)
-    .await
-    .map_err(offer_touch_error)?;
-
+        .map_err(claim_failure)?;
     Ok(serde_json::json!({
-        "offer_id": offer_id,
-        "inventory_id": inventory_id,
-        "device_id": device_id.to_string(),
+        "offer_id": offer.offer_id,
+        "inventory_id": offer.inventory_id,
+        "device_id": params.device_id,
     }))
 }
 
-fn offer_touch_error(error: impl std::fmt::Display) -> RpcFailure {
-    RpcFailure {
-        code: rpc::error_code::INTERNAL_ERROR,
-        message: format!("could not stage the book metadata: {error}"),
+/// Map a shared pairing or offer failure onto the error the desktop's UI reads.
+fn claim_failure(error: crate::pairs::ClaimError) -> RpcFailure {
+    use crate::pairs::ClaimError;
+    match error {
+        ClaimError::Db(message) => RpcFailure {
+            code: rpc::error_code::INTERNAL_ERROR,
+            message,
+        },
+        other => invalid_params(other.to_string()),
     }
 }
 
@@ -1921,7 +1744,7 @@ async fn handle_server_rebind(
             let node_id = service.node_id().0;
             let port = service.bound_port().unwrap_or(params.port);
             *state.discovery.lock().await = Some(Arc::clone(&service));
-            livtet_sync_iroh::spawn_server(endpoint, crate::wire::handler(Arc::clone(state)));
+            livtet_sync_iroh::spawn_server(endpoint, crate::wire::handler(state.wire_state().await));
             advertise(state).await;
             tracing::info!(%node_id, port, "sync endpoint rebound");
             Ok(serde_json::json!({ "node_id": node_id, "port": port }))
