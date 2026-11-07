@@ -18,6 +18,7 @@ use std::time::{Duration, Instant};
 use camino::Utf8Path;
 use livtet_core::data::SharedState;
 use livtet_core::data::migrator::Kind;
+use livtet_core::types::{DbId, DeviceType, now_primitive};
 use livtet_iroh::{DiscoveryService, SecretKey};
 use livtet_mdns::Advertiser;
 use livtet_sync::SyncEngine;
@@ -57,6 +58,7 @@ pub enum SyncPairingResult {
 #[uniffi::export(async_runtime = "tokio")]
 pub async fn pair_sync_device(
     secret_key_path: String,
+    db_path: String,
     peer_node_id: String,
     device_id: String,
     name: String,
@@ -69,17 +71,20 @@ pub async fn pair_sync_device(
         .await
         .map_err(|error| LivtetError::Sync(format!("could not file the pairing claim: {error}")))?;
 
-    match outcome {
-        PairingOutcome::Pending { claim } => await_decision(&client, claim, wait_secs).await,
+    let result = match outcome {
+        PairingOutcome::Pending { claim } => await_decision(&client, claim, wait_secs).await?,
         PairingOutcome::Paired {
             device_id,
             session_token,
-        } => Ok(SyncPairingResult::Paired {
+        } => SyncPairingResult::Paired {
             device_id,
             session_token,
-        }),
-        PairingOutcome::Refused { reason } => Ok(SyncPairingResult::Refused { reason }),
-    }
+        },
+        PairingOutcome::Refused { reason } => SyncPairingResult::Refused { reason },
+    };
+
+    remember_if_paired(&db_path, &client, &result, &name, &device_type).await?;
+    Ok(result)
 }
 
 /// Continue waiting on a claim already filed by [`pair_sync_device`].
@@ -89,12 +94,134 @@ pub async fn pair_sync_device(
 #[uniffi::export(async_runtime = "tokio")]
 pub async fn sync_pairing_status(
     secret_key_path: String,
+    db_path: String,
     peer_node_id: String,
     claim: String,
     wait_secs: u32,
+    name: String,
+    device_type: String,
 ) -> Result<SyncPairingResult, LivtetError> {
     let client = connect(secret_key_path, peer_node_id).await?;
-    await_decision(&client, claim, wait_secs).await
+    let result = await_decision(&client, claim, wait_secs).await?;
+    remember_if_paired(&db_path, &client, &result, &name, &device_type).await?;
+    Ok(result)
+}
+
+/// Record a finished pairing in `paired_devices`, with the token it issued.
+///
+/// The row is this device's own bookkeeping, keyed on the *peer's* device id:
+/// `outbound` says this device may dial it, `node_id` is what to dial, and
+/// `peer_token` is the credential that makes the pull authorize. Pairing answers
+/// with the claiming device's id — this one's — so the peer's identity is read
+/// back over the same connection rather than guessed.
+async fn remember_if_paired(
+    db_path: &str,
+    client: &Client,
+    result: &SyncPairingResult,
+    name: &str,
+    device_type: &str,
+) -> Result<(), LivtetError> {
+    use livtet_core::data::client_entities::paired_devices;
+    use livtet_core::data::orm::{EntityTrait, Set, sea_query::OnConflict};
+
+    let SyncPairingResult::Paired { session_token, .. } = result else {
+        return Ok(());
+    };
+
+    // Bookkeeping must not undo a pairing: a peer that declines to identify
+    // itself still paired, so the row is skipped rather than the result failed.
+    let identity = match client.identity().await {
+        Ok(identity) => identity,
+        Err(_) => {
+            // Bookkeeping must not undo a pairing: a peer that declines to
+            // identify itself still paired. No row is written, so
+            // [`sync_peer_token`] reports `None` and the caller has to supply the
+            // token it was handed — which is what happened before this existed.
+            return Ok(());
+        }
+    };
+    let peer_device = identity
+        .device_id
+        .parse::<DbId>()
+        .ok()
+        .or_else(|| DbId::from_hex(&identity.device_id).ok())
+        .ok_or_else(|| LivtetError::Sync(format!("not a device id: {}", identity.device_id)))?;
+
+    let shared = SharedState::connect(db_path, &[Kind::Business, Kind::Client])
+        .await
+        .map_err(|error| LivtetError::Database(error.to_string()))?;
+    let db = livtet_core::data::orm::SqlxSqliteConnector::from_sqlx_sqlite_pool(shared.pool.clone());
+
+    let model = paired_devices::ActiveModel {
+        device_id: Set(peer_device),
+        name: Set(Some(name.to_string())),
+        listen_on: Set(None),
+        device_type_id: Set(Some(DbId::from(DeviceType::from_tag(device_type)))),
+        paired_at: Set(now_primitive()),
+        last_sync_at: Set(None),
+        // This device filed the claim, so this device may dial the peer.
+        outbound: Set(true),
+    };
+    paired_devices::Entity::insert(model)
+        .on_conflict(
+            OnConflict::column(paired_devices::Column::DeviceId)
+                .update_columns([
+                    paired_devices::Column::Name,
+                    paired_devices::Column::DeviceTypeId,
+                    paired_devices::Column::PairedAt,
+                    paired_devices::Column::Outbound,
+                ])
+                .to_owned(),
+        )
+        .exec(&db)
+        .await
+        .map_err(|error| LivtetError::Database(error.to_string()))?;
+
+    // `peer_token` and `node_id` come from later client migrations and are not on
+    // the entity, so they are written directly.
+    livtet_core::data::sql::query(
+        "UPDATE paired_devices SET peer_session_token = ?, node_id = ? WHERE device_id = ?",
+    )
+    .bind(session_token.clone())
+    .bind(identity.node_id.clone())
+    .bind(peer_device.to_bytes().to_vec())
+    .execute(&shared.pool)
+    .await
+    .map_err(|error| LivtetError::Database(error.to_string()))?;
+
+    Ok(())
+}
+
+/// The token a peer issued this device, for pulls that do not want to be handed one.
+///
+/// Read by the peer's node id, because that is what a dial starts from. `None`
+/// means this device never completed a pairing with it, or the row predates the
+/// column.
+#[uniffi::export(async_runtime = "tokio")]
+pub async fn sync_peer_token(
+    db_path: String,
+    peer_node_id: String,
+) -> Result<Option<String>, LivtetError> {
+    use livtet_core::data::sql::Row;
+
+    let shared = SharedState::connect(&db_path, &[Kind::Business, Kind::Client])
+        .await
+        .map_err(|error| LivtetError::Database(error.to_string()))?;
+    let row = livtet_core::data::sql::query(
+        "SELECT peer_session_token FROM paired_devices WHERE node_id = ?",
+    )
+    .bind(peer_node_id)
+    .fetch_optional(&shared.pool)
+    .await
+    .map_err(|error| LivtetError::Database(error.to_string()))?;
+
+    Ok(match row {
+        Some(row) => row
+            .try_get::<Option<String>, _>("peer_session_token")
+            .ok()
+            .flatten(),
+        None => None,
+    })
 }
 
 /// What a peer says about itself, as returned by [`peer_sync_identity`].
@@ -401,25 +528,40 @@ pub async fn sync_decide_pairing(
 /// The devices this endpoint has paired with.
 #[uniffi::export(async_runtime = "tokio")]
 pub async fn sync_paired_devices(
-    secret_key_path: String,
+    db_path: String,
 ) -> Result<Vec<SyncPairedDevice>, LivtetError> {
-    use livtet_core::data::orm::EntityTrait;
+    use livtet_core::data::sql::Row;
 
-    let wire = advertisement(&secret_key_path)?;
-    let rows = livtet_core::data::client_entities::paired_devices::Entity::find()
-        .all(wire.engine.db())
+    // Read straight from the library rather than through a running endpoint:
+    // the paired list is what the screen shows, and it is just as true before the
+    // screen opens or after it closes. `node_id` is not on the entity, so the row
+    // is read whole.
+    let shared = SharedState::connect(&db_path, &[Kind::Business, Kind::Client])
         .await
         .map_err(|error| LivtetError::Database(error.to_string()))?;
+    let rows = livtet_core::data::sql::query(
+        "SELECT device_id, name, node_id, outbound FROM paired_devices ORDER BY paired_at DESC",
+    )
+    .fetch_all(&shared.pool)
+    .await
+    .map_err(|error| LivtetError::Database(error.to_string()))?;
 
-    Ok(rows
-        .into_iter()
-        .map(|row| SyncPairedDevice {
-            device_id: row.device_id.to_string(),
-            node_id: None,
-            name: row.name,
-            outbound: row.outbound,
-        })
-        .collect())
+    let mut paired = Vec::with_capacity(rows.len());
+    for row in rows {
+        let device_id = row
+            .try_get::<Vec<u8>, _>("device_id")
+            .ok()
+            .and_then(|bytes| <[u8; 16]>::try_from(bytes.as_slice()).ok())
+            .map(|bytes| DbId::from_bytes(bytes).to_string())
+            .unwrap_or_default();
+        paired.push(SyncPairedDevice {
+            device_id,
+            node_id: row.try_get::<Option<String>, _>("node_id").ok().flatten(),
+            name: row.try_get::<Option<String>, _>("name").ok().flatten(),
+            outbound: row.try_get::<bool, _>("outbound").unwrap_or(false),
+        });
+    }
+    Ok(paired)
 }
 
 /// Offer `edition_id`'s file to a paired device.
@@ -542,13 +684,20 @@ mod tests {
 
         let handler: Handler = Arc::new({
             let polls = Arc::clone(&polls);
+            let own_node = peer_node_id.clone();
             move |request, _remote| {
                 let polls = Arc::clone(&polls);
+                let own_node = own_node.clone();
                 Box::pin(async move {
                     match request {
                         Request::Pair { .. } => Outcome::reply(Response::PairingPending {
                             claim: "claim-9".to_string(),
                         }),
+                        Request::Identity => Outcome::reply(Response::Identity(Identity {
+                            protocol: PROTOCOL_VERSION,
+                            node_id: own_node,
+                            device_id: "01ARZ3NDEKTSV4RRFFQ69G5FAX".to_string(),
+                        })),
                         Request::PairStatus { .. } => {
                             let round = polls.fetch_add(1, Ordering::SeqCst);
                             if round < DECIDES_AFTER_POLLS {
@@ -573,8 +722,10 @@ mod tests {
 
         let dir = camino_tempfile::Utf8TempDir::new().expect("temp dir");
         let key_path = dir.path().join("sync.key").to_string();
+        let db_path = dir.path().join("livtet.db").to_string();
         let filed = pair_sync_device(
             key_path.clone(),
+            db_path.clone(),
             peer_node_id.clone(),
             "01ARZ3NDEKTSV4RRFFQ69G5FAW".to_string(),
             "Reader's phone".to_string(),
@@ -587,9 +738,10 @@ mod tests {
             panic!("a zero-second wait should return the claim, not {filed:?}");
         };
 
-        let first = sync_pairing_status(key_path.clone(), peer_node_id.clone(), claim.clone(), 1)
-            .await
-            .expect("first round");
+        let first =
+            sync_pairing_status(key_path.clone(), db_path.clone(), peer_node_id.clone(), claim.clone(), 1, "Reader's phone".to_string(), "android".to_string())
+                .await
+                .expect("first round");
         assert!(
             matches!(first, SyncPairingResult::Pending { .. }),
             "an undecided peer must stay pending, got {first:?}"
@@ -600,13 +752,28 @@ mod tests {
             other => panic!("expected pending, got {other:?}"),
         };
         for _ in 0..8 {
-            match sync_pairing_status(key_path.clone(), peer_node_id.clone(), claim.clone(), 2)
-                .await
-                .expect("later round")
+            match sync_pairing_status(
+                key_path.clone(),
+                db_path.clone(),
+                peer_node_id.clone(),
+                claim.clone(),
+                2,
+                "Reader's phone".to_string(),
+                "android".to_string(),
+            )
+            .await
+            .expect("later round")
             {
                 SyncPairingResult::Pending { claim: next } => claim = next,
                 SyncPairingResult::Paired { session_token, .. } => {
                     assert_eq!(session_token, "token-after-wait");
+                    assert_eq!(
+                        sync_peer_token(db_path.clone(), peer_node_id.clone())
+                            .await
+                            .expect("read the stored token"),
+                        Some("token-after-wait".to_string()),
+                        "a completed pairing records the token it was issued"
+                    );
                     return;
                 }
                 other => panic!("peer refused unexpectedly: {other:?}"),
@@ -737,7 +904,9 @@ mod tests {
         let peer = DiscoveryService::bind().await.expect("peer endpoint");
         let peer_node_id = peer.node_id().as_str().to_string();
 
-        let handler: Handler = Arc::new(|request, _remote| {
+        let own_node = peer_node_id.clone();
+        let handler: Handler = Arc::new(move |request, _remote| {
+            let own_node = own_node.clone();
             Box::pin(async move {
                 match request {
                     Request::Pair { .. } => Outcome::reply(Response::PairingPending {
@@ -750,6 +919,13 @@ mod tests {
                             session_token: "token-1".to_string(),
                         })
                     }
+                    // A real peer identifies itself after approving, which is how
+                    // the row gets keyed on its device id rather than ours.
+                    Request::Identity => Outcome::reply(Response::Identity(Identity {
+                        protocol: PROTOCOL_VERSION,
+                        node_id: own_node,
+                        device_id: "01ARZ3NDEKTSV4RRFFQ69G5FAX".to_string(),
+                    })),
                     other => Outcome::reply(Response::Refused {
                         reason: format!("unexpected request: {other:?}"),
                     }),
@@ -761,6 +937,7 @@ mod tests {
         let dir = camino_tempfile::Utf8TempDir::new().expect("temp dir");
         let result = pair_sync_device(
             dir.path().join("sync.key").to_string(),
+            dir.path().join("livtet.db").to_string(),
             peer_node_id,
             "01ARZ3NDEKTSV4RRFFQ69G5FAW".to_string(),
             "Reader's phone".to_string(),
@@ -810,6 +987,7 @@ mod tests {
 
         let phone_db = phone_dir.path().join("livtet.db").to_string();
         let phone_key = phone_dir.path().join("sync.key").to_string();
+        let peer_db = peer_dir.path().join("livtet.db").to_string();
         let peer_key = peer_dir.path().join("sync.key").to_string();
 
         // The phone's library: one work, one edition, one real file.
@@ -864,6 +1042,7 @@ mod tests {
         let peer_device = "01ARZ3NDEKTSV4RRFFQ69G5FAX".to_string();
         let claim = match pair_sync_device(
             peer_key.clone(),
+            peer_db.clone(),
             phone_node.clone(),
             peer_device.clone(),
             "Studio".to_string(),
@@ -892,7 +1071,15 @@ mod tests {
             .expect("approve")
             .expect("an approval mints a token");
 
-        match sync_pairing_status(peer_key.clone(), phone_node.clone(), claim, 5)
+        match sync_pairing_status(
+            peer_key.clone(),
+            peer_db.clone(),
+            phone_node.clone(),
+            claim,
+            5,
+            "Studio".to_string(),
+            "desktop".to_string(),
+        )
             .await
             .expect("poll")
         {
@@ -902,6 +1089,16 @@ mod tests {
             ),
             other => panic!("the approval reaches the claimant, got {other:?}"),
         }
+
+        // Pairing writes what a later pull needs: the token the phone issued, on
+        // the row this device dials, so no caller has to hand it back in.
+        assert_eq!(
+            sync_peer_token(peer_db.clone(), phone_node.clone())
+                .await
+                .expect("read the stored token"),
+            Some(issued.clone()),
+            "the approved token is recorded on the peer's row"
+        );
 
         // The offer rides the change log; the peer is the one that pulls.
         let sent = sync_send_book(phone_key.clone(), edition.id.to_string(), peer_device)
