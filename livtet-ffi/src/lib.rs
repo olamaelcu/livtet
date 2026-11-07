@@ -19,6 +19,7 @@ mod mutations;
 mod quotes;
 mod reading;
 mod search;
+mod settings;
 mod store;
 mod sync;
 mod syncpull;
