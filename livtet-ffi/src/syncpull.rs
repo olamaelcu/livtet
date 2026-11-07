@@ -282,6 +282,29 @@ pub async fn sync_offer_accept(
     })
 }
 
+/// Fetch an offered book's cover, so a decision can be made on the book's face.
+///
+/// `None` means the peer has none, which is not an error: the offer is still
+/// valid and simply has no art to show. These are the peer's own bytes, not
+/// resampled — covers are small, and re-encoding on every phone that looks at an
+/// offer is work for nothing.
+#[uniffi::export(async_runtime = "tokio")]
+pub async fn sync_offer_cover(
+    secret_key_path: String,
+    session_token: String,
+    peer_node_id: String,
+    inventory_id: String,
+) -> Result<Option<Vec<u8>>, LivtetError> {
+    let client = connect(secret_key_path, peer_node_id)
+        .await?
+        .with_token(session_token);
+    let cover = client
+        .cover(&inventory_id)
+        .await
+        .map_err(|error| LivtetError::Sync(format!("could not fetch the cover: {error}")))?;
+    Ok(cover.map(|(_header, bytes)| bytes))
+}
+
 /// Decline an offer. The book stays on the peer; nothing is written locally.
 #[uniffi::export(async_runtime = "tokio")]
 pub async fn sync_offer_reject(
@@ -950,6 +973,21 @@ mod tests {
 
         let books_dir = dir.path().join("books").to_string();
         let covers_dir = dir.path().join("covers").to_string();
+        // The offer can be looked at before it is accepted: the cover comes from
+        // the peer without writing anything locally.
+        assert_eq!(
+            sync_offer_cover(
+                key_path.clone(),
+                "session-token".to_string(),
+                peer_node_id.clone(),
+                "inv-1".to_string(),
+            )
+            .await
+            .expect("fetch the cover"),
+            Some(cover.clone()),
+            "the preview is the peer's own cover bytes"
+        );
+
         let received = sync_offer_accept(
             key_path,
             "session-token".to_string(),
