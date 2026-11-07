@@ -20,6 +20,7 @@
 //! owns the per-peer token.
 
 use std::collections::{HashMap, HashSet};
+use std::io::Write;
 
 use camino::Utf8Path;
 use livtet_core::data::SharedState;
@@ -32,6 +33,10 @@ use crate::sync::connect;
 
 /// The change-log entity type that marks a book offer.
 const OFFER_ENTITY_TYPE: &str = "file_offer";
+
+/// Read size for a book download: large enough to keep the stream busy, small
+/// enough that progress lands often while a big file is moving.
+const CHUNK_BYTES: usize = 256 * 1024;
 
 /// Keys an offer payload uses, as written by the offering daemon.
 const OFFER_ID: &str = "offer_id";
@@ -67,6 +72,16 @@ pub struct SyncPullReport {
     /// The peer had more rows than the page size; pull again immediately.
     pub has_more: bool,
     pub offers: Vec<SyncOffer>,
+}
+
+/// Byte-level progress for one file moving from a peer.
+///
+/// The download streams to disk in chunks, so the caller can show how far the
+/// current book has got instead of only which book is in flight.
+#[uniffi::export(callback_interface)]
+pub trait TransferProgressListener: Send + Sync {
+    /// `done` of `total` bytes written for the file being received.
+    fn on_progress(&self, done: u64, total: u64);
 }
 
 /// A book that landed on disk.
@@ -150,6 +165,7 @@ pub async fn sync_offer_accept(
     offer: SyncOffer,
     books_dir: String,
     covers_dir: String,
+    progress: Option<Box<dyn TransferProgressListener>>,
 ) -> Result<SyncReceivedBook, LivtetError> {
     let client = connect(secret_key_path, peer_node_id)
         .await?
@@ -170,16 +186,34 @@ pub async fn sync_offer_accept(
         .unwrap_or("book");
     let file_path = books_dir.join(format!("{}-{base}", offer.inventory_id));
 
-    let (_header, body) = client
+    let (header, mut body) = client
         .file(&offer.inventory_id, 0, None, None)
         .await
         .map_err(|error| LivtetError::Sync(format!("could not download the book: {error}")))?;
-    let bytes = body
-        .read_all()
-        .await
-        .map_err(|error| LivtetError::Sync(format!("could not read the book: {error}")))?;
-    std::fs::write(file_path.as_std_path(), &bytes)
-        .map_err(|error| LivtetError::Sync(format!("could not write {file_path}: {error}")))?;
+    // Streamed rather than read whole: a book can be hundreds of megabytes, and
+    // writing each chunk is also what gives the caller byte-level progress.
+    let total = header.total;
+    let mut file = std::fs::File::create(file_path.as_std_path())
+        .map_err(|error| LivtetError::Sync(format!("could not create {file_path}: {error}")))?;
+    let mut buffer = vec![0u8; CHUNK_BYTES];
+    let mut written = 0u64;
+    loop {
+        let read = body
+            .read_chunk(&mut buffer)
+            .await
+            .map_err(|error| LivtetError::Sync(format!("could not read the book: {error}")))?;
+        if read == 0 {
+            break;
+        }
+        file.write_all(&buffer[..read])
+            .map_err(|error| LivtetError::Sync(format!("could not write {file_path}: {error}")))?;
+        written += read as u64;
+        if let Some(listener) = progress.as_deref() {
+            listener.on_progress(written, total);
+        }
+    }
+    file.flush()
+        .map_err(|error| LivtetError::Sync(format!("could not flush {file_path}: {error}")))?;
 
     let mut cover_path = None;
     if offer.has_cover
@@ -682,6 +716,7 @@ mod tests {
             offer,
             books_dir.clone(),
             covers_dir,
+            None,
         )
         .await
         .expect("accept");
