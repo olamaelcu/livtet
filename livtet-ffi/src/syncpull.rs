@@ -168,6 +168,17 @@ pub async fn sync_pull(
     Ok(report)
 }
 
+/// The editions the reader would see without art.
+///
+/// A row whose only art is a cover URL already draws; asking a peer for it again would
+/// repeat on every sync and never be satisfied.
+const COVERS_NEEDED_SQL: &str = "\
+    SELECT lower(hex(e.id)) FROM editions e \
+    LEFT JOIN digital_inventory i ON i.edition_id = e.id \
+    WHERE (i.cover_path IS NULL OR i.cover_path = '') \
+      AND (e.cover_image_url IS NULL OR e.cover_image_url = '') \
+    LIMIT ?";
+
 /// Most editions one sync asks art for, and per request.
 const COVERS_PER_SYNC: i64 = 24;
 const COVER_BATCH: usize = 8;
@@ -185,13 +196,9 @@ async fn pull_missing_covers(
     let state = SharedState::connect(db_path, &[Kind::Business, Kind::Client])
         .await
         .map_err(|error| LivtetError::Database(error.to_string()))?;
-    let wanted: Vec<String> = livtet_core::data::sql::query_scalar(
-        "SELECT lower(hex(e.id)) FROM editions e \
-         LEFT JOIN digital_inventory i ON i.edition_id = e.id \
-         WHERE i.cover_path IS NULL OR i.cover_path = '' \
-         LIMIT ?",
-    )
-    .bind(COVERS_PER_SYNC)
+    let wanted: Vec<String> =
+        livtet_core::data::sql::query_scalar(COVERS_NEEDED_SQL)
+            .bind(COVERS_PER_SYNC)
     .fetch_all(&state.pool)
     .await
     .map_err(|error| LivtetError::Database(error.to_string()))?;
@@ -1269,5 +1276,65 @@ mod tests {
             .expect("query the mirrored work")
             .expect("the mirrored work must read back under its own id");
         assert_eq!(row.title, "Designing Data-Intensive Applications");
+    }
+
+    /// A cover URL is art the reader already sees; only the editions with none at all
+    /// are worth asking a peer for.
+    #[tokio::test]
+    async fn only_editions_without_any_art_are_asked_for_covers() {
+        let dir = camino_tempfile::Utf8TempDir::new().expect("temp dir");
+        let db_path = dir.path().join("library.db").to_string();
+        let state = SharedState::connect(&db_path, &[Kind::Business, Kind::Client])
+            .await
+            .expect("connect");
+        let work = DbId::new();
+        livtet_core::data::sql::query(
+            "INSERT INTO works (id, title, created_at) VALUES (?, 'Covers', datetime('now'))",
+        )
+        .bind(work.to_bytes().to_vec())
+        .execute(&state.pool)
+        .await
+        .expect("seed a work");
+        let with_url = DbId::new();
+        let with_file = DbId::new();
+        let bare = DbId::new();
+        for (edition, url) in [
+            (with_url, Some("https://covers.example/x.jpg")),
+            (with_file, None),
+            (bare, None),
+        ] {
+            livtet_core::data::sql::query(
+                "INSERT INTO editions (id, work_id, created_at, cover_image_url) \
+                 VALUES (?, ?, datetime('now'), ?)",
+            )
+            .bind(edition.to_bytes().to_vec())
+            .bind(work.to_bytes().to_vec())
+            .bind(url)
+            .execute(&state.pool)
+            .await
+            .expect("seed an edition");
+        }
+        livtet_core::data::sql::query(
+            "INSERT INTO digital_inventory (id, edition_id, cover_path) VALUES (?, ?, ?)",
+        )
+        .bind(DbId::new().to_bytes().to_vec())
+        .bind(with_file.to_bytes().to_vec())
+        .bind("/covers/on-disk.jpg")
+        .execute(&state.pool)
+        .await
+        .expect("seed a local cover");
+
+        let wanted: Vec<String> =
+            livtet_core::data::sql::query_scalar(COVERS_NEEDED_SQL)
+                .bind(COVERS_PER_SYNC)
+                .fetch_all(&state.pool)
+                .await
+                .expect("select the want list");
+
+        assert_eq!(
+            wanted,
+            vec![bare.to_hex()],
+            "only the edition with neither a URL nor a local file is asked for"
+        );
     }
 }
