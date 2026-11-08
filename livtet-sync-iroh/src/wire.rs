@@ -53,6 +53,14 @@ pub struct Identity {
     pub node_id: String,
     /// The local ULID the peer's sync rows are written against.
     pub device_id: String,
+    /// The name this device advertises, when it has one.
+    ///
+    /// A peer that pairs by node id never saw an mDNS advertisement, so this is
+    /// the only way its paired-devices row can be labelled with the other
+    /// device's name rather than with its own. Absent from older peers, which is
+    /// why it is optional and not sent when empty.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
 }
 
 /// One operation on a sync stream.
@@ -693,6 +701,7 @@ mod tests {
             protocol: PROTOCOL_VERSION,
             node_id: "node".to_string(),
             device_id: "device".to_string(),
+            name: Some("Desktop".to_string()),
         };
         let (mut writer, mut reader) = tokio::io::duplex(1024);
 

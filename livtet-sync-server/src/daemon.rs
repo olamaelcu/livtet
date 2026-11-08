@@ -114,7 +114,10 @@ impl DaemonState {
         .with_pairing(
             Arc::clone(&self.pair_waiters),
             Arc::clone(&self.pair_decisions),
-        );
+        )
+        // Read at construction: a rename re-spawns the server, and this is the
+        // name that spawn advertises.
+        .with_device_name(self.device_name.lock().await.clone());
 
         Arc::new(match node_id {
             Some(node_id) => state.with_node_id(node_id),

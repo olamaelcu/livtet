@@ -59,6 +59,11 @@ pub struct WireState {
     pub pool: SqlitePool,
     /// This endpoint's device id.
     pub device_id: String,
+    /// The name this endpoint advertises, when it has one.
+    ///
+    /// `Identity` reports it so a peer that paired by node id — never having
+    /// seen an mDNS advertisement — can label the row with this device's name.
+    pub device_name: Option<String>,
     /// This endpoint's iroh node id, as peers dial it.
     ///
     /// `Identity` reports it so a peer can confirm who it reached. An endpoint
@@ -91,6 +96,7 @@ impl WireState {
             engine,
             pool,
             device_id: device_id.into(),
+            device_name: None,
             node_id: None,
             pair_waiters: new_pair_waiters(),
             pair_decisions: new_pair_decisions(),
@@ -152,6 +158,12 @@ impl WireState {
     /// The node id this endpoint answers as.
     pub fn with_node_id(mut self, node_id: impl Into<String>) -> Self {
         self.node_id = Some(node_id.into());
+        self
+    }
+
+    /// The name peers are told this endpoint has.
+    pub fn with_device_name(mut self, name: Option<String>) -> Self {
+        self.device_name = name.filter(|name| !name.trim().is_empty());
         self
     }
 

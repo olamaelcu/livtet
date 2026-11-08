@@ -240,6 +240,7 @@ async fn dispatch(state: &Arc<WireState>, request: Request, remote: String) -> A
             protocol: PROTOCOL_VERSION,
             node_id: self_node,
             device_id: state.device_id.clone(),
+            name: state.device_name.clone(),
         })),
 
         Request::Status { token } => {

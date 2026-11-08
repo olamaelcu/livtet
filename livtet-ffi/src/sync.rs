@@ -83,7 +83,7 @@ pub async fn pair_sync_device(
         PairingOutcome::Refused { reason } => SyncPairingResult::Refused { reason },
     };
 
-    remember_if_paired(&db_path, &client, &result, &name, &device_type).await?;
+    remember_if_paired(&db_path, &client, &result, &device_type).await?;
     Ok(result)
 }
 
@@ -103,7 +103,7 @@ pub async fn sync_pairing_status(
 ) -> Result<SyncPairingResult, LivtetError> {
     let client = connect(secret_key_path, peer_node_id).await?;
     let result = await_decision(&client, claim, wait_secs).await?;
-    remember_if_paired(&db_path, &client, &result, &name, &device_type).await?;
+    remember_if_paired(&db_path, &client, &result, &device_type).await?;
     Ok(result)
 }
 
@@ -118,7 +118,6 @@ async fn remember_if_paired(
     db_path: &str,
     client: &Client,
     result: &SyncPairingResult,
-    name: &str,
     device_type: &str,
 ) -> Result<(), LivtetError> {
     use livtet_core::data::client_entities::paired_devices;
@@ -152,9 +151,13 @@ async fn remember_if_paired(
         .map_err(|error| LivtetError::Database(error.to_string()))?;
     let db = livtet_core::data::orm::SqlxSqliteConnector::from_sqlx_sqlite_pool(shared.pool.clone());
 
+    // The *peer's* name, from its identity reply. The `name` this call receives
+    // is the claiming device's own — writing that here labelled every row with
+    // the reader's own device.
+    let peer_name = identity.name.clone().filter(|name| !name.trim().is_empty());
     let model = paired_devices::ActiveModel {
         device_id: Set(peer_device),
-        name: Set(Some(name.to_string())),
+        name: Set(peer_name),
         listen_on: Set(None),
         device_type_id: Set(Some(DbId::from(DeviceType::from_tag(device_type)))),
         paired_at: Set(now_primitive()),
@@ -233,6 +236,8 @@ pub struct SyncPeerIdentity {
     pub node_id: String,
     pub device_id: String,
     pub protocol: u32,
+    /// The name the peer advertises, when it sends one.
+    pub name: Option<String>,
 }
 
 /// Ask `node_id` who it is, over the sync protocol.
@@ -254,6 +259,7 @@ pub async fn peer_sync_identity(
         node_id: identity.node_id,
         device_id: identity.device_id,
         protocol: identity.protocol,
+        name: identity.name,
     })
 }
 
@@ -387,7 +393,7 @@ pub async fn advertise_sync_device(
     let (ip, port) = advertised_endpoint(&discovery);
 
     let wire = Arc::new(
-        wire_state(&db_path, &device_id, Some(node_id.clone()))
+        wire_state(&db_path, &device_id, Some(node_id.clone()), Some(name.clone()))
             .await?
             .counting(),
     );
@@ -630,6 +636,7 @@ async fn wire_state(
     db_path: &str,
     device_id: &str,
     node_id: Option<String>,
+    name: Option<String>,
 ) -> Result<WireState, LivtetError> {
     let shared = SharedState::connect(db_path, &[Kind::Business, Kind::Client])
         .await
@@ -638,7 +645,9 @@ async fn wire_state(
     let db =
         livtet_core::data::orm::SqlxSqliteConnector::from_sqlx_sqlite_pool(shared.pool.clone());
     let engine = SyncEngine::new(db, device_id.to_string());
-    let state = WireState::new(engine, shared.pool.clone(), device_id).counting();
+    let state = WireState::new(engine, shared.pool.clone(), device_id)
+        .counting()
+        .with_device_name(name);
     Ok(match node_id {
         Some(node_id) => state.with_node_id(node_id),
         None => state,
@@ -697,6 +706,7 @@ mod tests {
                             protocol: PROTOCOL_VERSION,
                             node_id: own_node,
                             device_id: "01ARZ3NDEKTSV4RRFFQ69G5FAX".to_string(),
+                            name: Some("Desktop".to_string()),
                         })),
                         Request::PairStatus { .. } => {
                             let round = polls.fetch_add(1, Ordering::SeqCst);
@@ -798,6 +808,7 @@ mod tests {
                         protocol: PROTOCOL_VERSION,
                         node_id: "aa11bb22cc33dd44ee55ff6677889900".to_string(),
                         device_id: "01ARZ3NDEKTSV4RRFFQ69G5FAV".to_string(),
+                        name: None,
                     })),
                     other => Outcome::reply(Response::Refused {
                         reason: format!("unexpected request: {other:?}"),
@@ -925,6 +936,7 @@ mod tests {
                         protocol: PROTOCOL_VERSION,
                         node_id: own_node,
                         device_id: "01ARZ3NDEKTSV4RRFFQ69G5FAX".to_string(),
+                        name: Some("Desktop".to_string()),
                     })),
                     other => Outcome::reply(Response::Refused {
                         reason: format!("unexpected request: {other:?}"),
@@ -954,6 +966,18 @@ mod tests {
                 session_token: "token-1".to_string(),
             }
         );
+
+        // The row is keyed on the peer, so it is labelled with the peer's name —
+        // the name this device sent in the claim is "Reader's phone".
+        let devices = sync_paired_devices(dir.path().join("livtet.db").to_string())
+            .await
+            .expect("paired devices");
+        assert_eq!(devices.len(), 1);
+        assert_eq!(
+            devices[0].name.as_deref(),
+            Some("Desktop"),
+            "the paired row carries the peer's advertised name"
+        );
     }
 
     #[test]
@@ -969,6 +993,44 @@ mod tests {
             std::fs::read_to_string(&path).expect("read"),
             hex::encode(first.to_bytes())
         );
+    }
+
+    /// An advertised device answers `Identity` with the name it advertises.
+    ///
+    /// This is the half that makes the paired row readable: a peer that paired
+    /// by node id learned nothing from mDNS, so the only name it can store is
+    /// the one this reply carries.
+    #[tokio::test]
+    async fn an_advertised_device_reports_the_name_it_advertises() {
+        use crate::LivtetStore;
+
+        let dir = camino_tempfile::Utf8TempDir::new().expect("dir");
+        let db = dir.path().join("livtet.db").to_string();
+        let key = dir.path().join("sync.key").to_string();
+
+        // The endpoint serves the library, so the library has to exist first.
+        let store =
+            LivtetStore::open(db.clone(), dir.path().join("index").to_string())
+                .await
+                .expect("store");
+        drop(store);
+
+        let node = advertise_sync_device(
+            key.clone(),
+            db.clone(),
+            "01ARZ3NDEKTSV4RRFFQ69G5FAW".to_string(),
+            "Reader's phone".to_string(),
+            "android".to_string(),
+        )
+        .await
+        .expect("advertise");
+
+        // A distinct key: dialling with the endpoint's own secret would derive
+        // the same node id and be refused as a connection to itself.
+        let peer_key = dir.path().join("peer.key").to_string();
+        let identity = peer_sync_identity(peer_key, node).await.expect("identity");
+
+        assert_eq!(identity.name.as_deref(), Some("Reader's phone"));
     }
 
     /// A phone holds a book, a peer claims it, and the book arrives on the peer.
