@@ -2,6 +2,49 @@ use sea_orm_migration::prelude::*;
 
 pub struct Migration;
 
+/// The m0011 guard: a change applied from a peer must not be logged again as
+/// local, or it echoes back and inflates the version counters.
+pub(crate) const SYNC_APPLY_GUARD: &str =
+    "COALESCE((SELECT value FROM client_settings WHERE key = 'sync_apply'), '0') <> '1'";
+
+/// The `reading_progress` audit trigger with the annotations column and the
+/// sync-apply guard. Shared with the follow-up migration that repairs rows
+/// created before the guard was added.
+pub(crate) fn reading_progress_trigger(name: &str, event: &str) -> String {
+    let (operation, row, id) = match name {
+        "insert" => ("INSERT", "new", "new"),
+        "update" => ("UPDATE", "new", "new"),
+        _ => ("DELETE", "old", "old"),
+    };
+    format!(
+        r#"
+CREATE TRIGGER IF NOT EXISTS sync_reading_progress_changelog_{name} {event} ON reading_progress
+WHEN {guard}
+BEGIN
+    INSERT INTO change_log (entity_type, entity_id, operation, version, payload, changed_at, device_id)
+    VALUES (
+        'reading_progress', lower(hex({id}.id)), '{operation}',
+        (SELECT COALESCE(MAX(version), 0) + 1 FROM change_log),
+        json_object(
+            'id', lower(hex({row}.id)),
+            'edition_id', lower(hex({row}.edition_id)),
+            'format_id', lower(hex({row}.format_id)),
+            'progress', {row}.progress,
+            'progress_unit', {row}.progress_unit,
+            'last_location', {row}.last_location,
+            'total_reading_time_secs', {row}.total_reading_time_secs,
+            'annotations', {row}.annotations,
+            'created_at', {row}.created_at
+        ),
+        datetime('now'), 'local'
+    );
+END
+"#,
+        guard = SYNC_APPLY_GUARD,
+    )
+}
+
+
 impl MigrationName for Migration {
     fn name(&self) -> &str {
         "client-0015-sync-reading-progress-annotations"
@@ -42,34 +85,7 @@ impl MigrationTrait for Migration {
                 "DROP TRIGGER IF EXISTS sync_reading_progress_changelog_{name}"
             ))
             .await?;
-            let (operation, row, id) = match name {
-                "insert" => ("INSERT", "new", "new"),
-                "update" => ("UPDATE", "new", "new"),
-                _ => ("DELETE", "old", "old"),
-            };
-            let payload = format!(
-                r#"
-CREATE TRIGGER IF NOT EXISTS sync_reading_progress_changelog_{name} {event} ON reading_progress BEGIN
-    INSERT INTO change_log (entity_type, entity_id, operation, version, payload, changed_at, device_id)
-    VALUES (
-        'reading_progress', lower(hex({id}.id)), '{operation}',
-        (SELECT COALESCE(MAX(version), 0) + 1 FROM change_log),
-        json_object(
-            'id', lower(hex({row}.id)),
-            'edition_id', lower(hex({row}.edition_id)),
-            'format_id', lower(hex({row}.format_id)),
-            'progress', {row}.progress,
-            'progress_unit', {row}.progress_unit,
-            'last_location', {row}.last_location,
-            'total_reading_time_secs', {row}.total_reading_time_secs,
-            'annotations', {row}.annotations,
-            'created_at', {row}.created_at
-        ),
-        datetime('now'), 'local'
-    );
-END
-"#
-            );
+            let payload = reading_progress_trigger(name, event);
             db.execute_unprepared(&payload).await?;
         }
         Ok(())
