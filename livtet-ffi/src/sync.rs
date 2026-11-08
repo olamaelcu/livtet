@@ -570,6 +570,28 @@ pub async fn sync_paired_devices(
     Ok(paired)
 }
 
+/// Forget one paired device.
+///
+/// The peer keeps its own row until it revokes: there is no cross-device
+/// revoke. Dropping this row stops this device authorizing or dialing it.
+#[uniffi::export(async_runtime = "tokio")]
+pub async fn sync_revoke_paired_device(
+    db_path: String,
+    device_id: String,
+) -> Result<bool, LivtetError> {
+    let id = DbId::from_wire(&device_id)
+        .ok_or_else(|| LivtetError::InvalidInput("invalid device id".to_string()))?;
+    let shared = SharedState::connect(&db_path, &[Kind::Business, Kind::Client])
+        .await
+        .map_err(|error| LivtetError::Database(error.to_string()))?;
+    let result = livtet_core::data::sql::query("DELETE FROM paired_devices WHERE device_id = ?")
+        .bind(id.to_bytes().to_vec())
+        .execute(&shared.pool)
+        .await
+        .map_err(|error| LivtetError::Database(error.to_string()))?;
+    Ok(result.rows_affected() > 0)
+}
+
 /// Offer `edition_id`'s file to a paired device.
 ///
 /// The offer is a change-log row here, so it travels the same version cursor the
@@ -977,6 +999,35 @@ mod tests {
             devices[0].name.as_deref(),
             Some("Desktop"),
             "the paired row carries the peer's advertised name"
+        );
+    }
+
+    #[tokio::test]
+    async fn revoking_a_paired_device_removes_its_row() {
+        let dir = camino_tempfile::Utf8TempDir::new().expect("temp dir");
+        let db = dir.path().join("livtet.db").to_string();
+        let shared = SharedState::connect(&db, &[Kind::Business, Kind::Client])
+            .await
+            .expect("db");
+        let id = DbId::from_bytes([7; 16]);
+        livtet_core::data::sql::query(
+            "INSERT INTO paired_devices (device_id, name, paired_at, outbound) \
+             VALUES (?, 'Phone', datetime('now'), 1)",
+        )
+        .bind(id.to_bytes().to_vec())
+        .execute(&shared.pool)
+        .await
+        .expect("insert");
+
+        assert!(
+            sync_revoke_paired_device(db.clone(), id.to_string())
+                .await
+                .expect("revoke")
+        );
+        assert!(
+            !sync_revoke_paired_device(db, id.to_string())
+                .await
+                .expect("revoke twice")
         );
     }
 

@@ -35,7 +35,7 @@ impl MigrationTrait for Migration {
         Ok(())
     }
 
-    async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+    async fn down(&self, _manager: &SchemaManager) -> Result<(), DbErr> {
         // The previous triggers are the bug this migration repairs.
         Ok(())
     }
