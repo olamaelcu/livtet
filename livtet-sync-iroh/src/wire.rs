@@ -189,7 +189,12 @@ pub enum Response {
     /// A cover header; the caller reads `length` raw bytes next.
     Cover(FileHeader),
     /// Covers that existed for the requested editions; misses are absent.
-    CoverBatch(Vec<CoverImage>),
+    ///
+    /// A struct variant, not a newtype: the wire tags its enums by field, and an
+    /// internally tagged newtype cannot hold a sequence.
+    CoverBatch {
+        covers: Vec<CoverImage>,
+    },
     /// An OPDS answer: the route's HTTP status, its media type, and its body.
     ///
     /// A non-2xx status is an ordinary answer, not [`Response::Error`]: a 404

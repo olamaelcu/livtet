@@ -751,7 +751,7 @@ async fn covers(
             bytes,
         });
     }
-    Answered::reply(Response::CoverBatch(images)).with_device(Some(device))
+    Answered::reply(Response::CoverBatch { covers: images }).with_device(Some(device))
 }
 
 /// How long the desktop has to answer one OPDS request.
@@ -1838,8 +1838,15 @@ mod tests {
         )
         .await;
 
+        // The transport frames answers with `serde_json`, and an internally tagged enum
+        // cannot hold a sequence in a newtype variant: decoding here proved nothing while
+        // the real answer failed to serialize.
+        let framed =
+            serde_json::to_value(&response).expect("a cover batch serializes for the wire");
+        assert!(framed.get("covers").is_some_and(|covers| covers.is_array()));
+
         match response {
-            Response::CoverBatch(images) => {
+            Response::CoverBatch { covers: images } => {
                 assert_eq!(images.len(), 1, "the edition without a cover is absent");
                 assert_eq!(images[0].edition_id, edition.to_hex().to_ascii_lowercase());
                 assert_eq!(images[0].content_type, "image/png");

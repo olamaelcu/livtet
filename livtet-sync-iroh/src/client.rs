@@ -440,7 +440,7 @@ impl Client {
             })
             .await?;
         match exchange.response {
-            Response::CoverBatch(covers) => Ok(covers),
+            Response::CoverBatch { covers } => Ok(covers),
             Response::Error {
                 code: ErrorCode::NotFound,
                 ..
