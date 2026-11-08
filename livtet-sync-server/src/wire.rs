@@ -906,7 +906,15 @@ async fn pair(
             format!("not a device id: {device_id}"),
         );
     };
-    let Ok(desktop_id) = state.device_id.parse::<DbId>() else {
+    // The advertised endpoint may carry its own id in either textual form (the phone
+    // advertises the hex form of a generated UUID); the claim row must key this host
+    // the same way the peer id above was parsed.
+    let desktop_id = state
+        .device_id
+        .parse::<DbId>()
+        .ok()
+        .or_else(|| DbId::from_hex(&state.device_id).ok());
+    let Some(desktop_id) = desktop_id else {
         return Answered::error(ErrorCode::Internal, "this device has no valid id");
     };
 
@@ -1063,6 +1071,15 @@ mod tests {
         Utf8PathBuf,
         mpsc::UnboundedReceiver<String>,
     ) {
+        test_state_with_device_id(LOCAL_DEVICE).await
+    }
+
+    /// Like [`test_state_with_host`], with the host's own id spelled by the caller.
+    async fn test_state_with_device_id(device_id: &str) -> (
+        Arc<WireState>,
+        Utf8PathBuf,
+        mpsc::UnboundedReceiver<String>,
+    ) {
         let root = temp_dir();
         let db_path = root.join("sync.db");
         let pool = livtet_data::connect_with_migrations_foreign_keys(
@@ -1073,10 +1090,10 @@ mod tests {
         .await
         .expect("migrate");
         let db = SqlxSqliteConnector::from_sqlx_sqlite_pool(pool.clone());
-        let engine = SyncEngine::new(db, LOCAL_DEVICE.to_string());
+        let engine = SyncEngine::new(db, device_id.to_string());
         let (out, out_rx) = mpsc::unbounded_channel();
         let state = Arc::new(
-            WireState::new(engine, pool, LOCAL_DEVICE.to_string())
+            WireState::new(engine, pool, device_id.to_string())
                 .with_notifier(Arc::new(
                     |_method: &str, _params: serde_json::Value| {},
                 ))
@@ -1457,6 +1474,26 @@ mod tests {
                 other => panic!("expected an unauthorized error, got {other:?}"),
             }
         }
+    }
+
+
+    #[tokio::test]
+    async fn a_claim_is_accepted_when_the_host_id_is_hex() {
+        let (state, _root, _out) = test_state_with_device_id(&DbId::new().to_hex()).await;
+        let response = ask(
+            &state,
+            Request::Pair {
+                device_id: DbId::new().to_string(),
+                name: "Remote Phone".to_string(),
+                device_type: "mobile".to_string(),
+            },
+            REMOTE_NODE,
+        )
+        .await;
+        assert!(
+            matches!(response, Response::PairingPending { .. }),
+            "a hex-spelled host id files a claim: {response:?}"
+        );
     }
 
     #[tokio::test]
