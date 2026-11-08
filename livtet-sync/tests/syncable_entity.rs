@@ -261,11 +261,24 @@ async fn the_seed_reaches_every_registered_entity_type() {
     let missing: Vec<&str> = SyncableEntityKind::ALL_VARIANTS
         .iter()
         .copied()
-        .filter(|v| !seen.contains(v))
+        .filter(|v| {
+            !seen.contains(v)
+                && !livtet_sync::DEVICE_LOCAL_ENTITY_TYPES.contains(v)
+        })
         .collect();
     assert!(
         missing.is_empty(),
         "no change_log row exercises {missing:?}; extend full_coverage_seed"
+    );
+    // Device-local rows are not announcements, so the seed cannot (and must not) log them.
+    let leaked: Vec<&str> = seen
+        .iter()
+        .copied()
+        .filter(|t| livtet_sync::DEVICE_LOCAL_ENTITY_TYPES.contains(t))
+        .collect();
+    assert!(
+        leaked.is_empty(),
+        "device-local types must not reach the change log: {leaked:?}"
     );
 
     let unregistered: Vec<&str> = seen

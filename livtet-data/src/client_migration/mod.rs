@@ -16,6 +16,7 @@ pub mod m0010_paired_devices_node_id;
 pub mod m0011_trigger_suppression;
 pub mod m0012_change_log_identity;
 pub mod m0013_paired_devices_peer_token;
+pub mod m0014_inventory_not_synced;
 pub mod schema;
 
 pub use sea_orm_migration::MigratorTrait;
@@ -43,6 +44,7 @@ impl MigratorTrait for Migrator {
             Box::new(crate::client_migration::m0011_trigger_suppression::Migration),
             Box::new(crate::client_migration::m0012_change_log_identity::Migration),
             Box::new(crate::client_migration::m0013_paired_devices_peer_token::Migration),
+            Box::new(crate::client_migration::m0014_inventory_not_synced::Migration),
         ]
     }
 }

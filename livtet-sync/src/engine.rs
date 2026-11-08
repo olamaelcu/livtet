@@ -3,7 +3,6 @@
 //! and the FFI — the desktop uses it for the HTTP layer's local
 //! queries, and the FFI uses it for the same on the mobile device.
 
-use std::collections::HashMap;
 
 use livtet_data::orm::sea_query::Value as SqlValue;
 use livtet_data::orm::{
@@ -58,7 +57,7 @@ impl SyncEngine {
         );
         let rows = self.db.query_all_raw(stmt).await?;
 
-        let changes: Vec<SyncChange> = rows
+        let mut changes: Vec<SyncChange> = rows
             .iter()
             .filter_map(|row| {
                 // The change_log `id` column is `INTEGER PRIMARY KEY
@@ -80,8 +79,15 @@ impl SyncEngine {
             })
             .collect();
 
+        // The page's bounds are read before the filter: an all-inventory page must still
+        // advance the peer's cursor, or a device that logged nothing but its own file
+        // rows would block every pull behind it.
         let latest_version = changes.last().map(|c| c.version).unwrap_or(since_version);
         let has_more = changes.len() as i64 == limit;
+        // `digital_inventory` describes *this* device's files (absolute paths, local
+        // hashes), so a peer is never told about them; accepting an offer writes the
+        // receiver's own row.
+        changes.retain(|change| change.entity_type != "digital_inventory");
         Ok(PullResponse {
             changes,
             has_more,
@@ -175,22 +181,6 @@ impl SyncEngine {
             &["series_id", "edition_id", "position", "created_at"],
         )
         .await?;
-        let digital_inventory = query_table(
-            &self.db,
-            "digital_inventory",
-            &[
-                "id",
-                "edition_id",
-                "file_path",
-                "cover_path",
-                "file_hash",
-                "file_size_bytes",
-                "notes",
-                "added_at",
-                "updated_at",
-            ],
-        )
-        .await?;
         let owned_editions = query_table(
             &self.db,
             "owned_editions",
@@ -268,7 +258,10 @@ impl SyncEngine {
                 editions,
                 edition_groups,
                 series_entries,
-                digital_inventory,
+                // A dump is the peer's library, not the peer's disk: the inventory rows
+                // name paths that only exist there, so the field stays empty and the
+                // receiver builds its own when an offer is accepted.
+                digital_inventory: Vec::new(),
                 owned_editions,
                 editions_loans,
                 annotations,
@@ -415,21 +408,78 @@ impl SyncEngine {
     }
 }
 
-/// Filesystem paths the receiver assigned to one inventory row.
+/// Record this device's copy of an offered file.
 ///
-/// The sender's payload carries its own absolute paths; applying those
-/// verbatim would point the receiver at another machine's disk.
-#[derive(Debug, Clone, Default)]
-pub struct InventoryPaths {
-    pub file_path: Option<String>,
-    pub cover_path: Option<String>,
+/// `digital_inventory` is device-specific and no longer synced — the sender's
+/// audit triggers for it are dropped, and an incoming row is ignored — so the
+/// row that makes a received book openable is written here. The offer carries
+/// the bytes, the size, and the hash; only the receiver knows where it put them.
+///
+/// The row is matched by edition, because a library pull may already have
+/// created one from a previous offer: a book has one file on one device.
+pub async fn adopt_inventory(
+    db: &livtet_data::orm::DatabaseConnection,
+    inventory_id: livtet_types::DbId,
+    edition_id: livtet_types::DbId,
+    file_path: &str,
+    cover_path: Option<&str>,
+    file_hash: Option<&str>,
+    file_size_bytes: Option<i64>,
+) -> Result<(), SyncError> {
+    ensure_edition(db, edition_id).await?;
+    let statement = Statement::from_sql_and_values(
+        DatabaseBackend::Sqlite,
+        "INSERT INTO digital_inventory \
+         (id, edition_id, file_path, cover_path, file_hash, file_size_bytes, added_at, updated_at) \
+         VALUES (?, ?, ?, ?, ?, ?, datetime('now'), datetime('now')) \
+         ON CONFLICT(edition_id) DO UPDATE SET \
+         file_path = excluded.file_path, \
+         cover_path = COALESCE(excluded.cover_path, digital_inventory.cover_path), \
+         file_hash = COALESCE(excluded.file_hash, digital_inventory.file_hash), \
+         file_size_bytes = COALESCE(excluded.file_size_bytes, digital_inventory.file_size_bytes), \
+         updated_at = datetime('now')",
+        [
+            inventory_id.to_bytes().to_vec().into(),
+            edition_id.to_bytes().to_vec().into(),
+            file_path.to_string().into(),
+            cover_path.map(str::to_string).into(),
+            file_hash.map(str::to_string).into(),
+            file_size_bytes.into(),
+        ],
+    );
+    db.execute_raw(statement).await?;
+    Ok(())
 }
 
-/// Inputs for [`SyncEngine::apply_changes`].
-#[derive(Debug, Clone, Default)]
-pub struct ApplyOptions {
-    /// Inventory entity id (hex or ULID) → the receiver's local paths.
-    pub inventory_paths: HashMap<String, InventoryPaths>,
+/// Record where this device stored an edition's cover.
+///
+/// A cover can arrive for an edition this device has no *file* for, so the inventory row may
+/// be created here with no `file_path` at all: the row is the device-local place a cover path
+/// lives, and the `edition_covers` view reads it from there.
+pub async fn adopt_cover(
+    db: &livtet_data::orm::DatabaseConnection,
+    edition_id: livtet_types::DbId,
+    cover_path: &str,
+) -> Result<(), SyncError> {
+    // A cover for an edition this device does not have is not an error: the library
+    // pull will bring the edition and the next sync will ask again.
+    if !edition_exists(db, edition_id).await? {
+        return Ok(());
+    }
+    let statement = Statement::from_sql_and_values(
+        DatabaseBackend::Sqlite,
+        "INSERT INTO digital_inventory (id, edition_id, cover_path, added_at, updated_at) \
+         VALUES (?, ?, ?, datetime('now'), datetime('now')) \
+         ON CONFLICT(edition_id) DO UPDATE SET \
+         cover_path = excluded.cover_path, updated_at = datetime('now')",
+        [
+            livtet_types::DbId::new().to_bytes().to_vec().into(),
+            edition_id.to_bytes().to_vec().into(),
+            cover_path.to_string().into(),
+        ],
+    );
+    db.execute_raw(statement).await?;
+    Ok(())
 }
 
 /// What an apply pass did.
@@ -455,10 +505,27 @@ impl SyncEngine {
     /// `connect_with_migrations_foreign_keys`): library rows imported with FK
     /// enforcement off carry zero-length ids in optional columns
     /// (`editions.format_id`), and the matching parent row does not exist.
-    pub async fn apply_changes(
+    pub async fn apply_changes(&self, changes: Vec<SyncChange>) -> Result<ApplyOutcome, SyncError> {
+        self.apply(changes, false).await
+    }
+
+    /// Apply the rows an offer carries, as the reader asked for them.
+    ///
+    /// These rows are not a sync arriving in the background; they are the book the
+    /// reader accepted. A local tombstone for the same edition (a delete the library
+    /// pulled earlier) must not win over that decision, or the accepted book would be
+    /// reported as a conflict and never appear.
+    pub async fn apply_offer_changes(
         &self,
         changes: Vec<SyncChange>,
-        options: ApplyOptions,
+    ) -> Result<ApplyOutcome, SyncError> {
+        self.apply(changes, true).await
+    }
+
+    async fn apply(
+        &self,
+        changes: Vec<SyncChange>,
+        authoritative: bool,
     ) -> Result<ApplyOutcome, SyncError> {
         let txn = self.db.begin().await?;
         let mut outcome = ApplyOutcome::default();
@@ -472,6 +539,12 @@ impl SyncEngine {
                 outcome.skipped += 1;
                 continue;
             }
+            // Device-specific: an older peer still logs these rows with its own paths.
+            // Accepting an offer writes the local row instead.
+            if change.entity_type == "digital_inventory" {
+                outcome.skipped += 1;
+                continue;
+            }
             let Some(table) = entity_type_to_table(&change.entity_type) else {
                 tracing::debug!(
                     entity_type = %change.entity_type,
@@ -482,7 +555,8 @@ impl SyncEngine {
             };
 
             let local = latest_change(&txn, &change.entity_type, &change.entity_id).await?;
-            if let Some((local_version, local_payload)) = local
+            if !authoritative
+                && let Some((local_version, local_payload)) = local
                 && local_version > change.version
             {
                 record_conflict(&txn, change, &local_payload).await?;
@@ -502,16 +576,13 @@ impl SyncEngine {
             if change.operation == "DELETE" {
                 delete_entity(&txn, table, &change.entity_id).await?;
             } else {
-                let mut payload: Value =
+                let payload: Value =
                     serde_json::from_str(&change.payload).map_err(|error| {
                         SyncError::Deserialization {
                             entity_type: change.entity_type.clone(),
                             message: error.to_string(),
                         }
                     })?;
-                if change.entity_type == "digital_inventory" {
-                    apply_inventory_paths(&mut payload, change, &options);
-                }
                 upsert_payload(&txn, table, &payload).await?;
             }
 
@@ -541,26 +612,35 @@ fn apply_rank(entity_type: &str) -> u8 {
     }
 }
 
-fn apply_inventory_paths(payload: &mut Value, change: &SyncChange, options: &ApplyOptions) {
-    let normalized_id = payload.get("id").and_then(Value::as_str);
-    let paths = options
-        .inventory_paths
-        .get(&change.entity_id)
-        .or_else(|| normalized_id.and_then(|id| options.inventory_paths.get(id)));
-    let Some(paths) = paths else {
-        return;
-    };
-    let Some(object) = payload.as_object_mut() else {
-        return;
-    };
-    object.insert("file_path".to_string(), optional_string(&paths.file_path));
-    object.insert("cover_path".to_string(), optional_string(&paths.cover_path));
+/// Whether an edition row is present locally.
+async fn edition_exists(
+    db: &livtet_data::orm::DatabaseConnection,
+    edition_id: livtet_types::DbId,
+) -> Result<bool, SyncError> {
+    let statement = Statement::from_sql_and_values(
+        DatabaseBackend::Sqlite,
+        "SELECT 1 FROM editions WHERE id = ?",
+        [edition_id.to_bytes().to_vec().into()],
+    );
+    Ok(db.query_one_raw(statement).await?.is_some())
 }
 
-fn optional_string(value: &Option<String>) -> Value {
-    value
-        .as_deref()
-        .map_or(Value::Null, |text| Value::String(text.to_string()))
+/// Refuse to attach a file to an edition that is not here.
+///
+/// An offer's rows can arrive a page after the offer itself; writing the inventory row
+/// before them would fail as a foreign-key error with no explanation. Say what is
+/// missing instead: the reader's retry after the next sync will work.
+async fn ensure_edition(
+    db: &livtet_data::orm::DatabaseConnection,
+    edition_id: livtet_types::DbId,
+) -> Result<(), SyncError> {
+    if edition_exists(db, edition_id).await? {
+        return Ok(());
+    }
+    Err(SyncError::Db {
+        message: "the book's catalog row has not arrived yet; sync again".to_string(),
+        violation: None,
+    })
 }
 
 async fn latest_version_in(db: &impl ConnectionTrait) -> Result<i64, SyncError> {

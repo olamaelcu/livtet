@@ -427,7 +427,6 @@ pub const ENTITY_DUMP_TYPES: &[&str] = &[
     "edition",
     "edition_group",
     "series_entry",
-    "digital_inventory",
     "owned_edition",
     "edition_loan",
     "annotation",

@@ -205,7 +205,9 @@ fn offer_rows(offer: &OfferSeed<'_>) -> Vec<SyncChange> {
             changed_at: "2026-11-01 09:00:00".to_string(),
             device_id: from_device_id.to_string(),
         },
-        // The catalog row describing the offered book: held until accepted.
+        // The catalog rows describing the offered book: held until accepted.
+        // `offer_book` touches the work, the edition, and the file, so a real offer
+        // always carries the edition the accepted file hangs off.
         SyncChange {
             id: version + 1,
             entity_type: "work".to_string(),
@@ -214,6 +216,22 @@ fn offer_rows(offer: &OfferSeed<'_>) -> Vec<SyncChange> {
             version: version + 1,
             payload: serde_json::json!({
                 "id": work.to_hex(),
+                "title": title,
+                "created_at": "2026-11-01 09:00:00",
+            })
+            .to_string(),
+            changed_at: "2026-11-01 09:00:00".to_string(),
+            device_id: from_device_id.to_string(),
+        },
+        SyncChange {
+            id: version + 2,
+            entity_type: "edition".to_string(),
+            entity_id: edition.to_hex(),
+            operation: "UPDATE".to_string(),
+            version: version + 2,
+            payload: serde_json::json!({
+                "id": edition.to_hex(),
+                "work_id": work.to_hex(),
                 "title": title,
                 "created_at": "2026-11-01 09:00:00",
             })
@@ -398,8 +416,8 @@ async fn a_pulled_offer_waits_for_the_reader_and_reports_its_decision() {
     assert_eq!(accepted["delivered"].as_bool(), Some(true));
     assert_eq!(
         accepted["applied"].as_u64(),
-        Some(1),
-        "the held row applied"
+        Some(2),
+        "the held work and edition rows applied"
     );
 
     let files: Vec<String> = fs::read_dir(books.as_std_path())

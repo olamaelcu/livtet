@@ -7,7 +7,8 @@
 use std::collections::BTreeSet;
 
 use livtet_sync::{
-    ENTITY_DUMP_TYPES, SUPPORTED_ENTITY_TYPES, SyncableEntityKind, entity_type_to_table,
+    DEVICE_LOCAL_ENTITY_TYPES, ENTITY_DUMP_TYPES, SUPPORTED_ENTITY_TYPES, SyncableEntityKind,
+    entity_type_to_table,
 };
 use livtet_test_utils::sync::Device;
 
@@ -68,13 +69,28 @@ async fn every_supported_type_has_insert_and_delete_triggers_on_its_table() {
         );
         triggered.insert(entity_type.to_string());
     }
-    let supported: BTreeSet<String> = SUPPORTED_ENTITY_TYPES
+    let device_local: BTreeSet<String> = DEVICE_LOCAL_ENTITY_TYPES
         .iter()
         .map(|t| t.to_string())
         .collect();
+    let supported: BTreeSet<String> = SUPPORTED_ENTITY_TYPES
+        .iter()
+        .filter(|t| !device_local.contains(**t))
+        .map(|t| t.to_string())
+        .collect();
     assert_eq!(triggered, supported);
+    // A device-local table must not announce its rows: its paths mean nothing to a peer.
+    for entity_type in DEVICE_LOCAL_ENTITY_TYPES {
+        assert!(
+            !triggered.contains(*entity_type),
+            "{entity_type} is device-local but has audit triggers"
+        );
+    }
 
-    for entity_type in SUPPORTED_ENTITY_TYPES {
+    for entity_type in SUPPORTED_ENTITY_TYPES
+        .iter()
+        .filter(|t| !device_local.contains(**t))
+    {
         for op in ["insert", "delete"] {
             let name = format!("sync_{entity_type}_changelog_{op}");
             assert!(

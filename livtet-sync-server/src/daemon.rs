@@ -1070,7 +1070,7 @@ async fn pull_device_once(
 ) -> Result<serde_json::Value, ServerError> {
     use livtet_data::client_entities::paired_devices;
     use livtet_data::orm::{EntityTrait, Set};
-    use livtet_sync::{ApplyOptions, PullResponse};
+    use livtet_sync::PullResponse;
 
     let db = state.engine.db();
     let peer = paired_devices::Entity::find_by_id(device_id)
@@ -1153,12 +1153,7 @@ async fn pull_device_once(
             if !metadata.is_empty() {
                 let outcome = state
                     .engine
-                    .apply_changes(
-                        metadata,
-                        ApplyOptions {
-                            inventory_paths: HashMap::new(),
-                        },
-                    )
+                    .apply_changes(metadata)
                     .await
                     .map_err(ServerError::from)?;
                 applied += outcome.applied;
@@ -1296,13 +1291,22 @@ fn decode_discovery_secret(encoded: &str) -> Option<SecretKey> {
     Some(SecretKey::from_bytes(&bytes))
 }
 
+/// Where an accepted offer's bytes were written on this device.
+///
+/// Not the sender's paths: `digital_inventory` is device-specific and no longer
+/// synced, so the receiver's paths are the only ones that exist here.
+struct DownloadedPaths {
+    file_path: String,
+    cover_path: Option<String>,
+}
+
 /// Fetch one offered file (and its cover) into the receiver's directories.
 async fn download_offer(
     peer: &crate::peer::Peer,
     payload: &serde_json::Value,
     books_dir: &camino::Utf8Path,
     covers_dir: &camino::Utf8Path,
-) -> Result<(String, livtet_sync::InventoryPaths), ServerError> {
+) -> Result<(String, DownloadedPaths), ServerError> {
     let inventory_id = payload
         .get("inventory_id")
         .and_then(serde_json::Value::as_str)
@@ -1340,8 +1344,8 @@ async fn download_offer(
 
     Ok((
         inventory_id.to_string(),
-        livtet_sync::InventoryPaths {
-            file_path: Some(file_path.to_string()),
+        DownloadedPaths {
+            file_path: file_path.to_string(),
             cover_path,
         },
     ))
@@ -1541,7 +1545,6 @@ async fn handle_offers_decide(
     state: &Arc<DaemonState>,
 ) -> Result<serde_json::Value, RpcFailure> {
     use livtet_data::client_entities::inbound_offers;
-    use livtet_sync::{ApplyOptions, InventoryPaths};
 
     let params: OfferDecisionParams = parse_params(request)?;
     let row = inbound_offers::Entity::find_by_id(params.offer_id.clone())
@@ -1602,23 +1605,45 @@ async fn handle_offers_decide(
         if !held.is_empty() {
             let outcome = state
                 .engine
-                .apply_changes(
-                    held,
-                    ApplyOptions {
-                        inventory_paths: HashMap::from([(
-                            inventory_id,
-                            InventoryPaths {
-                                file_path: paths.file_path.clone(),
-                                cover_path: paths.cover_path.clone(),
-                            },
-                        )]),
-                    },
-                )
+                .apply_offer_changes(held.clone())
                 .await
                 .map_err(ServerError::from)?;
             applied = outcome.applied;
             conflicts = outcome.conflicts.len();
         }
+
+        // `digital_inventory` is not synced, so accepting is where this device records
+        // its own copy. The hash and size describe the file and come from the held row;
+        // the paths are the ones just written here.
+        let (file_hash, file_size_bytes) = held
+            .iter()
+            .find(|change| change.entity_type == "digital_inventory")
+            .and_then(|change| serde_json::from_str::<serde_json::Value>(&change.payload).ok())
+            .map(|payload| {
+                (
+                    payload
+                        .get("file_hash")
+                        .and_then(serde_json::Value::as_str)
+                        .map(str::to_string),
+                    payload
+                        .get("file_size_bytes")
+                        .and_then(serde_json::Value::as_i64),
+                )
+            })
+            .unwrap_or((None, None));
+        livtet_sync::adopt_inventory(
+            state.engine.db(),
+            DbId::from_hex(&inventory_id)
+                .map_err(|error| ServerError::Server(format!("inventory id: {error}")))?,
+            DbId::from_hex(&row.edition_id)
+                .map_err(|error| ServerError::Server(format!("edition id: {error}")))?,
+            &paths.file_path,
+            paths.cover_path.as_deref(),
+            file_hash.as_deref(),
+            file_size_bytes,
+        )
+        .await
+        .map_err(ServerError::from)?;
     }
 
     livtet_data::sql::query(

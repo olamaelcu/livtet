@@ -19,14 +19,14 @@
 //! no storage of its own on this side of the boundary, and the caller already
 //! owns the per-peer token.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::io::Write;
 
 use camino::Utf8Path;
 use livtet_core::data::SharedState;
 use livtet_core::data::migrator::Kind;
 use livtet_core::types::DbId;
-use livtet_sync::{ApplyOptions, InventoryPaths, SyncChange, SyncEngine};
+use livtet_sync::{SyncChange, SyncEngine, adopt_cover, adopt_inventory};
 
 use crate::error::LivtetError;
 use crate::sync::connect;
@@ -108,6 +108,7 @@ pub async fn sync_pull(
     peer_node_id: String,
     since_version: i64,
     limit: i64,
+    covers_dir: String,
 ) -> Result<SyncPullReport, LivtetError> {
     // The cursor is keyed by the peer, so the node id outlives the connection.
     let peer = peer_node_id.clone();
@@ -119,7 +120,11 @@ pub async fn sync_pull(
     // on foreign keys that were never created here. Bootstrap from the full dump
     // instead, which is every syncable row in dependency order.
     if since_version <= 0 {
-        return bootstrap(&client, db_path, limit, peer).await;
+        let report = bootstrap(&client, db_path.clone(), limit, peer).await?;
+        // A library that just arrived is the moment it most needs its art; one batch
+        // per sync fills what the sender can serve.
+        let _ = pull_missing_covers(&client, &db_path, &covers_dir).await;
+        return Ok(report);
     }
     let pull = client
         .changes(since_version, Some(limit))
@@ -141,25 +146,81 @@ pub async fn sync_pull(
     let mut conflicts = 0;
     if !metadata.is_empty() {
         let outcome = engine
-            .apply_changes(
-                metadata,
-                ApplyOptions {
-                    inventory_paths: HashMap::new(),
-                },
-            )
+            .apply_changes(metadata)
             .await
             .map_err(|error| LivtetError::Sync(format!("could not apply pulled rows: {error}")))?;
         applied = outcome.applied as u32;
         conflicts = outcome.conflicts.len() as u32;
     }
 
-    Ok(SyncPullReport {
+    let report = SyncPullReport {
         applied,
         conflicts,
         cursor: pull.latest_version,
         has_more: pull.has_more,
         offers: offers.into_iter().map(|pulled| pulled.offer).collect(),
-    })
+    };
+
+    // Covers are not part of the change log (the view is device-local art plus a synced
+    // URL), so a library can be complete and still be a wall of initials. One bounded
+    // batch per sync fills it in without turning every pull into a bulk download.
+    let _ = pull_missing_covers(&client, &db_path, &covers_dir).await;
+    Ok(report)
+}
+
+/// Most editions one sync asks art for, and per request.
+const COVERS_PER_SYNC: i64 = 24;
+const COVER_BATCH: usize = 8;
+
+/// Fetch covers for local editions that have none yet.
+///
+/// Best effort: a peer older than this request answers with an error, and that is not a
+/// reason to fail a sync whose rows have already landed. Books without a local cover file
+/// are the ones asked for, so a repeated sync converges.
+async fn pull_missing_covers(
+    client: &livtet_sync_iroh::Client,
+    db_path: &str,
+    covers_dir: &str,
+) -> Result<(), LivtetError> {
+    let state = SharedState::connect(db_path, &[Kind::Business, Kind::Client])
+        .await
+        .map_err(|error| LivtetError::Database(error.to_string()))?;
+    let wanted: Vec<String> = livtet_core::data::sql::query_scalar(
+        "SELECT lower(hex(e.id)) FROM editions e \
+         LEFT JOIN digital_inventory i ON i.edition_id = e.id \
+         WHERE i.cover_path IS NULL OR i.cover_path = '' \
+         LIMIT ?",
+    )
+    .bind(COVERS_PER_SYNC)
+    .fetch_all(&state.pool)
+    .await
+    .map_err(|error| LivtetError::Database(error.to_string()))?;
+    if wanted.is_empty() {
+        return Ok(());
+    }
+    let dir = Utf8Path::new(covers_dir);
+    std::fs::create_dir_all(dir.as_std_path())
+        .map_err(|error| LivtetError::Sync(format!("could not create {dir}: {error}")))?;
+    let db = livtet_core::data::orm::SqlxSqliteConnector::from_sqlx_sqlite_pool(state.pool.clone());
+    for batch in wanted.chunks(COVER_BATCH) {
+        let covers = match client.covers(batch).await {
+            Ok(covers) => covers,
+            // An older peer has no such request; the sync itself already succeeded.
+            Err(_) => return Ok(()),
+        };
+        for cover in covers {
+            let Ok(edition) = DbId::from_hex(&cover.edition_id) else {
+                continue;
+            };
+            let path = dir.join(format!("{}.{}", cover.edition_id, cover_extension(&cover.content_type)));
+            std::fs::write(path.as_std_path(), &cover.bytes)
+                .map_err(|error| LivtetError::Sync(format!("could not write {path}: {error}")))?;
+            adopt_cover(&db, edition, path.as_str())
+                .await
+                .map_err(|error| LivtetError::Sync(format!("could not record the cover: {error}")))?;
+        }
+    }
+    Ok(())
 }
 
 /// Accept an offer: download the file and cover, tell the peer, register the book.
@@ -250,26 +311,50 @@ pub async fn sync_offer_accept(
 
     let deferred: Vec<SyncChange> = serde_json::from_str(&offer.deferred_changes)
         .map_err(|error| LivtetError::Sync(format!("offer rows are unreadable: {error}")))?;
+    // The hash and size identify the file rather than the sender's disk, so they are read
+    // from the held inventory row; the paths are this device's alone.
+    let (file_hash, file_size_bytes) = deferred
+        .iter()
+        .find(|change| change.entity_type == "digital_inventory")
+        .and_then(|change| serde_json::from_str::<serde_json::Value>(&change.payload).ok())
+        .map(|payload| {
+            (
+                payload
+                    .get("file_hash")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_string),
+                payload
+                    .get("file_size_bytes")
+                    .and_then(serde_json::Value::as_i64),
+            )
+        })
+        .unwrap_or((None, None));
     let mut applied = 0;
     if !deferred.is_empty() {
-        let engine = engine(db_path.clone(), device_id).await?;
+        let engine = engine(db_path.clone(), device_id.clone()).await?;
         let outcome = engine
-            .apply_changes(
-                deferred,
-                ApplyOptions {
-                    inventory_paths: HashMap::from([(
-                        offer.inventory_id.clone(),
-                        InventoryPaths {
-                            file_path: Some(file_path.to_string()),
-                            cover_path: cover_path.clone(),
-                        },
-                    )]),
-                },
-            )
+            .apply_offer_changes(deferred)
             .await
             .map_err(|error| LivtetError::Sync(format!("could not register the book: {error}")))?;
         applied = outcome.applied as u32;
     }
+
+    // `digital_inventory` is not synced, so this is the only place the received book's
+    // row is written: without it the edition has no file this device can open.
+    let inventory_db = engine(db_path.clone(), device_id).await?;
+    adopt_inventory(
+        inventory_db.db(),
+        DbId::from_hex(&offer.inventory_id)
+            .map_err(|error| LivtetError::Sync(format!("inventory id: {error}")))?,
+        DbId::from_hex(&offer.edition_id)
+            .map_err(|error| LivtetError::Sync(format!("edition id: {error}")))?,
+        file_path.as_str(),
+        cover_path.as_deref(),
+        file_hash.as_deref(),
+        file_size_bytes,
+    )
+    .await
+    .map_err(|error| LivtetError::Sync(format!("could not record the local file: {error}")))?;
 
     // The decision closes the offer out of the inbox; the book is in the library
     // now, so the row is history the screen no longer shows.
@@ -392,12 +477,13 @@ async fn apply_dump(db_path: &str, dump: &livtet_sync::FullDump) -> Result<u32, 
     let state = SharedState::connect(db_path, &[Kind::Business, Kind::Client])
         .await
         .map_err(|error| LivtetError::Database(error.to_string()))?;
-    let tables: [(&str, &[serde_json::Value]); 11] = [
+    // `digital_inventory` is deliberately absent: a peer's dump names its own disk.
+    // Accepting an offer writes the receiver's own row instead.
+    let tables: [(&str, &[serde_json::Value]); 10] = [
         ("works", &dump.entities.works),
         ("editions", &dump.entities.editions),
         ("edition_groups", &dump.entities.edition_groups),
         ("series_entries", &dump.entities.series_entries),
-        ("digital_inventory", &dump.entities.digital_inventory),
         ("owned_editions", &dump.entities.owned_editions),
         ("editions_loans", &dump.entities.editions_loans),
         ("annotations", &dump.entities.annotations),
@@ -846,11 +932,16 @@ mod tests {
         std::fs::write(book_src.as_std_path(), &book).expect("write book");
         std::fs::write(cover_src.as_std_path(), &cover).expect("write cover");
 
+        // Ids travel as hex, and the catalog rows they name may arrive a page later; the
+        // test seeds them so the accept has an edition to attach the file to.
+        let inventory_id = DbId::new().to_hex();
+        let edition_id = DbId::new().to_hex();
+        let work_id = DbId::new().to_hex();
         let offer_payload = serde_json::json!({
             "offer_id": "offer-1",
-            "inventory_id": "inv-1",
-            "edition_id": "edi-1",
-            "work_id": "wor-1",
+            "inventory_id": inventory_id,
+            "edition_id": edition_id,
+            "work_id": work_id,
             "file_name": "Designing Data-Intensive Applications.epub",
             "has_cover": true,
             "title": "The Reverse Direction",
@@ -934,6 +1025,7 @@ mod tests {
             peer_node_id.clone(),
             1,
             50,
+            dir.path().join("covers").to_string(),
         )
         .await
         .expect("pull");
@@ -950,8 +1042,8 @@ mod tests {
         );
         let offer = report.offers[0].clone();
         assert_eq!(offer.offer_id, "offer-1");
-        assert_eq!(offer.inventory_id, "inv-1");
-        assert_eq!(offer.edition_id, "edi-1");
+        assert_eq!(offer.inventory_id, inventory_id);
+        assert_eq!(offer.edition_id, edition_id);
         assert!(offer.has_cover);
 
         // The offer is now the reader's pending decision, so it is in the inbox
@@ -980,13 +1072,33 @@ mod tests {
                 key_path.clone(),
                 "session-token".to_string(),
                 peer_node_id.clone(),
-                "inv-1".to_string(),
+                inventory_id.clone(),
             )
             .await
             .expect("fetch the cover"),
             Some(cover.clone()),
             "the preview is the peer's own cover bytes"
         );
+
+        let state = SharedState::connect(&db_path, &[Kind::Business, Kind::Client])
+            .await
+            .expect("open the library");
+        livtet_core::data::sql::query(
+            "INSERT INTO works (id, title, created_at) VALUES (?, 'A book', datetime('now'))",
+        )
+        .bind(DbId::from_hex(&work_id).expect("work id").to_bytes().to_vec())
+        .execute(&state.pool)
+        .await
+        .expect("seed work");
+        livtet_core::data::sql::query(
+            "INSERT INTO editions (id, work_id, title, created_at) \
+             VALUES (?, ?, 'A book', datetime('now'))",
+        )
+        .bind(DbId::from_hex(&edition_id).expect("edition id").to_bytes().to_vec())
+        .bind(DbId::from_hex(&work_id).expect("work id").to_bytes().to_vec())
+        .execute(&state.pool)
+        .await
+        .expect("seed edition");
 
         let received = sync_offer_accept(
             key_path,
@@ -1099,6 +1211,7 @@ mod tests {
             peer_node_id,
             0,
             50,
+            dir.path().join("covers").to_string(),
         )
         .await
         .expect("bootstrap");

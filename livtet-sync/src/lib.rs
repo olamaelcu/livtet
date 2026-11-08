@@ -13,12 +13,19 @@ pub mod engine;
 pub mod types;
 
 // Re-export types for convenience
-pub use engine::{ApplyOptions, ApplyOutcome, InventoryPaths, SyncEngine};
+pub use engine::{ApplyOutcome, SyncEngine, adopt_cover, adopt_inventory};
 pub use types::{
     ChangeLogEntity, Conflict, ENTITY_DUMP_TYPES, EntityDump, FullDump, PairLink, PairLinkError,
     PullResponse, PushResponse, Result, SyncChange, SyncError, SyncStatus, SyncableEntity,
     SyncableEntityKind, SyncedEntity, entity_type_to_table,
 };
+
+/// Entity types that live in the library but never travel between devices.
+///
+/// Their rows name this device's own disk — absolute paths, local hashes — so
+/// they get no audit triggers, no place in a full dump, and a peer's rows for
+/// them are ignored. Accepting an offer writes the receiver's own row instead.
+pub const DEVICE_LOCAL_ENTITY_TYPES: &[&str] = &["digital_inventory"];
 
 /// Supported entity types for sync operations.
 pub const SUPPORTED_ENTITY_TYPES: &[&str] = &[

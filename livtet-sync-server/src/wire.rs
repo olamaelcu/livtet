@@ -18,7 +18,7 @@ use camino::Utf8PathBuf;
 use livtet_data::orm::{ConnectionTrait, DbBackend, EntityTrait, Statement};
 use livtet_sync::{SyncChange, SyncStatus};
 use livtet_sync_iroh::{
-    ErrorCode, FileHeader, FileMetadata, Handler, Identity, MAX_MESSAGE_BYTES, OpdsHeaders,
+    CoverImage, ErrorCode, FileHeader, FileMetadata, Handler, Identity, MAX_MESSAGE_BYTES, OpdsHeaders,
     OpdsResponse, Outcome, PROTOCOL_VERSION, Request, Response,
 };
 use livtet_types::DbId;
@@ -181,6 +181,7 @@ fn op_name(request: &Request) -> &'static str {
         Request::File { .. } => "file",
         Request::FileInfo { .. } => "file_info",
         Request::Cover { .. } => "cover",
+        Request::Covers { .. } => "covers",
         Request::Opds { .. } => "opds",
         Request::OfferDecision { .. } => "offer_decision",
     }
@@ -392,6 +393,13 @@ async fn dispatch(state: &Arc<WireState>, request: Request, remote: String) -> A
             token,
             inventory_id,
         } => cover(state, token, &remote, inventory_id).await,
+
+        // A receiver that pulled the library asks for the art it did not get: covers belong
+        // to an edition, and the bytes only exist on the device that extracted them.
+        Request::Covers {
+            token,
+            edition_ids,
+        } => covers(state, token, &remote, edition_ids).await,
 
         // The OPDS route table lives in the desktop process, which owns the
         // live database and search index; this daemon forwards the request
@@ -685,6 +693,65 @@ async fn cover(
         etag,
     };
     Answered::cover(header, Utf8PathBuf::from(path)).with_device(Some(device))
+}
+
+/// Most editions one `Covers` answer carries.
+///
+/// Covers are small but not tiny, and the answer is a single frame: a batch this size keeps
+/// one response well under a megabyte for ordinary art.
+const MAX_COVER_BATCH: usize = 16;
+
+/// Largest cover served. A "cover" bigger than this is a book someone named oddly.
+const MAX_COVER_BYTES: u64 = 8 * 1024 * 1024;
+
+/// Cover bytes for the requested editions, skipping the ones this device has none for.
+async fn covers(
+    state: &Arc<WireState>,
+    token: String,
+    remote: &str,
+    edition_ids: Vec<String>,
+) -> Answered {
+    let device = match authorize(state, &token, remote).await {
+        Ok(device) => device,
+        Err(failure) => return failure.into(),
+    };
+    let mut images = Vec::new();
+    for edition_id in edition_ids.into_iter().take(MAX_COVER_BATCH) {
+        let Ok(id) = DbId::from_hex(&edition_id) else {
+            continue;
+        };
+        let statement = Statement::from_sql_and_values(
+            DbBackend::Sqlite,
+            "SELECT cover_path FROM edition_covers WHERE edition_id = ?",
+            [id.to_bytes().to_vec().into()],
+        );
+        let path: Option<String> = match state.engine.db().query_one_raw(statement).await {
+            Ok(Some(row)) => row.try_get("", "cover_path").ok(),
+            Ok(None) => None,
+            Err(error) => {
+                return Answered::error(ErrorCode::Internal, format!("cover lookup: {error}"))
+                    .with_device(Some(device));
+            }
+        };
+        let Some(path) = path.filter(|path| !path.is_empty()) else {
+            continue;
+        };
+        let Ok(metadata) = tokio::fs::metadata(&path).await else {
+            continue;
+        };
+        if metadata.len() > MAX_COVER_BYTES {
+            continue;
+        }
+        let Ok(bytes) = tokio::fs::read(&path).await else {
+            continue;
+        };
+        images.push(CoverImage {
+            edition_id: edition_id.to_ascii_lowercase(),
+            content_type: content_type_for(&path).to_string(),
+            bytes,
+        });
+    }
+    Answered::reply(Response::CoverBatch(images)).with_device(Some(device))
 }
 
 /// How long the desktop has to answer one OPDS request.
@@ -1721,6 +1788,64 @@ mod tests {
                 assert!(!header.etag.is_empty());
             }
             other => panic!("cover: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn covers_are_served_by_edition_and_misses_are_absent() {
+        let (state, root) = test_state().await;
+        seed_paired(&state, DbId::new(), Some(REMOTE_NODE), "tok").await;
+        let edition = DbId::new();
+        let missing = DbId::new();
+        let work = DbId::new();
+        let cover = root.join("edition-cover.png");
+        fs_err::write(&cover, b"edition-cover-bytes").expect("write cover");
+        // `edition_covers` is a view over editions and inventory, so both rows have to exist.
+        livtet_data::sql::query(
+            "INSERT INTO works (id, title, created_at) VALUES (?, 'A book', datetime('now'))",
+        )
+        .bind(work.to_bytes().to_vec())
+        .execute(&state.pool)
+        .await
+        .expect("seed a work");
+        livtet_data::sql::query(
+            "INSERT INTO editions (id, work_id, title, created_at) \
+             VALUES (?, ?, 'A book', datetime('now'))",
+        )
+        .bind(edition.to_bytes().to_vec())
+        .bind(work.to_bytes().to_vec())
+        .execute(&state.pool)
+        .await
+        .expect("seed an edition");
+        livtet_data::sql::query(
+            "INSERT INTO digital_inventory (id, edition_id, cover_path, added_at) \
+             VALUES (?, ?, ?, datetime('now'))",
+        )
+        .bind(DbId::new().to_bytes().to_vec())
+        .bind(edition.to_bytes().to_vec())
+        .bind(cover.to_string())
+        .execute(&state.pool)
+        .await
+        .expect("seed a cover-only inventory row");
+
+        let response = ask(
+            &state,
+            Request::Covers {
+                token: "tok".to_string(),
+                edition_ids: vec![edition.to_hex(), missing.to_hex()],
+            },
+            REMOTE_NODE,
+        )
+        .await;
+
+        match response {
+            Response::CoverBatch(images) => {
+                assert_eq!(images.len(), 1, "the edition without a cover is absent");
+                assert_eq!(images[0].edition_id, edition.to_hex().to_ascii_lowercase());
+                assert_eq!(images[0].content_type, "image/png");
+                assert_eq!(images[0].bytes, b"edition-cover-bytes");
+            }
+            other => panic!("covers: {other:?}"),
         }
     }
 

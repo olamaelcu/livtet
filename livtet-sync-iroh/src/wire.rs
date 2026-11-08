@@ -122,6 +122,15 @@ pub enum Request {
     FileInfo { token: String, inventory_id: String },
     /// The extracted cover of one inventory item.
     Cover { token: String, inventory_id: String },
+    /// Cover bytes for editions the caller now holds but has no art for.
+    ///
+    /// A library that arrives without covers is mostly letters in a grid; asking for the
+    /// bytes by edition is what lets a receiver fill them in. Misses are simply absent
+    /// from the answer, and a peer without a cover for an id is not an error.
+    Covers {
+        token: String,
+        edition_ids: Vec<String>,
+    },
     /// An OPDS request for a paired desktop to serve in-process.
     ///
     /// `path` carries the query string with the path (`/search?query=dune`),
@@ -179,6 +188,8 @@ pub enum Response {
     FileInfo(FileMetadata),
     /// A cover header; the caller reads `length` raw bytes next.
     Cover(FileHeader),
+    /// Covers that existed for the requested editions; misses are absent.
+    CoverBatch(Vec<CoverImage>),
     /// An OPDS answer: the route's HTTP status, its media type, and its body.
     ///
     /// A non-2xx status is an ordinary answer, not [`Response::Error`]: a 404
@@ -251,6 +262,15 @@ pub struct FileHeader {
     pub total: u64,
     /// Opaque version tag, sent back as `if_range` to continue a download.
     pub etag: String,
+}
+
+/// One cover image, keyed by the edition it belongs to.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CoverImage {
+    /// The edition the cover belongs to, in the hex form ids travel in.
+    pub edition_id: String,
+    pub content_type: String,
+    pub bytes: Vec<u8>,
 }
 
 /// A file's metadata, as `FileInfo` reports it.

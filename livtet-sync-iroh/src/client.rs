@@ -15,7 +15,7 @@ use iroh::{Endpoint, EndpointAddr, EndpointId};
 use livtet_sync::types::{Conflict, FullDump, PullResponse, PushResponse, SyncChange, SyncStatus};
 use tokio::io::{AsyncReadExt, AsyncWrite};
 
-use crate::wire::{
+use crate::wire::{CoverImage, 
     ErrorCode, FileHeader, FileMetadata, Identity, Request, Response, WireError, read_frame,
     write_frame,
 };
@@ -422,6 +422,30 @@ impl Client {
         {
             Response::FileInfo(metadata) => Ok(metadata),
             other => Err(unexpected("file_info", &other)),
+        }
+    }
+
+    /// Covers for editions, as the peer has them.
+    ///
+    /// Absent editions (no cover on that device) are omitted rather than reported: a
+    /// cover is an ornament, and a library should not fail to sync over one.
+    pub async fn covers(
+        &self,
+        edition_ids: &[String],
+    ) -> Result<Vec<CoverImage>, ClientError> {
+        let exchange = self
+            .send(Request::Covers {
+                token: self.require_token()?,
+                edition_ids: edition_ids.to_vec(),
+            })
+            .await?;
+        match exchange.response {
+            Response::CoverBatch(covers) => Ok(covers),
+            Response::Error {
+                code: ErrorCode::NotFound,
+                ..
+            } => Ok(Vec::new()),
+            other => Err(unexpected("covers", &other)),
         }
     }
 

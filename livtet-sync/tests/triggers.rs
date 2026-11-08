@@ -4,7 +4,7 @@
 
 use std::collections::BTreeSet;
 
-use livtet_sync::{SUPPORTED_ENTITY_TYPES, entity_type_to_table};
+use livtet_sync::{DEVICE_LOCAL_ENTITY_TYPES, SUPPORTED_ENTITY_TYPES, entity_type_to_table};
 use livtet_test_utils::sync::Device;
 
 /// Entity types keyed by a single `id` column; the rest use composite keys.
@@ -15,7 +15,6 @@ const SINGLE_KEY_TYPES: &[&str] = &[
     "annotation",
     "reading_list",
     "reading_progress",
-    "digital_inventory",
     "owned_edition",
     "edition_loan",
 ];
@@ -68,6 +67,9 @@ async fn hex_id_where(device: &Device, table: &str, filter: &str) -> String {
 async fn every_inserted_row_is_logged_once() {
     let device = Device::seeded("a").await;
     for entity_type in SUPPORTED_ENTITY_TYPES {
+        if DEVICE_LOCAL_ENTITY_TYPES.contains(entity_type) {
+            continue;
+        }
         let rows = device.count(table(entity_type)).await;
         assert!(rows > 0, "fixture left {entity_type} empty");
         assert_eq!(
@@ -82,6 +84,9 @@ async fn every_inserted_row_is_logged_once() {
 async fn single_key_rows_are_logged_under_their_lowercase_hex_id() {
     let device = Device::seeded("a").await;
     for entity_type in SINGLE_KEY_TYPES {
+        if DEVICE_LOCAL_ENTITY_TYPES.contains(entity_type) {
+            continue;
+        }
         let logged: BTreeSet<String> = device
             .logged(entity_type, "INSERT")
             .await
@@ -108,7 +113,7 @@ async fn composite_key_rows_are_logged_under_a_json_key() {
     let single: BTreeSet<&str> = SINGLE_KEY_TYPES.iter().copied().collect();
     for entity_type in SUPPORTED_ENTITY_TYPES
         .iter()
-        .filter(|t| !single.contains(*t))
+        .filter(|t| !single.contains(*t) && !DEVICE_LOCAL_ENTITY_TYPES.contains(*t))
     {
         for row in device.logged(entity_type, "INSERT").await {
             let key: serde_json::Value = serde_json::from_str(&row.entity_id)
@@ -128,6 +133,9 @@ async fn updates_are_logged_for_entities_but_not_link_tables() {
         .collect();
 
     for entity_type in SUPPORTED_ENTITY_TYPES {
+        if DEVICE_LOCAL_ENTITY_TYPES.contains(entity_type) {
+            continue;
+        }
         let table = table(entity_type);
         let RowKey { column, filter } = first_row(&device, table).await;
         let id = if SINGLE_KEY_TYPES.contains(entity_type) {
@@ -157,6 +165,9 @@ async fn deletes_are_logged_for_every_type() {
 
     let device = Device::seeded("a").await;
     for entity_type in SUPPORTED_ENTITY_TYPES {
+        if DEVICE_LOCAL_ENTITY_TYPES.contains(entity_type) {
+            continue;
+        }
         let table = table(entity_type);
         let RowKey { filter, .. } = first_row(&device, table).await;
         let id = if SINGLE_KEY_TYPES.contains(entity_type) {
