@@ -3,7 +3,6 @@
 //! and the FFI — the desktop uses it for the HTTP layer's local
 //! queries, and the FFI uses it for the same on the mobile device.
 
-
 use livtet_data::orm::sea_query::Value as SqlValue;
 use livtet_data::orm::{
     ActiveModelTrait, ConnectionTrait, DatabaseBackend, Statement, TransactionTrait,
@@ -209,20 +208,6 @@ impl SyncEngine {
             ],
         )
         .await?;
-        let annotations = query_table(
-            &self.db,
-            "annotations",
-            &[
-                "id",
-                "edition_id",
-                "user_id",
-                "content",
-                "location",
-                "created_at",
-                "updated_at",
-            ],
-        )
-        .await?;
         let reading_lists = query_table(
             &self.db,
             "reading_lists",
@@ -243,8 +228,10 @@ impl SyncEngine {
                 "edition_id",
                 "format_id",
                 "progress",
+                "progress_unit",
                 "last_location",
                 "total_reading_time_secs",
+                "annotations",
                 "created_at",
             ],
         )
@@ -264,7 +251,7 @@ impl SyncEngine {
                 digital_inventory: Vec::new(),
                 owned_editions,
                 editions_loans,
-                annotations,
+                annotations: Vec::new(),
                 reading_lists,
                 reading_list_book,
                 reading_progress,
@@ -597,13 +584,12 @@ impl SyncEngine {
             if change.operation == "DELETE" {
                 delete_entity(&txn, table, &change.entity_id).await?;
             } else {
-                let payload: Value =
-                    serde_json::from_str(&change.payload).map_err(|error| {
-                        SyncError::Deserialization {
-                            entity_type: change.entity_type.clone(),
-                            message: error.to_string(),
-                        }
-                    })?;
+                let payload: Value = serde_json::from_str(&change.payload).map_err(|error| {
+                    SyncError::Deserialization {
+                        entity_type: change.entity_type.clone(),
+                        message: error.to_string(),
+                    }
+                })?;
                 upsert_payload(&txn, table, &payload).await?;
             }
 
@@ -644,10 +630,7 @@ fn payload_edition_id(payload: &str) -> Option<DbId> {
 }
 
 /// Whether an edition row is present locally.
-async fn edition_exists(
-    db: &impl ConnectionTrait,
-    edition_id: DbId,
-) -> Result<bool, SyncError> {
+async fn edition_exists(db: &impl ConnectionTrait, edition_id: DbId) -> Result<bool, SyncError> {
     let statement = Statement::from_sql_and_values(
         DatabaseBackend::Sqlite,
         "SELECT 1 FROM editions WHERE id = ?",

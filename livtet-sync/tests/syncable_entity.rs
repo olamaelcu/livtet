@@ -12,10 +12,10 @@
 //! comment on that test.
 
 use livtet_data::entities::{
-    annotations, digital_inventory, edition_authors, edition_genres, edition_groups,
-    edition_publishers, edition_subjects, edition_tags, editions, editions_loans, owned_edition,
-    reading_list_book, reading_lists, reading_progress, series_entries, work_authors, work_genres,
-    work_publishers, work_subjects, work_tags, works,
+    digital_inventory, edition_authors, edition_genres, edition_groups, edition_publishers,
+    edition_subjects, edition_tags, editions, editions_loans, owned_edition, reading_list_book,
+    reading_lists, reading_progress, series_entries, work_authors, work_genres, work_publishers,
+    work_subjects, work_tags, works,
 };
 use livtet_data::orm::{DatabaseConnection, EntityTrait, SqlxSqliteConnector};
 use livtet_sync::types::syncable_entity::{ChangeLogEntity, SyncableEntityKind};
@@ -108,13 +108,6 @@ async fn every_variant_round_trips_through_its_payload() {
         editions_loans::Entity,
         "edition_loan",
         "editions_loans"
-    );
-    check_variant!(
-        c,
-        Annotation,
-        annotations::Entity,
-        "annotation",
-        "annotations"
     );
     check_variant!(
         c,
@@ -261,10 +254,7 @@ async fn the_seed_reaches_every_registered_entity_type() {
     let missing: Vec<&str> = SyncableEntityKind::ALL_VARIANTS
         .iter()
         .copied()
-        .filter(|v| {
-            !seen.contains(v)
-                && !livtet_sync::DEVICE_LOCAL_ENTITY_TYPES.contains(v)
-        })
+        .filter(|v| !seen.contains(v) && !livtet_sync::DEVICE_LOCAL_ENTITY_TYPES.contains(v))
         .collect();
     assert!(
         missing.is_empty(),
@@ -309,14 +299,13 @@ fn all_variants_is_unique() {
 /// registry. Cross-check both directions.
 #[test]
 fn change_log_entity_consts_match_the_registry() {
-    let consts: [&str; 21] = [
+    let consts: [&str; 20] = [
         <works::Entity as ChangeLogEntity>::ENTITY_TYPE,
         <editions::Entity as ChangeLogEntity>::ENTITY_TYPE,
         <series_entries::Entity as ChangeLogEntity>::ENTITY_TYPE,
         <digital_inventory::Entity as ChangeLogEntity>::ENTITY_TYPE,
         <owned_edition::Entity as ChangeLogEntity>::ENTITY_TYPE,
         <editions_loans::Entity as ChangeLogEntity>::ENTITY_TYPE,
-        <annotations::Entity as ChangeLogEntity>::ENTITY_TYPE,
         <reading_lists::Entity as ChangeLogEntity>::ENTITY_TYPE,
         <reading_list_book::Entity as ChangeLogEntity>::ENTITY_TYPE,
         <reading_progress::Entity as ChangeLogEntity>::ENTITY_TYPE,

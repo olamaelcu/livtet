@@ -84,8 +84,8 @@ async fn hot_paths_use_indexes() {
             "idx_authors_name",
         ),
         (
-            "EXPLAIN QUERY PLAN SELECT id FROM annotations WHERE edition_id = 'x'",
-            "idx_annotations_edition_id",
+            "EXPLAIN QUERY PLAN SELECT id FROM reading_progress WHERE edition_id = 'x'",
+            "idx_reading_progress_edition_format",
         ),
     ];
 

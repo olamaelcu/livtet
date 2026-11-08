@@ -92,7 +92,6 @@ impl SeedArgs {
             row("authors", result.authors_created),
             row("publishers", result.publishers_created),
             row("reading status entries", result.reading_status_count),
-            row("annotations", result.annotations_created),
             row("digital inventory", result.digital_inventory_created),
             row("loans", result.loans_created),
             row("reading sessions", result.reading_sessions_created),

@@ -33,7 +33,6 @@ pub const SUPPORTED_ENTITY_TYPES: &[&str] = &[
     "edition",
     "edition_group",
     "series_entry",
-    "annotation",
     "reading_list",
     "reading_progress",
     "digital_inventory",

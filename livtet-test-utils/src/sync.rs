@@ -37,7 +37,6 @@ pub fn full_coverage_seed() -> SeedConfig {
         actively_reading_pct: 0.5,
         did_not_finish_pct: 0.25,
         edition_group_pct: 1.0,
-        annotation_pct: 1.0,
         loan_pct: 1.0,
         digital_inventory_pct: 1.0,
     }

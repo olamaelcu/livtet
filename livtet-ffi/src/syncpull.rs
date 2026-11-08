@@ -202,12 +202,11 @@ async fn pull_missing_covers(
     let state = SharedState::connect(db_path, &[Kind::Business, Kind::Client])
         .await
         .map_err(|error| LivtetError::Database(error.to_string()))?;
-    let wanted: Vec<String> =
-        livtet_core::data::sql::query_scalar(COVERS_NEEDED_SQL)
-            .bind(COVERS_PER_SYNC)
-    .fetch_all(&state.pool)
-    .await
-    .map_err(|error| LivtetError::Database(error.to_string()))?;
+    let wanted: Vec<String> = livtet_core::data::sql::query_scalar(COVERS_NEEDED_SQL)
+        .bind(COVERS_PER_SYNC)
+        .fetch_all(&state.pool)
+        .await
+        .map_err(|error| LivtetError::Database(error.to_string()))?;
     if wanted.is_empty() {
         return Ok(());
     }
@@ -225,12 +224,18 @@ async fn pull_missing_covers(
             let Ok(edition) = DbId::from_hex(&cover.edition_id) else {
                 continue;
             };
-            let path = dir.join(format!("{}.{}", cover.edition_id, cover_extension(&cover.content_type)));
+            let path = dir.join(format!(
+                "{}.{}",
+                cover.edition_id,
+                cover_extension(&cover.content_type)
+            ));
             std::fs::write(path.as_std_path(), &cover.bytes)
                 .map_err(|error| LivtetError::Sync(format!("could not write {path}: {error}")))?;
             adopt_cover(&db, edition, path.as_str())
                 .await
-                .map_err(|error| LivtetError::Sync(format!("could not record the cover: {error}")))?;
+                .map_err(|error| {
+                    LivtetError::Sync(format!("could not record the cover: {error}"))
+                })?;
         }
     }
     Ok(())
@@ -453,7 +458,10 @@ async fn bootstrap(
             .map_err(|error| LivtetError::Sync(format!("could not read offers: {error}")))?;
         let (page_offers, _rows) = split_offers(page.changes);
         for pulled in page_offers {
-            if !offers.iter().any(|seen| seen.offer.offer_id == pulled.offer.offer_id) {
+            if !offers
+                .iter()
+                .any(|seen| seen.offer.offer_id == pulled.offer.offer_id)
+            {
                 offers.push(pulled);
             }
         }
@@ -505,15 +513,16 @@ async fn apply_dump(
         .await
         .map_err(|error| LivtetError::Database(error.to_string()))?;
     // `digital_inventory` is deliberately absent: a peer's dump names its own disk.
+    // `annotations` is absent too: notes now travel inside `reading_progress`,
+    // and a dump from an older peer may still carry standalone rows.
     // Accepting an offer writes the receiver's own row instead.
-    let tables: [(&str, &[serde_json::Value]); 10] = [
+    let tables: [(&str, &[serde_json::Value]); 9] = [
         ("works", &dump.entities.works),
         ("editions", &dump.entities.editions),
         ("edition_groups", &dump.entities.edition_groups),
         ("series_entries", &dump.entities.series_entries),
         ("owned_editions", &dump.entities.owned_editions),
         ("editions_loans", &dump.entities.editions_loans),
-        ("annotations", &dump.entities.annotations),
         ("reading_lists", &dump.entities.reading_lists),
         ("reading_list_book", &dump.entities.reading_list_book),
         ("reading_progress", &dump.entities.reading_progress),
@@ -739,13 +748,11 @@ pub async fn sync_cursor(db_path: String, peer_node_id: String) -> Result<i64, L
     let state = SharedState::connect(&db_path, &[Kind::Business, Kind::Client])
         .await
         .map_err(|error| LivtetError::Database(error.to_string()))?;
-    let row = livtet_core::data::sql::query(
-        "SELECT value FROM client_settings WHERE key = ?",
-    )
-    .bind(cursor_key(&peer_node_id))
-    .fetch_optional(&state.pool)
-    .await
-    .map_err(|error| LivtetError::Database(error.to_string()))?;
+    let row = livtet_core::data::sql::query("SELECT value FROM client_settings WHERE key = ?")
+        .bind(cursor_key(&peer_node_id))
+        .fetch_optional(&state.pool)
+        .await
+        .map_err(|error| LivtetError::Database(error.to_string()))?;
 
     Ok(row
         .and_then(|row| row.try_get::<String, _>("value").ok())
@@ -873,9 +880,9 @@ fn split_offers(changes: Vec<SyncChange>) -> (Vec<PulledOffer>, Vec<SyncChange>)
                 &pulled.offer.edition_id,
                 &pulled.offer.work_id,
             ]
-                .into_iter()
-                .filter(|id| !id.is_empty())
-                .cloned()
+            .into_iter()
+            .filter(|id| !id.is_empty())
+            .cloned()
         })
         .collect();
 
@@ -977,10 +984,11 @@ mod tests {
         .execute(pool)
         .await
         .expect("seed an edition");
-        let format: Vec<u8> = livtet_core::data::sql::query_scalar("SELECT id FROM formats LIMIT 1")
-            .fetch_one(pool)
-            .await
-            .expect("a seeded format");
+        let format: Vec<u8> =
+            livtet_core::data::sql::query_scalar("SELECT id FROM formats LIMIT 1")
+                .fetch_one(pool)
+                .await
+                .expect("a seeded format");
         livtet_core::data::sql::query(
             "INSERT INTO reading_progress \
              (id, edition_id, format_id, progress, last_location, total_reading_time_secs, \
@@ -1164,7 +1172,12 @@ mod tests {
         livtet_core::data::sql::query(
             "INSERT INTO works (id, title, created_at) VALUES (?, 'A book', datetime('now'))",
         )
-        .bind(DbId::from_hex(&work_id).expect("work id").to_bytes().to_vec())
+        .bind(
+            DbId::from_hex(&work_id)
+                .expect("work id")
+                .to_bytes()
+                .to_vec(),
+        )
         .execute(&state.pool)
         .await
         .expect("seed work");
@@ -1172,8 +1185,18 @@ mod tests {
             "INSERT INTO editions (id, work_id, title, created_at) \
              VALUES (?, ?, 'A book', datetime('now'))",
         )
-        .bind(DbId::from_hex(&edition_id).expect("edition id").to_bytes().to_vec())
-        .bind(DbId::from_hex(&work_id).expect("work id").to_bytes().to_vec())
+        .bind(
+            DbId::from_hex(&edition_id)
+                .expect("edition id")
+                .to_bytes()
+                .to_vec(),
+        )
+        .bind(
+            DbId::from_hex(&work_id)
+                .expect("work id")
+                .to_bytes()
+                .to_vec(),
+        )
         .execute(&state.pool)
         .await
         .expect("seed edition");
@@ -1558,12 +1581,11 @@ mod tests {
         .await
         .expect("seed a local cover");
 
-        let wanted: Vec<String> =
-            livtet_core::data::sql::query_scalar(COVERS_NEEDED_SQL)
-                .bind(COVERS_PER_SYNC)
-                .fetch_all(&state.pool)
-                .await
-                .expect("select the want list");
+        let wanted: Vec<String> = livtet_core::data::sql::query_scalar(COVERS_NEEDED_SQL)
+            .bind(COVERS_PER_SYNC)
+            .fetch_all(&state.pool)
+            .await
+            .expect("select the want list");
 
         assert_eq!(
             wanted,

@@ -8,7 +8,6 @@ use std::collections::HashMap;
 // ── SeaORM entity aliases ───────────────────────────────────────────────────
 use crate::entities;
 use entities::{
-    annotations::{ActiveModel as AnnotationActiveModel, Entity as AnnotationsEntity},
     authors::{ActiveModel as AuthorActiveModel, Entity as AuthorsEntity},
     current_work_status::{
         ActiveModel as CurrentWorkStatusActiveModel, Entity as CurrentWorkStatusEntity,
@@ -78,7 +77,6 @@ pub struct SeedResult {
     pub authors_created: u32,
     pub publishers_created: u32,
     pub reading_status_count: u32,
-    pub annotations_created: u32,
     pub digital_inventory_created: u32,
     pub loans_created: u32,
     pub reading_sessions_created: u32,
@@ -93,7 +91,6 @@ pub struct SeedConfig {
     pub actively_reading_pct: f64,
     pub did_not_finish_pct: f64,
     pub edition_group_pct: f64,
-    pub annotation_pct: f64,
     pub loan_pct: f64,
     pub digital_inventory_pct: f64,
 }
@@ -112,7 +109,6 @@ impl SeedConfig {
             actively_reading_pct: 0.10,
             did_not_finish_pct: 0.20,
             edition_group_pct: 0.10,
-            annotation_pct: 0.50,
             loan_pct: 0.05,
             digital_inventory_pct: 0.30,
         }
@@ -160,7 +156,6 @@ async fn seed_database_inner(
         authors_created: 0,
         publishers_created: 0,
         reading_status_count: 0,
-        annotations_created: 0,
         digital_inventory_created: 0,
         loans_created: 0,
         reading_sessions_created: 0,
@@ -204,7 +199,6 @@ async fn seed_database_inner(
     result.reading_status_count = status_summary;
 
     add_digital_inventory(txn, &work_with_status, config, timestamp, &mut result).await?;
-    add_annotations(txn, &work_with_status, config, timestamp, &mut result).await?;
     add_edition_groups(txn, &work_edition_map, config, timestamp).await?;
     let (_loan_entity_ids, _loan_summary) =
         add_loans(txn, &edition_ids, config, timestamp, &mut result).await?;
@@ -969,34 +963,6 @@ async fn add_digital_inventory(
         };
         DigitalInventoryEntity::insert(model).exec(pool).await?;
         result.digital_inventory_created += 1;
-    }
-    Ok(())
-}
-
-async fn add_annotations(
-    pool: &DatabaseTransaction,
-    work_with_status: &[WorkWithStatus],
-    config: &SeedConfig,
-    timestamp: PrimitiveDateTime,
-    result: &mut SeedResult,
-) -> Result<(), sea_orm::DbErr> {
-    for ws in work_with_status {
-        if rand::random_range(0.0f64..1.0f64) > config.annotation_pct {
-            continue;
-        }
-        let annotation_id = DbId::new();
-        let content: String = fake::faker::lorem::en::Sentence(8..15).fake();
-        let model = AnnotationActiveModel {
-            id: Set(annotation_id),
-            edition_id: Set(ws.primary_edition_id),
-            user_id: Set(DbId::new()),
-            content: Set(content),
-            location: Set(Some("0002".to_string())),
-            created_at: Set(timestamp),
-            updated_at: Set(None),
-        };
-        AnnotationsEntity::insert(model).exec(pool).await?;
-        result.annotations_created += 1;
     }
     Ok(())
 }

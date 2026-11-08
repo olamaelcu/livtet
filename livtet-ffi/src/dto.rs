@@ -114,7 +114,7 @@ pub struct ReadingProgress {
 /// A user annotation pinned to an edition.
 #[derive(Debug, Clone, uniffi::Record)]
 pub struct Annotation {
-    pub id: DbId,
+    pub id: String,
     pub edition_id: DbId,
     pub content: String,
     pub location: Option<String>,

@@ -146,10 +146,10 @@ macro_rules! define_syncable_entities {
 //   * Table name    – the SQLite table name
 
 use livtet_data::entities::{
-    annotations, digital_inventory, edition_authors, edition_genres, edition_groups,
-    edition_publishers, edition_subjects, edition_tags, editions, editions_loans, owned_edition,
-    reading_list_book, reading_lists, reading_progress, series_entries, work_authors, work_genres,
-    work_publishers, work_subjects, work_tags, works,
+    digital_inventory, edition_authors, edition_genres, edition_groups, edition_publishers,
+    edition_subjects, edition_tags, editions, editions_loans, owned_edition, reading_list_book,
+    reading_lists, reading_progress, series_entries, work_authors, work_genres, work_publishers,
+    work_subjects, work_tags, works,
 };
 
 define_syncable_entities! {
@@ -159,7 +159,6 @@ define_syncable_entities! {
     DigitalInventory(digital_inventory::Model, digital_inventory::Entity) => ("digital_inventory", "digital_inventory"),
     OwnedEdition(owned_edition::Model, owned_edition::Entity)       => ("owned_edition", "owned_editions"),
     EditionLoan(editions_loans::Model, editions_loans::Entity)       => ("edition_loan", "editions_loans"),
-    Annotation(annotations::Model, annotations::Entity)           => ("annotation", "annotations"),
     ReadingList(reading_lists::Model, reading_lists::Entity)        => ("reading_list", "reading_lists"),
     ReadingListBook(reading_list_book::Model, reading_list_book::Entity) => ("reading_list_book", "reading_list_book"),
     ReadingProgress(reading_progress::Model, reading_progress::Entity)  => ("reading_progress", "reading_progress"),
@@ -198,9 +197,6 @@ impl ChangeLogEntity for owned_edition::Entity {
 }
 impl ChangeLogEntity for editions_loans::Entity {
     const ENTITY_TYPE: &'static str = "edition_loan";
-}
-impl ChangeLogEntity for annotations::Entity {
-    const ENTITY_TYPE: &'static str = "annotation";
 }
 impl ChangeLogEntity for reading_lists::Entity {
     const ENTITY_TYPE: &'static str = "reading_list";
@@ -261,7 +257,6 @@ impl SyncableEntityKind {
             Self::DigitalInventory(e) => e.id.to_hex(),
             Self::OwnedEdition(e) => e.id.to_hex(),
             Self::EditionLoan(e) => e.id.to_hex(),
-            Self::Annotation(e) => e.id.to_hex(),
             Self::ReadingList(e) => e.id.to_hex(),
             Self::ReadingProgress(e) => e.id.to_hex(),
             Self::EditionGroup(e) => e.id.to_hex(),
@@ -395,11 +390,9 @@ impl SyncableEntityKind {
                 "edition_loan",
             )
             .await?,
-            annotations: fetch_all_json::<livtet_data::entities::annotations::Entity>(
-                db,
-                "annotation",
-            )
-            .await?,
+            // Notes travel inside `reading_progress.annotations`; the field
+            // stays on the wire for older peers but is always empty now.
+            annotations: Vec::new(),
             reading_lists: fetch_all_json::<livtet_data::entities::reading_lists::Entity>(
                 db,
                 "reading_list",
@@ -429,7 +422,6 @@ pub const ENTITY_DUMP_TYPES: &[&str] = &[
     "series_entry",
     "owned_edition",
     "edition_loan",
-    "annotation",
     "reading_list",
     "reading_list_book",
     "reading_progress",
@@ -442,7 +434,6 @@ pub const ENTITY_DUMP_TYPES: &[&str] = &[
 /// must be kept in sync.
 pub fn entity_type_to_table(entity_type: &str) -> Option<&'static str> {
     match entity_type {
-        "annotation" => Some("annotations"),
         "digital_inventory" => Some("digital_inventory"),
         "edition" => Some("editions"),
         "edition_author" => Some("edition_authors"),
@@ -580,7 +571,6 @@ impl_syncable_entities! {
     digital_inventory::Model => digital_inventory::Entity, DigitalInventory, "digital_inventory", "digital_inventory";
     owned_edition::Model => owned_edition::Entity, OwnedEdition, "owned_edition", "owned_editions";
     editions_loans::Model => editions_loans::Entity, EditionLoan, "edition_loan", "editions_loans";
-    annotations::Model => annotations::Entity, Annotation, "annotation", "annotations";
     reading_lists::Model => reading_lists::Entity, ReadingList, "reading_list", "reading_lists";
     reading_list_book::Model => reading_list_book::Entity, ReadingListBook, "reading_list_book", "reading_list_book";
     reading_progress::Model => reading_progress::Entity, ReadingProgress, "reading_progress", "reading_progress";

@@ -5,7 +5,8 @@
 //! sync is needed here.
 
 use livtet_core::data::entities::{
-    current_work_status, reading_list_book, reading_lists, reading_progress, reading_sessions,
+    current_work_status, editions, formats, reading_annotations, reading_list_book, reading_lists,
+    reading_progress, reading_sessions,
 };
 use livtet_core::data::orm::{
     ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, QueryOrder, Set,
@@ -19,9 +20,47 @@ use crate::dto::{
 use crate::error::LivtetError;
 use crate::store::LivtetStore;
 
-/// Local (non-synced) user marker for annotation ownership. Deterministic
-/// and obviously sentinel, so a future users model can migrate cleanly.
-const LOCAL_USER: [u8; 16] = [0; 16];
+/// The notes stored on one `reading_progress.annotations` value.
+///
+/// Anything that is not a JSON array is treated as no notes: the column is
+/// written by the desktop too, so a malformed value must not throw away the
+/// rest of the reader.
+fn stored_notes(raw: Option<&str>) -> Vec<serde_json::Value> {
+    raw.and_then(|value| serde_json::from_str::<serde_json::Value>(value).ok())
+        .and_then(|value| value.as_array().cloned())
+        .unwrap_or_default()
+}
+
+/// The format to attach to a new progress row: the edition's own, else the
+/// seeded EPUB row, else anything.
+async fn fallback_format(
+    db: &livtet_core::data::orm::DatabaseConnection,
+    edition_id: DbId,
+) -> Result<DbId, LivtetError> {
+    let edition = editions::Entity::find_by_id(edition_id)
+        .one(db)
+        .await?
+        .ok_or_else(|| LivtetError::NotFound {
+            entity: "edition".to_string(),
+            id: edition_id.to_string(),
+        })?;
+    if let Some(format_id) = edition.format_id {
+        return Ok(format_id);
+    }
+    if let Some(epub) = formats::Entity::find()
+        .filter(formats::Column::Name.eq("epub"))
+        .one(db)
+        .await?
+    {
+        return Ok(epub.id);
+    }
+    formats::Entity::find()
+        .order_by_asc(formats::Column::Name)
+        .one(db)
+        .await?
+        .map(|format| format.id)
+        .ok_or_else(|| LivtetError::InvalidInput("no formats are seeded".to_string()))
+}
 
 #[uniffi::export(async_runtime = "tokio")]
 impl LivtetStore {
@@ -196,6 +235,11 @@ impl LivtetStore {
     // ── Annotations ──────────────────────────────────────────────
 
     /// Add an annotation (note/highlight) to an edition.
+    ///
+    /// Notes are a JSON array on the edition's `reading_progress` row, the
+    /// shape the desktop reader writes, so both apps see the same list. The
+    /// row is created (at progress zero) when the reader has not saved a
+    /// position yet.
     pub async fn add_annotation(
         &self,
         edition_id: DbId,
@@ -203,42 +247,98 @@ impl LivtetStore {
         location: Option<String>,
     ) -> Result<Annotation, LivtetError> {
         let db = self.state.db_conn();
-        let active = livtet_core::data::entities::annotations::ActiveModel {
-            id: Set(DbId::new()),
-            edition_id: Set(edition_id),
-            user_id: Set(DbId::from_bytes(LOCAL_USER)),
-            content: Set(content),
-            location: Set(location),
-            created_at: Set(now_primitive()),
-            updated_at: Set(None),
-        };
-        let model = livtet_core::data::entities::annotations::Entity::insert(active)
-            .exec_with_returning(&db)
+        let now = now_primitive();
+        let created_at = ts(&now);
+        let id = DbId::new().to_string();
+        let entry = serde_json::json!({
+            "id": id,
+            "text": content,
+            "locator": location,
+            "createdAt": created_at,
+        });
+
+        let existing = reading_progress::Entity::find()
+            .filter(reading_progress::Column::EditionId.eq(edition_id))
+            .one(&db)
             .await?;
-        Ok(annotation_from(model))
+
+        match existing {
+            Some(row) => {
+                let mut notes = stored_notes(row.annotations.as_deref());
+                notes.push(entry);
+                let mut active: reading_progress::ActiveModel = row.into();
+                active.annotations = Set(Some(serde_json::Value::Array(notes).to_string()));
+                active.update(&db).await?;
+            }
+            None => {
+                let format_id = fallback_format(&db, edition_id).await?;
+                reading_progress::ActiveModel {
+                    id: Set(DbId::new()),
+                    edition_id: Set(edition_id),
+                    format_id: Set(format_id),
+                    progress: Set(0.0),
+                    progress_unit: Set(None),
+                    last_location: Set(None),
+                    total_reading_time_secs: Set(0),
+                    annotations: Set(Some(serde_json::Value::Array(vec![entry]).to_string())),
+                    created_at: Set(now),
+                }
+                .insert(&db)
+                .await?;
+            }
+        }
+
+        Ok(Annotation {
+            id,
+            edition_id,
+            content,
+            location,
+            created_at,
+            updated_at: None,
+        })
     }
 
-    /// All annotations for an edition, oldest first.
+    /// All annotations for an edition, oldest first, plucked from the stored
+    /// JSON by the `reading_annotations` view.
     pub async fn list_annotations(&self, edition_id: DbId) -> Result<Vec<Annotation>, LivtetError> {
         let db = self.state.db_conn();
-        let rows = livtet_core::data::entities::annotations::Entity::find()
-            .filter(livtet_core::data::entities::annotations::Column::EditionId.eq(edition_id))
-            .order_by_asc(livtet_core::data::entities::annotations::Column::CreatedAt)
+        let rows = reading_annotations::Entity::find()
+            .filter(reading_annotations::Column::EditionId.eq(edition_id))
+            .order_by_asc(reading_annotations::Column::CreatedAt)
             .all(&db)
             .await?;
-        Ok(rows.into_iter().map(annotation_from).collect())
+        Ok(rows
+            .into_iter()
+            .map(|row| Annotation {
+                id: row.id,
+                edition_id: row.edition_id,
+                content: row.content,
+                location: row.location,
+                created_at: row.created_at,
+                updated_at: None,
+            })
+            .collect())
     }
 
-    /// Delete one annotation. `false` when it did not exist.
-    pub async fn delete_annotation(&self, id: DbId) -> Result<bool, LivtetError> {
+    /// Remove one note by its id. `false` when it did not exist.
+    pub async fn delete_annotation(&self, id: String) -> Result<bool, LivtetError> {
         let db = self.state.db_conn();
-        Ok(
-            livtet_core::data::entities::annotations::Entity::delete_by_id(id)
-                .exec(&db)
-                .await?
-                .rows_affected
-                > 0,
-        )
+        let rows = reading_progress::Entity::find().all(&db).await?;
+        let needle = id.as_str();
+        let mut deleted = false;
+        for row in rows {
+            let mut notes = stored_notes(row.annotations.as_deref());
+            let before = notes.len();
+            notes.retain(|note| note.get("id").and_then(|value| value.as_str()) != Some(needle));
+            if notes.len() == before {
+                continue;
+            }
+            let mut active: reading_progress::ActiveModel = row.into();
+            active.annotations = Set(Some(serde_json::Value::Array(notes).to_string()));
+            active.update(&db).await?;
+            deleted = true;
+        }
+        Ok(deleted)
     }
 
     // ── Reading lists ────────────────────────────────────────────
@@ -508,17 +608,6 @@ fn unit_from_str(s: &str) -> Option<ProgressUnit> {
     }
 }
 
-fn annotation_from(m: livtet_core::data::entities::annotations::Model) -> Annotation {
-    Annotation {
-        id: m.id,
-        edition_id: m.edition_id,
-        content: m.content,
-        location: m.location,
-        created_at: ts(&m.created_at),
-        updated_at: ts_opt(m.updated_at),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
@@ -647,10 +736,23 @@ mod tests {
             .await
             .unwrap();
 
+        assert_eq!(ann.content, "Nice passage");
         let listed = store.list_annotations(edition).await.unwrap();
-        assert!(listed.iter().any(|a| a.id == ann.id));
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].id, ann.id);
+        assert_eq!(listed[0].location.as_deref(), Some("ch1"));
 
-        assert!(store.delete_annotation(ann.id).await.unwrap());
+        // A second note keeps the first one.
+        let second = store
+            .add_annotation(edition, "Second".to_string(), None)
+            .await
+            .unwrap();
+        assert_eq!(store.list_annotations(edition).await.unwrap().len(), 2);
+
+        assert!(store.delete_annotation(ann.id.clone()).await.unwrap());
+        let left = store.list_annotations(edition).await.unwrap();
+        assert_eq!(left.len(), 1);
+        assert_eq!(left[0].id, second.id);
         assert!(!store.delete_annotation(ann.id).await.unwrap());
     }
 
