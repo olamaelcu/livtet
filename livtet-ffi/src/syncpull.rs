@@ -69,6 +69,9 @@ pub struct SyncPullReport {
     /// Library rows written locally (everything that was not an offer).
     pub applied: u32,
     pub conflicts: u32,
+    /// Rows the peer sent that this device has no place for (a piece of reading progress
+    /// whose edition is not here yet, an entity type this build does not know).
+    pub skipped: u32,
     /// Pass this back as `since_version` for the next pull.
     pub cursor: i64,
     /// The peer had more rows than the page size; pull again immediately.
@@ -144,6 +147,7 @@ pub async fn sync_pull(
 
     let mut applied = 0;
     let mut conflicts = 0;
+    let mut skipped = 0;
     if !metadata.is_empty() {
         let outcome = engine
             .apply_changes(metadata)
@@ -151,11 +155,13 @@ pub async fn sync_pull(
             .map_err(|error| LivtetError::Sync(format!("could not apply pulled rows: {error}")))?;
         applied = outcome.applied as u32;
         conflicts = outcome.conflicts.len() as u32;
+        skipped = outcome.skipped as u32;
     }
 
     let report = SyncPullReport {
         applied,
         conflicts,
+        skipped,
         cursor: pull.latest_version,
         has_more: pull.has_more,
         offers: offers.into_iter().map(|pulled| pulled.offer).collect(),
@@ -435,7 +441,7 @@ async fn bootstrap(
         .pull_full()
         .await
         .map_err(|error| LivtetError::Sync(format!("could not fetch the library: {error}")))?;
-    let applied = apply_dump(&db_path, &dump).await?;
+    let written = apply_dump(&db_path, &dump).await?;
 
     let mut offers: Vec<PulledOffer> = Vec::new();
     let mut cursor = dump.version;
@@ -467,12 +473,23 @@ async fn bootstrap(
     remember_cursor(&state.pool, &peer_node_id, cursor).await?;
 
     Ok(SyncPullReport {
-        applied,
+        applied: written.applied,
         conflicts: 0,
+        // The dump is written parents-first, so no row it carries can be orphaned; what it
+        // cannot write is a row of the wrong shape, and that is what it counts.
+        skipped: written.skipped,
         cursor,
         has_more: false,
         offers: offers.into_iter().map(|pulled| pulled.offer).collect(),
     })
+}
+
+/// What writing a dump did.
+struct DumpOutcome {
+    /// Rows inserted.
+    applied: u32,
+    /// Rows left out because they were not a row.
+    skipped: u32,
 }
 
 /// Insert every row of a dump, parents first.
@@ -480,7 +497,10 @@ async fn bootstrap(
 /// Columns come from each row's own keys and values from `json_extract`, so one
 /// bind carries a whole row and SQLite applies its JSON typing — no per-column
 /// marshalling table to keep in sync with the schema.
-async fn apply_dump(db_path: &str, dump: &livtet_sync::FullDump) -> Result<u32, LivtetError> {
+async fn apply_dump(
+    db_path: &str,
+    dump: &livtet_sync::FullDump,
+) -> Result<DumpOutcome, LivtetError> {
     let state = SharedState::connect(db_path, &[Kind::Business, Kind::Client])
         .await
         .map_err(|error| LivtetError::Database(error.to_string()))?;
@@ -500,12 +520,15 @@ async fn apply_dump(db_path: &str, dump: &livtet_sync::FullDump) -> Result<u32, 
     ];
 
     let mut written = 0u32;
+    let mut skipped = 0u32;
     for (table, rows) in tables {
         for row in rows {
             let Some(object) = row.as_object() else {
+                skipped += 1;
                 continue;
             };
             if object.is_empty() {
+                skipped += 1;
                 continue;
             }
             let mut insert =
@@ -530,7 +553,10 @@ async fn apply_dump(db_path: &str, dump: &livtet_sync::FullDump) -> Result<u32, 
             written += 1;
         }
     }
-    Ok(written)
+    Ok(DumpOutcome {
+        applied: written,
+        skipped,
+    })
 }
 
 /// Quote a column name for the generated statement.
@@ -927,6 +953,51 @@ mod tests {
         }
     }
 
+    /// Seed a work, its edition, and one progress row, so the triggers log all three.
+    async fn seed_progress(
+        pool: &livtet_core::data::sql::SqlitePool,
+        work: DbId,
+        edition: DbId,
+        locator: &str,
+        progress: f64,
+        seconds: i64,
+    ) {
+        livtet_core::data::sql::query(
+            "INSERT INTO works (id, title, created_at) VALUES (?, 'Progress', datetime('now'))",
+        )
+        .bind(work.to_bytes().to_vec())
+        .execute(pool)
+        .await
+        .expect("seed a work");
+        livtet_core::data::sql::query(
+            "INSERT INTO editions (id, work_id, created_at) VALUES (?, ?, datetime('now'))",
+        )
+        .bind(edition.to_bytes().to_vec())
+        .bind(work.to_bytes().to_vec())
+        .execute(pool)
+        .await
+        .expect("seed an edition");
+        let format: Vec<u8> = livtet_core::data::sql::query_scalar("SELECT id FROM formats LIMIT 1")
+            .fetch_one(pool)
+            .await
+            .expect("a seeded format");
+        livtet_core::data::sql::query(
+            "INSERT INTO reading_progress \
+             (id, edition_id, format_id, progress, last_location, total_reading_time_secs, \
+              created_at) \
+             VALUES (?, ?, ?, ?, ?, ?, datetime('now'))",
+        )
+        .bind(DbId::new().to_bytes().to_vec())
+        .bind(edition.to_bytes().to_vec())
+        .bind(format)
+        .bind(progress)
+        .bind(locator)
+        .bind(seconds)
+        .execute(pool)
+        .await
+        .expect("seed reading progress");
+    }
+
     /// A peer offers one book; pulling lists it, accepting writes the exact
     /// bytes into the caller's directory and tells the peer.
     #[tokio::test]
@@ -1236,6 +1307,168 @@ mod tests {
         assert_eq!(report.offers[0].offer_id, "offer-9");
     }
 
+    /// Reading progress written on one library lands in another through a pull, and a row
+    /// whose edition the receiver never got is counted instead of failing the page.
+    ///
+    /// The second half is why `skipped` exists: a pull stores its cursor before applying
+    /// the rows, so a foreign-key failure here would lose the whole page and the reader's
+    /// position would never come back.
+    #[tokio::test]
+    async fn reading_progress_is_pulled_and_a_row_with_no_edition_is_skipped() {
+        use livtet_core::data::sql::Row;
+
+        let dir = camino_tempfile::Utf8TempDir::new().expect("temp dir");
+        let sender_db = dir.path().join("sender.db").to_string();
+        let recipient_db = dir.path().join("recipient.db").to_string();
+
+        // The sender's library: a work, its edition, and where the reader stopped.
+        let sender = SharedState::connect(&sender_db, &[Kind::Business, Kind::Client])
+            .await
+            .expect("open the sender's library");
+        let work = DbId::new();
+        let edition = DbId::new();
+        let locator = r#"{"href":"chapter-3.xhtml","type":"application/xhtml+xml","locations":{"progression":0.42}}"#;
+        seed_progress(&sender.pool, work, edition, locator, 0.42, 137).await;
+        let engine = SyncEngine::new(
+            livtet_core::data::orm::SqlxSqliteConnector::from_sqlx_sqlite_pool(sender.pool.clone()),
+            "desk-device".to_string(),
+        );
+
+        // The row the second pull will meet as an orphan: its edition is written on the
+        // sender but the handler below holds that row back, which is what a peer whose
+        // edition row this device never received looks like.
+        let orphan_work = DbId::new();
+        let orphan_edition = DbId::new();
+
+        let peer = DiscoveryService::bind().await.expect("peer endpoint");
+        let peer_node_id = peer.node_id().as_str().to_string();
+        let handler: Handler = Arc::new({
+            let engine = engine.clone();
+            let hidden = orphan_edition.to_hex();
+            move |request, _remote| {
+                let engine = engine.clone();
+                let hidden = hidden.clone();
+                Box::pin(async move {
+                    match request {
+                        Request::PullFull { .. } => Outcome::reply(Response::Full(Box::new(
+                            engine.pull_full().await.expect("dump the sender's library"),
+                        ))),
+                        Request::Changes {
+                            since_version,
+                            limit,
+                            ..
+                        } => {
+                            let mut page = engine
+                                .pull_changes(since_version, limit.unwrap_or(100))
+                                .await
+                                .expect("read the sender's log");
+                            page.changes.retain(|change| {
+                                !(change.entity_type == "edition" && change.entity_id == hidden)
+                            });
+                            Outcome::reply(Response::Changes(page))
+                        }
+                        other => Outcome::reply(Response::Refused {
+                            reason: format!("unexpected request: {other:?}"),
+                        }),
+                    }
+                })
+            }
+        });
+        let _serving = livtet_sync_iroh::spawn_server(peer.endpoint().clone(), handler);
+
+        let first = sync_pull(
+            dir.path().join("sync.key").to_string(),
+            "session-token".to_string(),
+            recipient_db.clone(),
+            "phone-device".to_string(),
+            peer_node_id.clone(),
+            0,
+            100,
+            dir.path().join("covers").to_string(),
+        )
+        .await
+        .expect("bootstrap the library");
+        assert_eq!(
+            first.skipped, 0,
+            "a dump is written parents-first, so none of it is orphaned"
+        );
+
+        let recipient = SharedState::connect(&recipient_db, &[Kind::Business, Kind::Client])
+            .await
+            .expect("open the recipient's library");
+        let pulled = livtet_core::data::sql::query(
+            "SELECT progress, last_location, total_reading_time_secs FROM reading_progress \
+             WHERE edition_id = ?",
+        )
+        .bind(edition.to_bytes().to_vec())
+        .fetch_optional(&recipient.pool)
+        .await
+        .expect("read the pulled progress")
+        .expect("the sender's progress must reach the recipient");
+        assert!(
+            (pulled.try_get::<f64, _>("progress").expect("progress") - 0.42).abs() < 1e-9,
+            "the recipient reads back the sender's progression"
+        );
+        assert_eq!(
+            pulled
+                .try_get::<Option<String>, _>("last_location")
+                .expect("locator")
+                .as_deref(),
+            Some(locator),
+            "the reader's locator travels whole"
+        );
+        assert_eq!(
+            pulled
+                .try_get::<i64, _>("total_reading_time_secs")
+                .expect("seconds"),
+            137
+        );
+
+        // The reader keeps reading on the sender after the pull. A second book lands in
+        // the sender's log; the recipient gets its work but not its edition.
+        seed_progress(
+            &sender.pool,
+            orphan_work,
+            orphan_edition,
+            "orphan-locator",
+            0.75,
+            5,
+        )
+        .await;
+
+        let second = sync_pull(
+            dir.path().join("sync.key").to_string(),
+            "session-token".to_string(),
+            recipient_db.clone(),
+            "phone-device".to_string(),
+            peer_node_id,
+            first.cursor,
+            100,
+            dir.path().join("covers").to_string(),
+        )
+        .await
+        .expect("pull the rows written after the bootstrap");
+        assert_eq!(
+            second.applied, 1,
+            "the orphan's work arrives even though its edition does not"
+        );
+        assert_eq!(
+            second.skipped, 1,
+            "the progress row with no edition is counted, not fatal"
+        );
+        let orphan_rows: i64 = livtet_core::data::sql::query_scalar(
+            "SELECT COUNT(*) FROM reading_progress WHERE edition_id = ?",
+        )
+        .bind(orphan_edition.to_bytes().to_vec())
+        .fetch_one(&recipient.pool)
+        .await
+        .expect("count the orphan's progress");
+        assert_eq!(
+            orphan_rows, 0,
+            "nothing is written for an edition this device does not hold"
+        );
+    }
+
     /// A dump carries model fields, so an id arrives as ULID text
     /// ([`DbId`]'s `Display`) while the table declares `BLOB`.
     ///
@@ -1263,7 +1496,8 @@ mod tests {
         };
 
         let written = apply_dump(&db_path, &dump).await.expect("dump applies");
-        assert_eq!(written, 1, "the dumped row must be written");
+        assert_eq!(written.applied, 1, "the dumped row must be written");
+        assert_eq!(written.skipped, 0, "nothing in this dump is out of shape");
 
         let state = SharedState::connect(&db_path, &[Kind::Business, Kind::Client])
             .await

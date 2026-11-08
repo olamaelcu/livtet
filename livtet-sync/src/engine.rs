@@ -554,6 +554,27 @@ impl SyncEngine {
                 continue;
             };
 
+            // Progress belongs to an edition this device must already hold. Writing it for an
+            // edition that is not here fails the foreign key, and the pull's cursor was stored
+            // before these rows were applied, so the failure would lose the whole page. Skip it
+            // and count it: the next pull after the edition arrives brings the progress along.
+            if change.entity_type == "reading_progress" {
+                let edition = payload_edition_id(&change.payload);
+                let present = match edition {
+                    Some(edition_id) => edition_exists(&txn, edition_id).await?,
+                    None => false,
+                };
+                if !present {
+                    tracing::debug!(
+                        entity_id = %change.entity_id,
+                        parseable = edition.is_some(),
+                        "reading progress skipped: its edition is not in this library"
+                    );
+                    outcome.skipped += 1;
+                    continue;
+                }
+            }
+
             let local = latest_change(&txn, &change.entity_type, &change.entity_id).await?;
             if !authoritative
                 && let Some((local_version, local_payload)) = local
@@ -612,10 +633,20 @@ fn apply_rank(entity_type: &str) -> u8 {
     }
 }
 
+/// The edition a `reading_progress` change payload names.
+///
+/// The payload is the trigger's `json_object` output, so `edition_id` is 32-char lowercase
+/// hex; either wire form is accepted. `None` means the payload does not name an edition, which
+/// is a row this device has no place for.
+fn payload_edition_id(payload: &str) -> Option<DbId> {
+    let value: Value = serde_json::from_str(payload).ok()?;
+    DbId::from_wire(value.get("edition_id")?.as_str()?)
+}
+
 /// Whether an edition row is present locally.
 async fn edition_exists(
-    db: &livtet_data::orm::DatabaseConnection,
-    edition_id: livtet_types::DbId,
+    db: &impl ConnectionTrait,
+    edition_id: DbId,
 ) -> Result<bool, SyncError> {
     let statement = Statement::from_sql_and_values(
         DatabaseBackend::Sqlite,
