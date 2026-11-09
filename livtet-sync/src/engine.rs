@@ -559,6 +559,14 @@ impl SyncEngine {
             // before these rows were applied, so the failure would lose the whole page. Skip it
             // and count it: the next pull after the edition arrives brings the progress along.
             if change.entity_type == "reading_progress" {
+                // A whole-row update is not automatically a note update: the row's
+                // annotations can differ while both sides still look like "the latest
+                // row". Preserve the local array and report a conflict instead of
+                // letting a peer erase notes. Merging is Stage B.
+                if let Some(conflict) = note_conflict(&txn, change).await? {
+                    outcome.conflicts.push(conflict);
+                    continue;
+                }
                 let edition = payload_edition_id(&change.payload);
                 let present = match edition {
                     Some(edition_id) => edition_exists(&txn, edition_id).await?,
@@ -705,6 +713,121 @@ async fn latest_change(
             row.try_get::<String>("", "operation").ok()?,
         ))
     }))
+}
+
+/// The local `reading_progress` row as the conflict UI decodes it.
+struct LocalProgressRow {
+    id: String,
+    edition_id: String,
+    format_id: String,
+    progress: f64,
+    progress_unit: Option<String>,
+    last_location: Option<String>,
+    total_reading_time_secs: i64,
+    annotations: Option<String>,
+    created_at: Option<String>,
+}
+
+impl LocalProgressRow {
+    fn payload(&self) -> String {
+        serde_json::json!({
+            "id": self.id,
+            "edition_id": self.edition_id,
+            "format_id": self.format_id,
+            "progress": self.progress,
+            "progress_unit": self.progress_unit,
+            "last_location": self.last_location,
+            "total_reading_time_secs": self.total_reading_time_secs,
+            "annotations": self.annotations,
+            "created_at": self.created_at,
+        })
+        .to_string()
+    }
+}
+
+/// Load the local progress row without trusting the change log: a row written
+/// before sync ran can hold real notes while having no local log entry.
+async fn local_progress_row(
+    db: &impl ConnectionTrait,
+    entity_id: &str,
+) -> Result<Option<LocalProgressRow>, SyncError> {
+    let Ok(id) = DbId::from_hex(entity_id) else {
+        return Ok(None);
+    };
+    let statement = Statement::from_sql_and_values(
+        DatabaseBackend::Sqlite,
+        "SELECT lower(hex(id)) AS id, lower(hex(edition_id)) AS edition_id, \
+                lower(hex(format_id)) AS format_id, progress, progress_unit, last_location, \
+                total_reading_time_secs, annotations, created_at \
+         FROM reading_progress WHERE id = ?",
+        [id.to_bytes().to_vec().into()],
+    );
+    let Some(row) = db.query_one_raw(statement).await? else {
+        return Ok(None);
+    };
+    Ok(Some(LocalProgressRow {
+        id: row.try_get("", "id").unwrap_or_default(),
+        edition_id: row.try_get("", "edition_id").unwrap_or_default(),
+        format_id: row.try_get("", "format_id").unwrap_or_default(),
+        progress: row.try_get("", "progress").unwrap_or_default(),
+        progress_unit: row.try_get::<String>("", "progress_unit").ok(),
+        last_location: row.try_get::<String>("", "last_location").ok(),
+        total_reading_time_secs: row
+            .try_get("", "total_reading_time_secs")
+            .unwrap_or_default(),
+        annotations: row.try_get::<String>("", "annotations").ok(),
+        created_at: row.try_get::<String>("", "created_at").ok(),
+    }))
+}
+
+/// The remote row's annotation text. Missing annotations mean no notes: the
+/// row is the whole unit of state, so an old peer's payload must not silently
+/// keep a newer local array either.
+fn payload_annotations(payload: &str) -> String {
+    let Ok(value) = serde_json::from_str::<Value>(payload) else {
+        return "[]".to_string();
+    };
+    match value.get("annotations") {
+        Some(Value::String(raw)) => raw.clone(),
+        Some(Value::Array(items)) => Value::Array(items.clone()).to_string(),
+        Some(Value::Null) | None => "[]".to_string(),
+        Some(other) => other.to_string(),
+    }
+}
+
+fn has_notes(raw: &str) -> bool {
+    match serde_json::from_str::<Value>(raw) {
+        Ok(Value::Array(items)) => !items.is_empty(),
+        Ok(Value::Null) => false,
+        Ok(_) => !raw.trim().is_empty(),
+        Err(_) => !raw.trim().is_empty() && raw.trim() != "[]",
+    }
+}
+
+/// Keep every local note when a peer's whole-row progress change would replace
+/// a non-empty array with different or empty notes.
+async fn note_conflict(
+    db: &impl ConnectionTrait,
+    change: &SyncChange,
+) -> Result<Option<Conflict>, SyncError> {
+    let Some(row) = local_progress_row(db, &change.entity_id).await? else {
+        return Ok(None);
+    };
+    let local_annotations = row.annotations.as_deref().unwrap_or("[]");
+    if !has_notes(local_annotations) {
+        return Ok(None);
+    }
+    let remote_annotations = if change.operation.eq_ignore_ascii_case("DELETE") {
+        "[]".to_string()
+    } else {
+        payload_annotations(&change.payload)
+    };
+    if canonical_payload(local_annotations) == canonical_payload(&remote_annotations) {
+        return Ok(None);
+    }
+    let local_payload = row.payload();
+    record_conflict(db, change, &local_payload).await?;
+    fetch_latest_conflict(db, change, &local_payload).await
 }
 
 async fn record_conflict(

@@ -329,3 +329,175 @@ async fn a_cover_can_create_its_own_inventory_row() {
         "/data/user/0/net.olamaelcu.livtet/files/covers/cover.png"
     );
 }
+
+/// One local progress row carrying a note, plus its ids and raw annotations.
+async fn local_progress_with_note(device: &Device) -> (String, String, String, String) {
+    const ID: &str = "0102030405060708090a0b0c0d0e0f10";
+    device
+        .execute(
+            "INSERT INTO reading_progress (id, edition_id, format_id, progress, annotations) \
+             SELECT X'0102030405060708090A0B0C0D0E0F10', e.id, e.format_id, 0.25, \
+                    '[{\"id\":\"local-note\",\"text\":\"keep me\"}]' \
+             FROM editions e WHERE e.format_id IS NOT NULL \
+               AND NOT EXISTS (SELECT 1 FROM reading_progress r \
+                               WHERE r.edition_id = e.id AND r.format_id = e.format_id) \
+             LIMIT 1",
+        )
+        .await;
+    livtet_data::sql::query_as(
+        "SELECT lower(hex(id)), lower(hex(edition_id)), lower(hex(format_id)), annotations \
+         FROM reading_progress WHERE lower(hex(id)) = ?",
+    )
+    .bind(ID)
+    .fetch_one(device.pool())
+    .await
+    .expect("local progress row")
+}
+
+fn progress_payload(
+    id: &str,
+    edition: &str,
+    format: &str,
+    progress: f64,
+    annotations: &str,
+) -> String {
+    serde_json::json!({
+        "id": id,
+        "edition_id": edition,
+        "format_id": format,
+        "progress": progress,
+        "annotations": annotations,
+    })
+    .to_string()
+}
+
+#[tokio::test]
+async fn a_remote_progress_row_cannot_replace_local_notes() {
+    let device = Device::seeded("receiver").await;
+    let (id, edition, format, local_annotations) = local_progress_with_note(&device).await;
+    let remote = progress_payload(
+        &id,
+        &edition,
+        &format,
+        0.9,
+        "[{\"id\":\"remote-note\",\"text\":\"other\"}]",
+    );
+
+    let outcome = device
+        .engine
+        .apply_changes(vec![change(
+            "reading_progress",
+            &id,
+            "UPDATE",
+            999_999,
+            &remote,
+        )])
+        .await
+        .expect("apply");
+
+    assert_eq!(outcome.applied, 0);
+    assert_eq!(outcome.conflicts.len(), 1);
+    assert_eq!(outcome.conflicts[0].entity_id, id);
+    assert!(
+        outcome.conflicts[0].local_payload.contains("keep me"),
+        "conflict must carry the local notes"
+    );
+
+    // The row is untouched: neither notes nor progress were replaced.
+    let (progress, stored): (f64, String) = livtet_data::sql::query_as(
+        "SELECT progress, annotations FROM reading_progress WHERE lower(hex(id)) = ?",
+    )
+    .bind(&id)
+    .fetch_one(device.pool())
+    .await
+    .expect("progress row");
+    assert_eq!(progress, 0.25);
+    assert_eq!(stored, local_annotations);
+
+    // A repeated pull dedupes to one open conflict.
+    let again = device
+        .engine
+        .apply_changes(vec![change(
+            "reading_progress",
+            &id,
+            "UPDATE",
+            999_999,
+            &remote,
+        )])
+        .await
+        .expect("apply again");
+    assert_eq!(again.conflicts.len(), 1);
+    assert_eq!(
+        device
+            .count(&format!(
+                "conflicts WHERE entity_type = 'reading_progress' AND entity_id = '{id}' AND resolved = 0"
+            ))
+            .await,
+        1
+    );
+}
+
+#[tokio::test]
+async fn a_remote_progress_row_with_equal_notes_still_applies() {
+    let device = Device::seeded("receiver").await;
+    let (id, edition, format, local_annotations) = local_progress_with_note(&device).await;
+    // No local log entry: this is the plain apply path, not the conflict path.
+    device
+        .execute(&format!(
+            "DELETE FROM change_log WHERE entity_type = 'reading_progress' AND entity_id = '{id}'"
+        ))
+        .await;
+    let remote = progress_payload(&id, &edition, &format, 0.9, &local_annotations);
+
+    let outcome = device
+        .engine
+        .apply_changes(vec![change(
+            "reading_progress",
+            &id,
+            "UPDATE",
+            999_999,
+            &remote,
+        )])
+        .await
+        .expect("apply");
+
+    assert_eq!(outcome.applied, 1);
+    assert!(outcome.conflicts.is_empty());
+    let progress: f64 = livtet_data::sql::query_scalar(
+        "SELECT progress FROM reading_progress WHERE lower(hex(id)) = ?",
+    )
+    .bind(&id)
+    .fetch_one(device.pool())
+    .await
+    .expect("progress row");
+    assert_eq!(progress, 0.9);
+}
+
+#[tokio::test]
+async fn a_remote_delete_cannot_drop_local_notes() {
+    let device = Device::seeded("receiver").await;
+    let (id, _edition, _format, local_annotations) = local_progress_with_note(&device).await;
+
+    let outcome = device
+        .engine
+        .apply_changes(vec![change(
+            "reading_progress",
+            &id,
+            "DELETE",
+            999_999,
+            "{}",
+        )])
+        .await
+        .expect("apply");
+
+    assert_eq!(outcome.applied, 0);
+    assert_eq!(outcome.conflicts.len(), 1);
+    let stored: String = livtet_data::sql::query_scalar(
+        "SELECT annotations FROM reading_progress WHERE lower(hex(id)) = ?",
+    )
+    .bind(&id)
+    .fetch_one(device.pool())
+    .await
+    .expect("progress row");
+    assert_eq!(stored, local_annotations);
+}

@@ -63,7 +63,11 @@ async fn a_change_older_than_the_local_edit_is_a_conflict_and_is_not_applied() {
     let conflict = &response.conflicts[0];
     assert_eq!(conflict.entity_type, "work");
     assert_eq!(conflict.entity_id, id);
-    assert_eq!(conflict.local_payload, local_payload);
+    // Stored canonicalised: compare values, not object key order.
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&conflict.local_payload).unwrap(),
+        serde_json::from_str::<serde_json::Value>(&local_payload).unwrap()
+    );
     assert_eq!(conflict.remote_payload, "{\"remote\":true}");
     assert!(!conflict.resolved);
 
