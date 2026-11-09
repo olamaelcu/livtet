@@ -106,4 +106,24 @@ async fn backfill_stamps_and_sorts_legacy_notes_and_hides_tombstones() {
     assert_eq!(visible.len(), 2);
     assert_eq!(visible[0].id, "a");
     assert_eq!(visible[1].id, "b");
+
+    // Local writes announce the arbitration columns to peers.
+    let row = reading_progress::Entity::find()
+        .one(&db)
+        .await
+        .expect("query")
+        .expect("row");
+    let mut active: reading_progress::ActiveModel = row.into();
+    active.progress = Set(43.0);
+    active.update(&db).await.expect("update progress");
+    let payload: String = livtet_data::sql::query_scalar(
+        "SELECT payload FROM change_log WHERE entity_type = 'reading_progress' \
+         ORDER BY version DESC LIMIT 1",
+    )
+    .fetch_one(&test_db.pool)
+    .await
+    .expect("logged payload");
+    let payload: serde_json::Value = serde_json::from_str(&payload).expect("json");
+    assert!(payload["updated_at"].is_string());
+    assert_eq!(payload["updated_by"], "legacy");
 }

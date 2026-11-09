@@ -554,3 +554,45 @@ async fn a_tombstone_survives_a_newer_remote_edit() {
     assert_eq!(stored[0]["text"], "keep me");
     assert!(stored[0]["deletedAt"].is_string());
 }
+
+#[tokio::test]
+async fn newer_progress_wins_and_reading_time_takes_the_maximum() {
+    let device = Device::seeded("receiver").await;
+    let (id, edition, format, _) = local_progress_with_note(&device).await;
+    device
+        .execute(&format!(
+            "UPDATE reading_progress SET progress = 0.2, total_reading_time_secs = 100, \
+             updated_at = '2026-01-01T00:00:00Z', updated_by = 'local-device' \
+             WHERE lower(hex(id)) = '{id}'"
+        ))
+        .await;
+    let remote = progress_payload(&id, &edition, &format, 0.9, "[]");
+    let mut remote: serde_json::Value = serde_json::from_str(&remote).expect("payload");
+    remote["total_reading_time_secs"] = serde_json::json!(40);
+    remote["updated_at"] = serde_json::json!("2026-02-01T00:00:00Z");
+    remote["updated_by"] = serde_json::json!("remote-device");
+
+    device
+        .engine
+        .apply_changes(vec![change(
+            "reading_progress",
+            &id,
+            "UPDATE",
+            999_999,
+            &remote.to_string(),
+        )])
+        .await
+        .expect("apply");
+
+    let (progress, seconds, updated_by): (f64, i64, String) = livtet_data::sql::query_as(
+        "SELECT progress, total_reading_time_secs, updated_by FROM reading_progress \
+         WHERE lower(hex(id)) = ?",
+    )
+    .bind(&id)
+    .fetch_one(device.pool())
+    .await
+    .expect("progress row");
+    assert_eq!(progress, 0.9);
+    assert_eq!(seconds, 100);
+    assert_eq!(updated_by, "remote-device");
+}

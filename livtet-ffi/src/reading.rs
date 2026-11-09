@@ -280,8 +280,6 @@ impl LivtetStore {
                 notes = annotations::merge_notes(&notes, &[]);
                 let mut active: reading_progress::ActiveModel = row.into();
                 active.annotations = Set(Some(serde_json::Value::Array(notes).to_string()));
-                active.updated_at = Set(Some(ts(&now_primitive())));
-                active.updated_by = Set(Some(annotations::local_device_id(&db).await));
                 active.update(&db).await?;
             }
             None => {
@@ -358,8 +356,6 @@ impl LivtetStore {
             notes = annotations::replace_notes(&notes, &visible, &stamp, &device, true);
             let mut active: reading_progress::ActiveModel = row.into();
             active.annotations = Set(Some(serde_json::Value::Array(notes).to_string()));
-            active.updated_at = Set(Some(stamp.clone()));
-            active.updated_by = Set(Some(device.clone()));
             active.update(&db).await?;
             deleted = true;
         }
