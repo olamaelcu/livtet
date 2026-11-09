@@ -13,11 +13,12 @@ use iroh::endpoint::Connection;
 use iroh::endpoint::RecvStream;
 use iroh::{Endpoint, EndpointAddr, EndpointId};
 use livtet_sync::types::{Conflict, FullDump, PullResponse, PushResponse, SyncChange, SyncStatus};
+use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::io::{AsyncReadExt, AsyncWrite};
 
-use crate::wire::{CoverImage, 
-    ErrorCode, FileHeader, FileMetadata, Identity, Request, Response, WireError, read_frame,
-    write_frame,
+use crate::wire::{
+    CoverImage, ErrorCode, FileHeader, FileMetadata, Identity, Request, Response, WireError,
+    read_frame, request_value, write_frame,
 };
 
 /// Why a peer could not be dialled.
@@ -58,7 +59,8 @@ pub async fn call(connection: &Connection, request: &Request) -> Result<Exchange
         .open_bi()
         .await
         .map_err(|error| WireError::Stream(error.to_string()))?;
-    write_frame(&mut send, request).await?;
+    let envelope = request_value(request)?;
+    write_frame(&mut send, &envelope).await?;
 
     let response: Response = read_frame(&mut recv).await?;
     let wants_bytes = matches!(response, Response::File(_) | Response::Cover(_));
@@ -170,6 +172,7 @@ pub struct Client {
     endpoint: Endpoint,
     node_id: String,
     token: Option<String>,
+    protocol_checked: AtomicBool,
 }
 
 impl Client {
@@ -179,6 +182,7 @@ impl Client {
             endpoint,
             node_id: node_id.into(),
             token: None,
+            protocol_checked: AtomicBool::new(false),
         }
     }
 
@@ -205,6 +209,27 @@ impl Client {
 
     /// Send one request and read its answer, mapping `Error` to `Remote`.
     async fn send(&self, request: Request) -> Result<Exchange, ClientError> {
+        // The envelope carries the protocol, but older peers ignore it; confirm
+        // the handshake before letting any operation through. Dial directly so
+        // this does not recurse through `identity()`.
+        async fn peer_protocol(client: &Client) -> Result<u32, ClientError> {
+            let connection = client.connect().await?;
+            let exchange = call(&connection, &Request::Identity).await?;
+            match exchange.response {
+                Response::Identity(identity) => Ok(identity.protocol),
+                other => Err(unexpected("identity", &other)),
+            }
+        }
+        if !matches!(&request, Request::Identity) && !self.protocol_checked.load(Ordering::Relaxed)
+        {
+            let protocol = peer_protocol(self).await?;
+            if protocol != crate::wire::PROTOCOL_VERSION {
+                return Err(ClientError::Wire(WireError::Protocol(format!(
+                    "peer speaks protocol {protocol}; update Livtet on that device"
+                ))));
+            }
+            self.protocol_checked.store(true, Ordering::Relaxed);
+        }
         let connection = self.connect().await?;
         let exchange = call(&connection, &request).await?;
         match exchange.response {
@@ -311,6 +336,7 @@ impl Client {
         device_id: &str,
         name: &str,
         device_type: &str,
+        session_token: &str,
     ) -> Result<PairingOutcome, ClientError> {
         let response = self
             .expect(
@@ -318,6 +344,7 @@ impl Client {
                     device_id: device_id.to_string(),
                     name: name.to_string(),
                     device_type: device_type.to_string(),
+                    session_token: session_token.to_string(),
                 },
                 "pair",
             )
@@ -336,6 +363,16 @@ impl Client {
             )
             .await?;
         pairing_outcome("pair_status", &response)
+    }
+
+    /// Remove this device's pairing on the peer side, authenticated by the
+    /// outbound token the peer issued.
+    pub async fn revoke(&self) -> Result<bool, ClientError> {
+        let token = self.require_token()?;
+        match self.expect(Request::Revoke { token }, "revoke").await? {
+            Response::Revoked { removed } => Ok(removed),
+            other => Err(unexpected("revoke", &other)),
+        }
     }
 
     /// Unresolved conflicts on the peer.
@@ -429,10 +466,7 @@ impl Client {
     ///
     /// Absent editions (no cover on that device) are omitted rather than reported: a
     /// cover is an ornament, and a library should not fail to sync over one.
-    pub async fn covers(
-        &self,
-        edition_ids: &[String],
-    ) -> Result<Vec<CoverImage>, ClientError> {
+    pub async fn covers(&self, edition_ids: &[String]) -> Result<Vec<CoverImage>, ClientError> {
         let exchange = self
             .send(Request::Covers {
                 token: self.require_token()?,

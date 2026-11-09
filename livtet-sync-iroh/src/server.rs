@@ -13,7 +13,9 @@ use iroh::Endpoint;
 use iroh::endpoint::{Connection, RecvStream, SendStream};
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
 
-use crate::wire::{FileHeader, Request, Response, WireError, read_frame, write_frame};
+use crate::wire::{
+    ErrorCode, FileHeader, PROTOCOL_VERSION, Request, Response, WireError, read_frame, write_frame,
+};
 
 /// A future a [`Handler`] returns.
 pub type BoxFuture<T> = Pin<Box<dyn Future<Output = T> + Send>>;
@@ -119,7 +121,21 @@ async fn exchange(
     handler: Handler,
     remote: String,
 ) -> Result<(), WireError> {
-    let request: Request = read_frame(&mut recv).await?;
+    let envelope: serde_json::Value = read_frame(&mut recv).await?;
+    let protocol = envelope
+        .get("protocol")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0);
+    if protocol != u64::from(PROTOCOL_VERSION) {
+        let response = Response::Error {
+            code: ErrorCode::BadRequest,
+            message: format!("protocol {PROTOCOL_VERSION} required; update Livtet on that device"),
+        };
+        write_frame(&mut send, &response).await?;
+        let _ = send.finish();
+        return Ok(());
+    }
+    let request: Request = serde_json::from_value(envelope)?;
     let Outcome { response, body } = handler(request, remote).await;
 
     write_frame(&mut send, &response).await?;

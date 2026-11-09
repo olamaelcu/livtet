@@ -39,6 +39,9 @@ pub enum ClaimError {
     /// The database refused a read or write.
     #[error("{0}")]
     Db(String),
+    /// A pre-v3 claim did not carry the claimant's token.
+    #[error("the claim carries no claimant token; ask the peer to pair again")]
+    MissingClaimantToken,
 }
 
 impl From<livtet_data::orm::DbErr> for ClaimError {
@@ -81,16 +84,17 @@ pub struct CreatedOffer {
 /// The row is written before the claimant is answered, so a poll that arrives
 /// while the broadcast is still in flight cannot observe a claim that is
 /// approved but not paired.
-pub async fn approve_claim(
-    state: &WireState,
-    node_id: &str,
-) -> Result<ClaimApproval, ClaimError> {
+pub async fn approve_claim(state: &WireState, node_id: &str) -> Result<ClaimApproval, ClaimError> {
     let db = state.engine.db();
 
     let pending = pending_pairings::Entity::find_by_id(node_id.to_string())
         .one(db)
         .await?
         .ok_or_else(|| ClaimError::UnknownClaim(node_id.to_string()))?;
+
+    let Some(claimant_token) = pending.claimant_token.clone() else {
+        return Err(ClaimError::MissingClaimantToken);
+    };
 
     let session_token = ulid::Ulid::generate().to_string();
     let device_id = pending.device_id.unwrap_or_else(DbId::new);
@@ -129,9 +133,11 @@ pub async fn approve_claim(
     // `session_token` and `node_id` are added by later client migrations and are
     // not on the entity, so they are written with a targeted statement.
     livtet_data::sql::query(
-        "UPDATE paired_devices SET session_token = ?, node_id = ? WHERE device_id = ?",
+        "UPDATE paired_devices SET session_token = ?, peer_session_token = ?, node_id = ? \
+         WHERE device_id = ?",
     )
     .bind(session_token.clone())
+    .bind(claimant_token)
     .bind(node_id.to_string())
     .bind(device_id.to_bytes().to_vec())
     .execute(&state.pool)
@@ -214,7 +220,8 @@ pub async fn offer_book(
     edition_id: &str,
     device_id: &str,
 ) -> Result<CreatedOffer, ClaimError> {
-    let device_id = parse_id(device_id).ok_or_else(|| ClaimError::InvalidDevice(device_id.into()))?;
+    let device_id =
+        parse_id(device_id).ok_or_else(|| ClaimError::InvalidDevice(device_id.into()))?;
     let edition_id =
         parse_id(edition_id).ok_or_else(|| ClaimError::InvalidEdition(edition_id.into()))?;
 
@@ -363,7 +370,9 @@ pub async fn set_device_type(
 
 /// Parse a device or catalog id from either of its textual forms.
 fn parse_id(raw: &str) -> Option<DbId> {
-    raw.parse::<DbId>().ok().or_else(|| DbId::from_hex(raw).ok())
+    raw.parse::<DbId>()
+        .ok()
+        .or_else(|| DbId::from_hex(raw).ok())
 }
 
 fn stage_error(error: impl std::fmt::Display) -> ClaimError {

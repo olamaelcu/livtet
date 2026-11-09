@@ -14,6 +14,7 @@ pub struct Model {
     pub device_type_id: Option<DbId>,
     pub device_id: Option<DbId>,
     pub origin_addr: Option<Address>,
+    pub claimant_token: Option<String>,
     pub created_at: time::PrimitiveDateTime,
     pub expires_at: time::PrimitiveDateTime,
 }

@@ -13,7 +13,9 @@ use camino::{Utf8Path, Utf8PathBuf};
 use fs_err as fs;
 use livtet_iroh::{DiscoveryService, SecretKey};
 use livtet_sync::{PullResponse, SyncChange};
-use livtet_sync_iroh::{ErrorCode, FileHeader, Handler, Outcome, Request, Response};
+use livtet_sync_iroh::{
+    ErrorCode, FileHeader, Handler, Identity, Outcome, PROTOCOL_VERSION, Request, Response,
+};
 
 use livtet_sync_server::rpc::{self, StdioClient};
 use livtet_types::DbId;
@@ -55,6 +57,12 @@ async fn start_peer() -> StubPeer {
             let file = file.clone();
             Box::pin(async move {
                 match request {
+                    Request::Identity => Outcome::reply(Response::Identity(Identity {
+                        protocol: PROTOCOL_VERSION,
+                        node_id: _remote.clone(),
+                        device_id: "01ARZ3NDEKTSV4RRFFQ69G5FAV".to_string(),
+                        name: Some("Stub peer".to_string()),
+                    })),
                     Request::Changes { .. } => Outcome::reply(Response::Changes(PullResponse {
                         changes: state.changes.lock().expect("changes lock").clone(),
                         has_more: false,

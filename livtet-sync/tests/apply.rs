@@ -20,17 +20,23 @@ async fn applies_the_payload_fields_and_records_the_remote_row() {
     let mut value: serde_json::Value = serde_json::from_str(&payload).expect("payload");
     value["title"] = serde_json::Value::String("Applied title".to_string());
 
+    // No local history for this entity: the payload is the only thing to apply.
+    livtet_data::sql::query(livtet_data::sql::AssertSqlSafe(format!(
+        "DELETE FROM change_log WHERE entity_type = 'work' AND entity_id = '{id}'"
+    )))
+    .execute(device.pool())
+    .await
+    .expect("clear the local log");
+
     let outcome = device
         .engine
-        .apply_changes(
-            vec![change(
-                "work",
-                &id,
-                "UPDATE",
-                version + 1,
-                &value.to_string(),
-            )],
-        )
+        .apply_changes(vec![change(
+            "work",
+            &id,
+            "UPDATE",
+            version + 1,
+            &value.to_string(),
+        )])
         .await
         .expect("apply");
 
@@ -59,17 +65,23 @@ async fn applies_an_edition_whose_optional_ids_are_empty() {
     value["format_id"] = serde_json::Value::String(String::new());
     value["language_id"] = serde_json::Value::String(String::new());
 
+    // No local history for this edition, so the apply path runs.
+    livtet_data::sql::query(livtet_data::sql::AssertSqlSafe(format!(
+        "DELETE FROM change_log WHERE entity_type = 'edition' AND entity_id = '{id}'"
+    )))
+    .execute(device.pool())
+    .await
+    .expect("clear the local log");
+
     let outcome = device
         .engine
-        .apply_changes(
-            vec![change(
-                "edition",
-                &id,
-                "UPDATE",
-                version + 1,
-                &value.to_string(),
-            )],
-        )
+        .apply_changes(vec![change(
+            "edition",
+            &id,
+            "UPDATE",
+            version + 1,
+            &value.to_string(),
+        )])
         .await
         .expect("apply");
 
@@ -92,8 +104,8 @@ async fn applies_an_edition_whose_optional_ids_are_empty() {
 
 /// One seeded inventory row, as a peer's change row would carry it.
 async fn seeded_inventory(device: &Device) -> (String, String, serde_json::Value, String) {
-    let row: (String, String, String, String) = livtet_data::sql::query_as(
-        livtet_data::sql::AssertSqlSafe(
+    let row: (String, String, String, String) =
+        livtet_data::sql::query_as(livtet_data::sql::AssertSqlSafe(
             "SELECT lower(hex(id)), lower(hex(edition_id)), file_path, json_object(\
              'id', lower(hex(id)), 'edition_id', lower(hex(edition_id)), \
              'file_path', file_path, 'cover_path', cover_path, \
@@ -101,13 +113,17 @@ async fn seeded_inventory(device: &Device) -> (String, String, serde_json::Value
              'added_at', added_at, 'updated_at', updated_at) \
              FROM digital_inventory LIMIT 1"
                 .to_string(),
-        ),
-    )
-    .fetch_one(device.pool())
-    .await
-    .expect("inventory row");
+        ))
+        .fetch_one(device.pool())
+        .await
+        .expect("inventory row");
     let (id, edition, path, payload): (String, String, String, String) = row;
-    (id, edition, serde_json::from_str(&payload).expect("payload"), path)
+    (
+        id,
+        edition,
+        serde_json::from_str(&payload).expect("payload"),
+        path,
+    )
 }
 
 #[tokio::test]
@@ -133,13 +149,12 @@ async fn a_peer_inventory_row_is_ignored() {
     assert_eq!(outcome.skipped, 1);
 
     // The sender's path never lands: the row still names this device's file.
-    let after: String =
-        livtet_data::sql::query_scalar(livtet_data::sql::AssertSqlSafe(format!(
-            "SELECT file_path FROM digital_inventory WHERE lower(hex(id)) = '{id}'"
-        )))
-        .fetch_one(device.pool())
-        .await
-        .expect("inventory row");
+    let after: String = livtet_data::sql::query_scalar(livtet_data::sql::AssertSqlSafe(format!(
+        "SELECT file_path FROM digital_inventory WHERE lower(hex(id)) = '{id}'"
+    )))
+    .fetch_one(device.pool())
+    .await
+    .expect("inventory row");
     assert_eq!(after, before);
 }
 
@@ -150,7 +165,9 @@ async fn accepting_an_offer_writes_the_local_inventory_row() {
     let inventory_id = livtet_types::DbId::from_hex(&id).expect("inventory id");
     let edition_id = livtet_types::DbId::from_hex(&edition).expect("edition id");
 
-    let logged_before = device.count("change_log WHERE entity_type = 'digital_inventory'").await;
+    let logged_before = device
+        .count("change_log WHERE entity_type = 'digital_inventory'")
+        .await;
 
     adopt_inventory(
         device.engine.db(),
@@ -183,7 +200,9 @@ async fn accepting_an_offer_writes_the_local_inventory_row() {
     assert_eq!(size, 1234);
 
     // Writing the row is not an announcement: the inventory triggers are dropped.
-    let logged_after = device.count("change_log WHERE entity_type = 'digital_inventory'").await;
+    let logged_after = device
+        .count("change_log WHERE entity_type = 'digital_inventory'")
+        .await;
     assert_eq!(logged_after, logged_before);
 }
 
@@ -191,17 +210,26 @@ async fn accepting_an_offer_writes_the_local_inventory_row() {
 async fn a_newer_local_version_becomes_a_conflict() {
     let device = Device::seeded("receiver").await;
     let (id, payload, _version) = latest(&device, "work").await;
+    let mut value: serde_json::Value = serde_json::from_str(&payload).expect("payload");
+    value["title"] = serde_json::Value::String("Diverged title".to_string());
+    let divergent = value.to_string();
 
     let outcome = device
         .engine
-        .apply_changes(
-            vec![change("work", &id, "UPDATE", 0, &payload)],
-        )
+        .apply_changes(vec![change("work", &id, "UPDATE", 0, &divergent)])
         .await
         .expect("apply");
 
+    // A repeated pull of the same divergence dedupes to one open row.
+    let again = device
+        .engine
+        .apply_changes(vec![change("work", &id, "UPDATE", 0, &divergent)])
+        .await
+        .expect("apply again");
+
     assert_eq!(outcome.applied, 0);
     assert_eq!(outcome.conflicts.len(), 1);
+    assert_eq!(again.conflicts.len(), 1);
     assert_eq!(
         device
             .count(&format!(
@@ -213,14 +241,28 @@ async fn a_newer_local_version_becomes_a_conflict() {
 }
 
 #[tokio::test]
+async fn an_equal_payload_with_a_different_operation_is_not_a_conflict() {
+    let device = Device::seeded("receiver").await;
+    let (id, payload, _version) = latest(&device, "work").await;
+
+    let outcome = device
+        .engine
+        .apply_changes(vec![change("work", &id, "UPDATE", 1, &payload)])
+        .await
+        .expect("apply");
+
+    assert_eq!(outcome.applied, 0);
+    assert!(outcome.conflicts.is_empty());
+    assert_eq!(outcome.skipped, 1);
+}
+
+#[tokio::test]
 async fn offers_are_skipped_by_the_apply_path() {
     let device = Device::seeded("receiver").await;
 
     let outcome = device
         .engine
-        .apply_changes(
-            vec![change("file_offer", "00", "OFFER", 1, "{}")],
-        )
+        .apply_changes(vec![change("file_offer", "00", "OFFER", 1, "{}")])
         .await
         .expect("apply");
 
@@ -239,19 +281,16 @@ async fn an_accepted_offer_outranks_a_newer_local_tombstone() {
     // conflict. The reader accepted the book, so the offer's rows win.
     let outcome = device
         .engine
-        .apply_offer_changes(vec![change(
-            "work",
-            &id,
-            "UPDATE",
-            0,
-            &value.to_string(),
-        )])
+        .apply_offer_changes(vec![change("work", &id, "UPDATE", 0, &value.to_string())])
         .await
         .expect("apply");
 
     assert_eq!(outcome.applied, 1);
     assert!(outcome.conflicts.is_empty());
-    assert_eq!(device.count("works WHERE title = 'Accepted title'").await, 1);
+    assert_eq!(
+        device.count("works WHERE title = 'Accepted title'").await,
+        1
+    );
 }
 
 #[tokio::test]

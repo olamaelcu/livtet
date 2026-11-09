@@ -4,7 +4,7 @@ Date: 2026-11-01
 
 ## Status
 
-Accepted
+Superseded by [ADR-0009](0009-pairing-mints-both-tokens.md).
 
 ## Context
 

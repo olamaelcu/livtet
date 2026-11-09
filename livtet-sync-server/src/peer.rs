@@ -70,6 +70,14 @@ impl Peer {
             .map_err(|error| remote("pull changes", error))
     }
 
+    /// Remove this device's pairing on the peer side.
+    pub async fn revoke(&self) -> Result<bool, ServerError> {
+        self.client
+            .revoke()
+            .await
+            .map_err(|error| remote("revoke pairing", error))
+    }
+
     /// Write one inventory file to `dest`.
     pub async fn download_file(
         &self,

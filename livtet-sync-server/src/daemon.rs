@@ -20,12 +20,12 @@ use crate::config::ServerConfig;
 use crate::error::ServerError;
 use crate::pairing::{OfferDecisionSink, PairDecisions, PairWaiters, new_pair_decisions};
 use crate::requests::{self, Notifier, RequestLog, new_request_log};
-use crate::wire_state::{RequestCounters, WireState};
 use crate::rpc::{
     self, DeviceNameParams, DeviceParams, OfferBookParams, OfferDecisionParams, OfferParams,
     PairingBeginParams, PairingClaimParams, RebindParams, RequestsRecentParams, ResolveParams,
     RpcResponse, TokenParams,
 };
+use crate::wire_state::{RequestCounters, WireState};
 use livtet_mdns::{Advertiser, NearbyPeer, browse_nearby};
 
 /// Shared, long-lived daemon state.
@@ -873,8 +873,11 @@ async fn claim_peer(
         .await
         .clone()
         .unwrap_or_else(|| livtet_mdns::friendly_name(&state.device_id));
+    // This device's half of the pair: the approver stores it as its outbound
+    // credential, and this device keeps it as its inbound token.
+    let claimant_token = DbId::new().to_string();
     let claim = match client
-        .pair(&state.device_id, &our_name, "desktop")
+        .pair(&state.device_id, &our_name, "desktop", &claimant_token)
         .await
         .map_err(|error| ServerError::Server(format!("pairing claim: {error}")))?
     {
@@ -950,8 +953,10 @@ async fn claim_peer(
     // we dial them — it must not sit in `session_token`, which inbound requests
     // are checked against.
     livtet_data::sql::query(
-        "UPDATE paired_devices SET peer_session_token = ?, node_id = ? WHERE device_id = ?",
+        "UPDATE paired_devices SET session_token = ?, peer_session_token = ?, node_id = ? \
+         WHERE device_id = ?",
     )
+    .bind(claimant_token)
     .bind(session_token)
     .bind(params.node_id.clone())
     .bind(peer_device_id.to_bytes().to_vec())
@@ -1697,11 +1702,43 @@ async fn handle_devices_revoke(
         .or_else(|| DbId::from_hex(&params.device_id).ok())
         .ok_or_else(|| invalid_params(format!("invalid device id: {}", params.device_id)))?;
 
+    // Remove the peer side first, while the outbound token still exists. This
+    // is best-effort: an offline peer must not block the local revoke.
+    use livtet_data::sql::Row;
+    let node_id: Option<String> =
+        livtet_data::sql::query("SELECT node_id FROM paired_devices WHERE device_id = ?")
+            .bind(device_id.to_bytes().to_vec())
+            .fetch_optional(&state.pool)
+            .await
+            .ok()
+            .flatten()
+            .and_then(|row| row.try_get::<Option<String>, _>("node_id").ok().flatten());
+    let mut remote_removed = false;
+    if node_id.is_some()
+        && let Ok(client) = crate::peer::peer_for(state, device_id).await
+    {
+        remote_removed = client.revoke().await.unwrap_or(false);
+    }
+
     let result = paired_devices::Entity::delete_by_id(device_id)
         .exec(state.engine.db())
         .await?;
 
-    Ok(serde_json::json!({ "ok": true, "removed": result.rows_affected }))
+    if let Some(node_id) = node_id {
+        let _ = livtet_data::sql::query(
+            "DELETE FROM pending_pairings WHERE token = ? OR device_id = ?",
+        )
+        .bind(node_id)
+        .bind(device_id.to_bytes().to_vec())
+        .execute(&state.pool)
+        .await;
+    }
+
+    Ok(serde_json::json!({
+        "ok": true,
+        "removed": result.rows_affected,
+        "remote_removed": remote_removed,
+    }))
 }
 
 async fn handle_conflicts_list(state: &Arc<DaemonState>) -> Result<serde_json::Value, RpcFailure> {
@@ -1772,7 +1809,10 @@ async fn handle_server_rebind(
             let node_id = service.node_id().0;
             let port = service.bound_port().unwrap_or(params.port);
             *state.discovery.lock().await = Some(Arc::clone(&service));
-            livtet_sync_iroh::spawn_server(endpoint, crate::wire::handler(state.wire_state().await));
+            livtet_sync_iroh::spawn_server(
+                endpoint,
+                crate::wire::handler(state.wire_state().await),
+            );
             advertise(state).await;
             tracing::info!(%node_id, port, "sync endpoint rebound");
             Ok(serde_json::json!({ "node_id": node_id, "port": port }))

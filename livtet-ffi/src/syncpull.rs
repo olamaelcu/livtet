@@ -928,7 +928,9 @@ mod tests {
     use super::*;
     use livtet_iroh::DiscoveryService;
     use livtet_sync::PullResponse;
-    use livtet_sync_iroh::{FileHeader, FileMetadata, Handler, Outcome, Request, Response};
+    use livtet_sync_iroh::{
+        FileHeader, FileMetadata, Handler, Identity, Outcome, PROTOCOL_VERSION, Request, Response,
+    };
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -1060,6 +1062,12 @@ mod tests {
                 let cover_src = cover_src.clone();
                 Box::pin(async move {
                     match request {
+                        Request::Identity => Outcome::reply(Response::Identity(Identity {
+                            protocol: PROTOCOL_VERSION,
+                            node_id: _remote.clone(),
+                            device_id: "01ARZ3NDEKTSV4RRFFQ69G5FAV".to_string(),
+                            name: Some("Stub peer".to_string()),
+                        })),
                         Request::Changes { .. } => {
                             Outcome::reply(Response::Changes(PullResponse {
                                 changes,
@@ -1280,6 +1288,12 @@ mod tests {
                 let bootstrapped = Arc::clone(&bootstrapped);
                 Box::pin(async move {
                     match request {
+                        Request::Identity => Outcome::reply(Response::Identity(Identity {
+                            protocol: PROTOCOL_VERSION,
+                            node_id: _remote.clone(),
+                            device_id: "01ARZ3NDEKTSV4RRFFQ69G5FAV".to_string(),
+                            name: Some("Stub peer".to_string()),
+                        })),
                         Request::PullFull { .. } => {
                             bootstrapped.store(true, Ordering::SeqCst);
                             Outcome::reply(Response::Full(Box::new(livtet_sync::FullDump {
@@ -1373,6 +1387,12 @@ mod tests {
                 let hidden = hidden.clone();
                 Box::pin(async move {
                     match request {
+                        Request::Identity => Outcome::reply(Response::Identity(Identity {
+                            protocol: PROTOCOL_VERSION,
+                            node_id: _remote.clone(),
+                            device_id: "01ARZ3NDEKTSV4RRFFQ69G5FAV".to_string(),
+                            name: Some("Stub peer".to_string()),
+                        })),
                         Request::PullFull { .. } => Outcome::reply(Response::Full(Box::new(
                             engine.pull_full().await.expect("dump the sender's library"),
                         ))),

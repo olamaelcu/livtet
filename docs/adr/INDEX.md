@@ -10,3 +10,6 @@
 | 6 | [Re-resolve a paired peer's address from its advertisement](0006-re-resolve-a-paired-peers-address-from-its-advertisement.md) | 2026-11-01 |
 | 7 | [Pairing is mutual](0007-pairing-is-mutual.md) | 2026-11-01 |
 | 8 | [Carry sync over iroh streams and retire livtet-sync-http](0008-sync-over-iroh-streams.md) | 2026-11-01 |
+| 9 | [Pairing mints both tokens in one claim](0009-pairing-mints-both-tokens.md) | 2026-11-08 |
+| 10 | [Notes converge by id with tombstones](0010-notes-converge-by-id-with-tombstones.md) | 2026-11-08 |
+| 11 | [Detect sync conflicts by payload hash](0011-detect-sync-conflicts-by-payload-hash.md) | 2026-11-08 |

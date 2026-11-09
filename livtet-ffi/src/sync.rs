@@ -22,15 +22,18 @@ use livtet_core::types::{DbId, DeviceType, now_primitive};
 use livtet_iroh::{DiscoveryService, SecretKey};
 use livtet_mdns::Advertiser;
 use livtet_sync::SyncEngine;
+use livtet_sync_iroh::{Client, PairingOutcome, spawn_server};
 use livtet_sync_server::wire_state::WireState;
-use livtet_sync_iroh::{
-    Client, PairingOutcome, spawn_server,
-};
 
 use crate::error::LivtetError;
 
 /// How long to wait between `pair_status` polls while the reader decides.
 const POLL_INTERVAL: Duration = Duration::from_millis(500);
+
+/// Claimant tokens for undecided claims, keyed by claim. Process memory only:
+/// restarting the app cancels the claim, as the protocol requires.
+static CLAIM_TOKENS: LazyLock<Mutex<HashMap<String, String>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
 
 /// What became of a pairing attempt.
 ///
@@ -66,13 +69,20 @@ pub async fn pair_sync_device(
     wait_secs: u32,
 ) -> Result<SyncPairingResult, LivtetError> {
     let client = connect(secret_key_path, peer_node_id).await?;
+    let claimant_token = DbId::new().to_string();
     let outcome = client
-        .pair(&device_id, &name, &device_type)
+        .pair(&device_id, &name, &device_type, &claimant_token)
         .await
         .map_err(|error| LivtetError::Sync(format!("could not file the pairing claim: {error}")))?;
 
     let result = match outcome {
-        PairingOutcome::Pending { claim } => await_decision(&client, claim, wait_secs).await?,
+        PairingOutcome::Pending { claim } => {
+            CLAIM_TOKENS
+                .lock()
+                .map_err(|_| LivtetError::Sync("claim token lock poisoned".to_string()))?
+                .insert(claim.clone(), claimant_token.clone());
+            await_decision(&client, claim, wait_secs).await?
+        }
         PairingOutcome::Paired {
             device_id,
             session_token,
@@ -83,7 +93,7 @@ pub async fn pair_sync_device(
         PairingOutcome::Refused { reason } => SyncPairingResult::Refused { reason },
     };
 
-    remember_if_paired(&db_path, &client, &result, &device_type).await?;
+    remember_if_paired(&db_path, &client, &result, &device_type, &claimant_token).await?;
     Ok(result)
 }
 
@@ -101,9 +111,21 @@ pub async fn sync_pairing_status(
     name: String,
     device_type: String,
 ) -> Result<SyncPairingResult, LivtetError> {
+    let _ = &name;
     let client = connect(secret_key_path, peer_node_id).await?;
+    let claimant_token = CLAIM_TOKENS
+        .lock()
+        .map_err(|_| LivtetError::Sync("claim token lock poisoned".to_string()))?
+        .get(&claim)
+        .cloned()
+        .ok_or_else(|| {
+            LivtetError::Sync(
+                "the claim token was lost with the app session; file a new pairing claim"
+                    .to_string(),
+            )
+        })?;
     let result = await_decision(&client, claim, wait_secs).await?;
-    remember_if_paired(&db_path, &client, &result, &device_type).await?;
+    remember_if_paired(&db_path, &client, &result, &device_type, &claimant_token).await?;
     Ok(result)
 }
 
@@ -119,6 +141,7 @@ async fn remember_if_paired(
     client: &Client,
     result: &SyncPairingResult,
     device_type: &str,
+    claimant_token: &str,
 ) -> Result<(), LivtetError> {
     use livtet_core::data::client_entities::paired_devices;
     use livtet_core::data::orm::{EntityTrait, Set, sea_query::OnConflict};
@@ -149,7 +172,8 @@ async fn remember_if_paired(
     let shared = SharedState::connect(db_path, &[Kind::Business, Kind::Client])
         .await
         .map_err(|error| LivtetError::Database(error.to_string()))?;
-    let db = livtet_core::data::orm::SqlxSqliteConnector::from_sqlx_sqlite_pool(shared.pool.clone());
+    let db =
+        livtet_core::data::orm::SqlxSqliteConnector::from_sqlx_sqlite_pool(shared.pool.clone());
 
     // The *peer's* name, from its identity reply. The `name` this call receives
     // is the claiming device's own — writing that here labelled every row with
@@ -183,8 +207,10 @@ async fn remember_if_paired(
     // `peer_token` and `node_id` come from later client migrations and are not on
     // the entity, so they are written directly.
     livtet_core::data::sql::query(
-        "UPDATE paired_devices SET peer_session_token = ?, node_id = ? WHERE device_id = ?",
+        "UPDATE paired_devices SET session_token = ?, peer_session_token = ?, node_id = ? \
+         WHERE device_id = ?",
     )
+    .bind(claimant_token.to_string())
     .bind(session_token.clone())
     .bind(identity.node_id.clone())
     .bind(peer_device.to_bytes().to_vec())
@@ -393,9 +419,14 @@ pub async fn advertise_sync_device(
     let (ip, port) = advertised_endpoint(&discovery);
 
     let wire = Arc::new(
-        wire_state(&db_path, &device_id, Some(node_id.clone()), Some(name.clone()))
-            .await?
-            .counting(),
+        wire_state(
+            &db_path,
+            &device_id,
+            Some(node_id.clone()),
+            Some(name.clone()),
+        )
+        .await?
+        .counting(),
     );
     let serving = spawn_server(
         discovery.endpoint().clone(),
@@ -477,7 +508,11 @@ fn advertisement(secret_key_path: &str) -> Result<Arc<WireState>, LivtetError> {
     ADVERTISED
         .lock()
         .ok()
-        .and_then(|hosts| hosts.get(secret_key_path).map(|host| Arc::clone(&host.wire)))
+        .and_then(|hosts| {
+            hosts
+                .get(secret_key_path)
+                .map(|host| Arc::clone(&host.wire))
+        })
         .ok_or_else(|| {
             LivtetError::Sync(
                 "this device is not advertising a sync endpoint; call \
@@ -533,9 +568,7 @@ pub async fn sync_decide_pairing(
 
 /// The devices this endpoint has paired with.
 #[uniffi::export(async_runtime = "tokio")]
-pub async fn sync_paired_devices(
-    db_path: String,
-) -> Result<Vec<SyncPairedDevice>, LivtetError> {
+pub async fn sync_paired_devices(db_path: String) -> Result<Vec<SyncPairedDevice>, LivtetError> {
     use livtet_core::data::sql::Row;
 
     // Read straight from the library rather than through a running endpoint:
@@ -589,7 +622,51 @@ pub async fn sync_revoke_paired_device(
         .execute(&shared.pool)
         .await
         .map_err(|error| LivtetError::Database(error.to_string()))?;
+    livtet_core::data::sql::query("DELETE FROM pending_pairings WHERE device_id = ?")
+        .bind(id.to_bytes().to_vec())
+        .execute(&shared.pool)
+        .await
+        .map_err(|error| LivtetError::Database(error.to_string()))?;
     Ok(result.rows_affected() > 0)
+}
+
+/// Revoke the pairing on both sides: ask the peer to drop this device's row,
+/// then remove the local row and any pending claim. The remote half is
+/// best-effort; the local half always runs.
+#[uniffi::export(async_runtime = "tokio")]
+pub async fn sync_revoke_peer(
+    secret_key_path: String,
+    db_path: String,
+    peer_node_id: String,
+) -> Result<bool, LivtetError> {
+    let token = sync_peer_token(db_path.clone(), peer_node_id.clone()).await?;
+    let mut remote_removed = false;
+    if let Some(token) = token {
+        let client = connect(secret_key_path, peer_node_id.clone())
+            .await?
+            .with_token(token);
+        match client.revoke().await {
+            Ok(removed) => remote_removed = removed,
+            Err(error) => {
+                let _ = error;
+            }
+        }
+    }
+
+    let shared = SharedState::connect(&db_path, &[Kind::Business, Kind::Client])
+        .await
+        .map_err(|error| LivtetError::Database(error.to_string()))?;
+    let local = livtet_core::data::sql::query("DELETE FROM paired_devices WHERE node_id = ?")
+        .bind(peer_node_id.clone())
+        .execute(&shared.pool)
+        .await
+        .map_err(|error| LivtetError::Database(error.to_string()))?;
+    livtet_core::data::sql::query("DELETE FROM pending_pairings WHERE token = ?")
+        .bind(peer_node_id)
+        .execute(&shared.pool)
+        .await
+        .map_err(|error| LivtetError::Database(error.to_string()))?;
+    Ok(remote_removed || local.rows_affected() > 0)
 }
 
 /// Offer `edition_id`'s file to a paired device.
@@ -693,8 +770,8 @@ fn advertised_endpoint(discovery: &DiscoveryService) -> (std::net::IpAddr, u16) 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::Duration;
     use livtet_sync_iroh::{Handler, Identity, Outcome, PROTOCOL_VERSION, Request, Response};
+    use std::time::Duration;
 
     /// How many `PairStatus` polls this fake peer answers `Pending` before approving.
     const DECIDES_AFTER_POLLS: u32 = 2;
@@ -770,10 +847,17 @@ mod tests {
             panic!("a zero-second wait should return the claim, not {filed:?}");
         };
 
-        let first =
-            sync_pairing_status(key_path.clone(), db_path.clone(), peer_node_id.clone(), claim.clone(), 1, "Reader's phone".to_string(), "android".to_string())
-                .await
-                .expect("first round");
+        let first = sync_pairing_status(
+            key_path.clone(),
+            db_path.clone(),
+            peer_node_id.clone(),
+            claim.clone(),
+            1,
+            "Reader's phone".to_string(),
+            "android".to_string(),
+        )
+        .await
+        .expect("first round");
         assert!(
             matches!(first, SyncPairingResult::Pending { .. }),
             "an undecided peer must stay pending, got {first:?}"
@@ -1060,10 +1144,9 @@ mod tests {
         let key = dir.path().join("sync.key").to_string();
 
         // The endpoint serves the library, so the library has to exist first.
-        let store =
-            LivtetStore::open(db.clone(), dir.path().join("index").to_string())
-                .await
-                .expect("store");
+        let store = LivtetStore::open(db.clone(), dir.path().join("index").to_string())
+            .await
+            .expect("store");
         drop(store);
 
         let node = advertise_sync_device(
@@ -1092,8 +1175,8 @@ mod tests {
     /// change log the peer pulls, and the bytes come back over the same wire.
     #[tokio::test]
     async fn a_peer_that_claims_this_device_receives_an_offered_book() {
-        use crate::mutations::NewEdition;
         use crate::LivtetStore;
+        use crate::mutations::NewEdition;
 
         let phone_dir = camino_tempfile::Utf8TempDir::new().expect("phone dir");
         let peer_dir = camino_tempfile::Utf8TempDir::new().expect("peer dir");
@@ -1104,12 +1187,9 @@ mod tests {
         let peer_key = peer_dir.path().join("sync.key").to_string();
 
         // The phone's library: one work, one edition, one real file.
-        let store = LivtetStore::open(
-            phone_db.clone(),
-            phone_dir.path().join("index").to_string(),
-        )
-        .await
-        .expect("store");
+        let store = LivtetStore::open(phone_db.clone(), phone_dir.path().join("index").to_string())
+            .await
+            .expect("store");
         let work = store
             .create_work("Reverse Direction".to_string(), None, None)
             .await
@@ -1193,8 +1273,8 @@ mod tests {
             "Studio".to_string(),
             "desktop".to_string(),
         )
-            .await
-            .expect("poll")
+        .await
+        .expect("poll")
         {
             SyncPairingResult::Paired { session_token, .. } => assert_eq!(
                 session_token, issued,

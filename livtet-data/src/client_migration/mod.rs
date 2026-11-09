@@ -19,6 +19,8 @@ pub mod m0013_paired_devices_peer_token;
 pub mod m0014_inventory_not_synced;
 pub mod m0015_sync_reading_progress_annotations;
 pub mod m0016_sync_reading_progress_suppression;
+pub mod m0017_pending_pairings_claimant_token;
+pub mod m0018_conflict_payload_index;
 pub mod schema;
 
 pub use sea_orm_migration::MigratorTrait;
@@ -49,6 +51,8 @@ impl MigratorTrait for Migrator {
             Box::new(crate::client_migration::m0014_inventory_not_synced::Migration),
             Box::new(crate::client_migration::m0015_sync_reading_progress_annotations::Migration),
             Box::new(crate::client_migration::m0016_sync_reading_progress_suppression::Migration),
+            Box::new(crate::client_migration::m0017_pending_pairings_claimant_token::Migration),
+            Box::new(crate::client_migration::m0018_conflict_payload_index::Migration),
         ]
     }
 }

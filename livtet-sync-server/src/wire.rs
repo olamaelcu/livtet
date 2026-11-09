@@ -18,8 +18,8 @@ use camino::Utf8PathBuf;
 use livtet_data::orm::{ConnectionTrait, DbBackend, EntityTrait, Statement};
 use livtet_sync::{SyncChange, SyncStatus};
 use livtet_sync_iroh::{
-    CoverImage, ErrorCode, FileHeader, FileMetadata, Handler, Identity, MAX_MESSAGE_BYTES, OpdsHeaders,
-    OpdsResponse, Outcome, PROTOCOL_VERSION, Request, Response,
+    CoverImage, ErrorCode, FileHeader, FileMetadata, Handler, Identity, MAX_MESSAGE_BYTES,
+    OpdsHeaders, OpdsResponse, Outcome, PROTOCOL_VERSION, Request, Response,
 };
 use livtet_types::DbId;
 
@@ -142,15 +142,15 @@ async fn answer(state: &Arc<WireState>, request: Request, remote: String) -> Out
     if let Some(notifier) = &state.notifier {
         crate::requests::notify(
             notifier,
-        crate::rpc::method::NOTIFY_REQUEST_RECEIVED,
-        serde_json::json!({
-            "op": op,
-            "node_id": remote,
-            "device_id": answered.device_id,
-            "outcome": outcome,
-            "at": at,
-            "elapsed_ms": elapsed_ms,
-        }),
+            crate::rpc::method::NOTIFY_REQUEST_RECEIVED,
+            serde_json::json!({
+                "op": op,
+                "node_id": remote,
+                "device_id": answered.device_id,
+                "outcome": outcome,
+                "at": at,
+                "elapsed_ms": elapsed_ms,
+            }),
         );
         if let Some(completed) =
             sync_completed(&answered.outcome.response, answered.device_id.as_deref())
@@ -176,6 +176,7 @@ fn op_name(request: &Request) -> &'static str {
         Request::Push { .. } => "push",
         Request::Pair { .. } => "pair",
         Request::PairStatus { .. } => "pair_status",
+        Request::Revoke { .. } => "revoke",
         Request::Conflicts { .. } => "conflicts",
         Request::ResolveConflict { .. } => "resolve_conflict",
         Request::File { .. } => "file",
@@ -309,6 +310,7 @@ async fn dispatch(state: &Arc<WireState>, request: Request, remote: String) -> A
             device_id,
             name,
             device_type,
+            session_token,
         } => {
             if !crate::rate_limit::claim_limiter().allow(&remote) {
                 return Answered::error(
@@ -316,7 +318,7 @@ async fn dispatch(state: &Arc<WireState>, request: Request, remote: String) -> A
                     "too many pairing attempts; try again in a minute",
                 );
             }
-            pair(state, &remote, device_id, name, device_type).await
+            pair(state, &remote, device_id, name, device_type, session_token).await
         }
 
         Request::PairStatus { claim } => {
@@ -324,6 +326,37 @@ async fn dispatch(state: &Arc<WireState>, request: Request, remote: String) -> A
             // dropped stream, and ten polls would exhaust the claim budget in
             // ten seconds. The claim id gates it instead.
             pair_status(state, &remote, claim).await
+        }
+
+        Request::Revoke { token } => {
+            let device = match authorize(state, &token, &remote).await {
+                Ok(device) => device,
+                Err(failure) => return failure.into(),
+            };
+            let Some(device_id) = DbId::from_wire(&device) else {
+                return Answered::error(ErrorCode::Internal, "authorized device id is invalid");
+            };
+            let removed =
+                match livtet_data::sql::query("DELETE FROM paired_devices WHERE device_id = ?")
+                    .bind(device_id.to_bytes().to_vec())
+                    .execute(&state.pool)
+                    .await
+                {
+                    Ok(result) => result.rows_affected() > 0,
+                    Err(error) => {
+                        return Answered::error(ErrorCode::Internal, format!("revoke: {error}"));
+                    }
+                };
+            // The claim row, if any, dies with the relationship. It is keyed by
+            // the caller's node id and records the caller's device id.
+            let _ = livtet_data::sql::query(
+                "DELETE FROM pending_pairings WHERE token = ? OR device_id = ?",
+            )
+            .bind(remote.clone())
+            .bind(device_id.to_bytes().to_vec())
+            .execute(&state.pool)
+            .await;
+            Answered::reply(Response::Revoked { removed }).with_device(device)
         }
 
         Request::Conflicts { token } => {
@@ -396,10 +429,7 @@ async fn dispatch(state: &Arc<WireState>, request: Request, remote: String) -> A
 
         // A receiver that pulled the library asks for the art it did not get: covers belong
         // to an edition, and the bytes only exist on the device that extracted them.
-        Request::Covers {
-            token,
-            edition_ids,
-        } => covers(state, token, &remote, edition_ids).await,
+        Request::Covers { token, edition_ids } => covers(state, token, &remote, edition_ids).await,
 
         // The OPDS route table lives in the desktop process, which owns the
         // live database and search index; this daemon forwards the request
@@ -891,6 +921,7 @@ async fn pair(
     device_id: String,
     name: String,
     device_type: String,
+    session_token: String,
 ) -> Answered {
     use livtet_data::client_entities::pending_pairings;
     use livtet_data::orm::{ActiveModelTrait, EntityTrait, Set};
@@ -906,6 +937,12 @@ async fn pair(
             format!("not a device id: {device_id}"),
         );
     };
+    if session_token.trim().is_empty() {
+        return Answered::error(
+            ErrorCode::BadRequest,
+            "the claim carried no claimant token".to_string(),
+        );
+    }
     // The advertised endpoint may carry its own id in either textual form (the phone
     // advertises the hex form of a generated UUID); the claim row must key this host
     // the same way the peer id above was parsed.
@@ -925,6 +962,23 @@ async fn pair(
     let expires_pdt = time::PrimitiveDateTime::new(expires.date(), expires.time());
     let device_type_id = Some(DbId::from(DeviceType::from_tag(&device_type)));
 
+    let already_paired =
+        livtet_data::sql::query("SELECT 1 FROM paired_devices WHERE node_id = ? LIMIT 1")
+            .bind(remote.to_string())
+            .fetch_optional(&state.pool)
+            .await;
+    match already_paired {
+        Ok(Some(_)) => {
+            return Answered::reply(Response::Refused {
+                reason: "already paired; revoke the pairing first".to_string(),
+            });
+        }
+        Ok(None) => {}
+        Err(error) => {
+            return Answered::error(ErrorCode::Internal, format!("pairing lookup: {error}"));
+        }
+    }
+
     let existing = match pending_pairings::Entity::find_by_id(remote.to_string())
         .one(state.engine.db())
         .await
@@ -936,18 +990,15 @@ async fn pair(
     };
 
     let write = match existing {
-        // A decided ticket is final: replaying the claim must not reopen it.
-        Some(row) if row.status_id != Some(pending_id) => {
-            return Answered::reply(Response::Refused {
-                reason: "this pairing was already decided".to_string(),
-            });
-        }
+        // A decided ticket is reopened only because the paired row is gone:
+        // the reader revoked it, so this is a fresh human decision.
         Some(row) => {
             let mut model: pending_pairings::ActiveModel = row.into();
             model.desktop_id = Set(desktop_id);
             model.device_name = Set(Some(name.clone()));
             model.device_type_id = Set(device_type_id);
             model.device_id = Set(Some(peer_device_id));
+            model.claimant_token = Set(Some(session_token));
             model.status_id = Set(Some(pending_id));
             model.listen_on = Set(None);
             model.origin_addr = Set(None);
@@ -966,6 +1017,7 @@ async fn pair(
                 device_name: Set(Some(name.clone())),
                 device_type_id: Set(device_type_id),
                 device_id: Set(Some(peer_device_id)),
+                claimant_token: Set(Some(session_token)),
                 origin_addr: Set(None),
                 created_at: Set(now_pdt),
                 expires_at: Set(expires_pdt),
@@ -1066,20 +1118,15 @@ mod tests {
 
     /// Like [`test_state`], but keeps the daemon's outbound lines so a test can
     /// play the desktop and answer a reverse request.
-    async fn test_state_with_host() -> (
-        Arc<WireState>,
-        Utf8PathBuf,
-        mpsc::UnboundedReceiver<String>,
-    ) {
+    async fn test_state_with_host() -> (Arc<WireState>, Utf8PathBuf, mpsc::UnboundedReceiver<String>)
+    {
         test_state_with_device_id(LOCAL_DEVICE).await
     }
 
     /// Like [`test_state_with_host`], with the host's own id spelled by the caller.
-    async fn test_state_with_device_id(device_id: &str) -> (
-        Arc<WireState>,
-        Utf8PathBuf,
-        mpsc::UnboundedReceiver<String>,
-    ) {
+    async fn test_state_with_device_id(
+        device_id: &str,
+    ) -> (Arc<WireState>, Utf8PathBuf, mpsc::UnboundedReceiver<String>) {
         let root = temp_dir();
         let db_path = root.join("sync.db");
         let pool = livtet_data::connect_with_migrations_foreign_keys(
@@ -1094,9 +1141,7 @@ mod tests {
         let (out, out_rx) = mpsc::unbounded_channel();
         let state = Arc::new(
             WireState::new(engine, pool, device_id.to_string())
-                .with_notifier(Arc::new(
-                    |_method: &str, _params: serde_json::Value| {},
-                ))
+                .with_notifier(Arc::new(|_method: &str, _params: serde_json::Value| {}))
                 .with_host(crate::daemon::HostBridge::new(out))
                 .with_request_log(new_request_log())
                 .counting(),
@@ -1125,10 +1170,7 @@ mod tests {
 
     /// The host bridge the fixture wires, which plays the desktop's route table.
     fn wired_host(state: &Arc<WireState>) -> crate::daemon::HostBridge {
-        state
-            .host
-            .clone()
-            .expect("the fixture wires a host bridge")
+        state.host.clone().expect("the fixture wires a host bridge")
     }
 
     /// The request log the fixture keeps.
@@ -1476,7 +1518,6 @@ mod tests {
         }
     }
 
-
     #[tokio::test]
     async fn a_claim_is_accepted_when_the_host_id_is_hex() {
         let (state, _root, _out) = test_state_with_device_id(&DbId::new().to_hex()).await;
@@ -1486,6 +1527,7 @@ mod tests {
                 device_id: DbId::new().to_string(),
                 name: "Remote Phone".to_string(),
                 device_type: "mobile".to_string(),
+                session_token: "claim-token".to_string(),
             },
             REMOTE_NODE,
         )
@@ -1507,6 +1549,7 @@ mod tests {
                 device_id: peer_device.to_string(),
                 name: "Remote Phone".to_string(),
                 device_type: "mobile".to_string(),
+                session_token: "claim-token".to_string(),
             },
             REMOTE_NODE,
         )
@@ -1603,6 +1646,7 @@ mod tests {
                     device_id: peer_device.to_string(),
                     name: format!("Phone {attempt}"),
                     device_type: "mobile".to_string(),
+                    session_token: "claim-token".to_string(),
                 },
                 RATE_LIMITED_NODE,
             )
@@ -1619,6 +1663,7 @@ mod tests {
                 device_id: peer_device.to_string(),
                 name: "Phone 11".to_string(),
                 device_type: "mobile".to_string(),
+                session_token: "claim-token".to_string(),
             },
             RATE_LIMITED_NODE,
         )

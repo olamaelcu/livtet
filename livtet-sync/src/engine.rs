@@ -302,7 +302,7 @@ impl SyncEngine {
 
             let check = livtet_data::orm::Statement::from_sql_and_values(
                 livtet_data::orm::DatabaseBackend::Sqlite,
-                "SELECT version, payload FROM change_log WHERE entity_type = ? AND entity_id = ? ORDER BY version DESC LIMIT 1",
+                "SELECT version, payload, operation FROM change_log WHERE entity_type = ? AND entity_id = ? ORDER BY version DESC LIMIT 1",
                 [
                     change.entity_type.clone().into(),
                     change.entity_id.clone().into(),
@@ -310,23 +310,33 @@ impl SyncEngine {
             );
 
             if let Some(local_row) = txn.query_one_raw(check).await? {
-                let local_version = local_row.try_get::<i64>("", "version").unwrap_or(0);
                 let local_payload = local_row
                     .try_get::<String>("", "payload")
                     .unwrap_or_default();
+                let local_operation = local_row
+                    .try_get::<String>("", "operation")
+                    .unwrap_or_default();
 
-                if local_version > change.version
-                    || (local_version == change.version && local_payload != change.payload)
-                {
+                // Versions are per-device counters, not a shared clock. Equal
+                // canonical payloads and operations are the same state; any
+                // other difference is a conflict.
+                // A row's existence is the only operation distinction that
+                // matters: INSERT and UPDATE carrying the same payload are the
+                // same state. Versions are per-device counters, not a clock.
+                let local_deleted = local_operation.eq_ignore_ascii_case("DELETE");
+                let remote_deleted = operation.eq_ignore_ascii_case("DELETE");
+                let same = canonical_payload(&local_payload) == canonical_payload(&change.payload)
+                    && local_deleted == remote_deleted;
+                if !same {
                     let insert_conflict = livtet_data::orm::Statement::from_sql_and_values(
                         livtet_data::orm::DatabaseBackend::Sqlite,
-                        "INSERT INTO conflicts (entity_type, entity_id, local_payload, remote_payload, detected_at) \
+                        "INSERT OR IGNORE INTO conflicts (entity_type, entity_id, local_payload, remote_payload, detected_at) \
                          VALUES (?, ?, ?, ?, datetime('now'))",
                         [
                             change.entity_type.clone().into(),
                             change.entity_id.clone().into(),
-                            local_payload.into(),
-                            change.payload.clone().into(),
+                            canonical_payload(&local_payload).into(),
+                            canonical_payload(&change.payload).into(),
                         ],
                     );
                     txn.execute_raw(insert_conflict).await?;
@@ -336,11 +346,14 @@ impl SyncEngine {
                         "SELECT id, entity_type, entity_id, local_payload, remote_payload, \
                                 resolved, resolution, merged_payload, detected_at \
                          FROM conflicts \
-                         WHERE entity_type = ? AND entity_id = ? AND resolved = 0 \
+                         WHERE entity_type = ? AND entity_id = ? AND local_payload = ? AND remote_payload = ? \
+                           AND resolved = 0 \
                          ORDER BY id DESC LIMIT 1",
                         [
                             change.entity_type.clone().into(),
                             change.entity_id.clone().into(),
+                            canonical_payload(&local_payload).into(),
+                            canonical_payload(&change.payload).into(),
                         ],
                     );
                     if let Some(row) = txn.query_one_raw(fetch).await? {
@@ -563,12 +576,17 @@ impl SyncEngine {
             }
 
             let local = latest_change(&txn, &change.entity_type, &change.entity_id).await?;
-            if !authoritative
-                && let Some((local_version, local_payload)) = local
-                && local_version > change.version
-            {
+            if !authoritative && let Some((_, local_payload, local_operation)) = local {
+                let local_deleted = local_operation.eq_ignore_ascii_case("DELETE");
+                let remote_deleted = change.operation.eq_ignore_ascii_case("DELETE");
+                let same = canonical_payload(&local_payload) == canonical_payload(&change.payload)
+                    && local_deleted == remote_deleted;
+                if same {
+                    outcome.skipped += 1;
+                    continue;
+                }
                 record_conflict(&txn, change, &local_payload).await?;
-                let conflict = fetch_latest_conflict(&txn, change).await?;
+                let conflict = fetch_latest_conflict(&txn, change, &local_payload).await?;
                 if let Some(conflict) = conflict {
                     outcome.conflicts.push(conflict);
                 }
@@ -672,10 +690,10 @@ async fn latest_change(
     db: &impl ConnectionTrait,
     entity_type: &str,
     entity_id: &str,
-) -> Result<Option<(i64, String)>, SyncError> {
+) -> Result<Option<(i64, String, String)>, SyncError> {
     let statement = Statement::from_sql_and_values(
         DatabaseBackend::Sqlite,
-        "SELECT version, payload FROM change_log WHERE entity_type = ? AND entity_id = ? \
+        "SELECT version, payload, operation FROM change_log WHERE entity_type = ? AND entity_id = ? \
          ORDER BY version DESC LIMIT 1",
         [entity_type.into(), entity_id.into()],
     );
@@ -684,6 +702,7 @@ async fn latest_change(
         Some((
             row.try_get::<i64>("", "version").ok()?,
             row.try_get::<String>("", "payload").ok()?,
+            row.try_get::<String>("", "operation").ok()?,
         ))
     }))
 }
@@ -693,33 +712,47 @@ async fn record_conflict(
     change: &SyncChange,
     local_payload: &str,
 ) -> Result<(), SyncError> {
+    // Key order and whitespace are not state: canonicalise before comparing so
+    // equal rows never conflict, and repeated conflicts dedupe on the text.
+    let canonical = canonical_payload(local_payload);
     let statement = Statement::from_sql_and_values(
         DatabaseBackend::Sqlite,
-        "INSERT INTO conflicts (entity_type, entity_id, local_payload, remote_payload, detected_at) \
+        "INSERT OR IGNORE INTO conflicts (entity_type, entity_id, local_payload, remote_payload, detected_at) \
          VALUES (?, ?, ?, ?, datetime('now'))",
         [
             change.entity_type.clone().into(),
             change.entity_id.clone().into(),
-            local_payload.to_string().into(),
-            change.payload.clone().into(),
+            canonical.into(),
+            canonical_payload(&change.payload).into(),
         ],
     );
     db.execute_raw(statement).await?;
     Ok(())
 }
 
+/// Stable text for equality: JSON object keys sort and whitespace disappears.
+fn canonical_payload(raw: &str) -> String {
+    serde_json::from_str::<Value>(raw)
+        .map(|value| value.to_string())
+        .unwrap_or_else(|_| raw.to_string())
+}
+
 async fn fetch_latest_conflict(
     db: &impl ConnectionTrait,
     change: &SyncChange,
+    local_payload: &str,
 ) -> Result<Option<Conflict>, SyncError> {
     let statement = Statement::from_sql_and_values(
         DatabaseBackend::Sqlite,
         "SELECT id, entity_type, entity_id, local_payload, remote_payload, resolved, resolution, \
                 merged_payload, detected_at FROM conflicts \
-         WHERE entity_type = ? AND entity_id = ? AND resolved = 0 ORDER BY id DESC LIMIT 1",
+         WHERE entity_type = ? AND entity_id = ? AND local_payload = ? AND remote_payload = ? \
+           AND resolved = 0 ORDER BY id DESC LIMIT 1",
         [
             change.entity_type.clone().into(),
             change.entity_id.clone().into(),
+            canonical_payload(local_payload).into(),
+            canonical_payload(&change.payload).into(),
         ],
     );
     let row = db.query_one_raw(statement).await?;

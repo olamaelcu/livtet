@@ -150,8 +150,9 @@ async fn seed_claim(
     livtet_data::sql::query(
         "INSERT INTO pending_pairings \
              (token, desktop_id, listen_on, status_id, device_name, device_type_id, \
-              device_id, origin_addr, created_at, expires_at) \
-         VALUES (?, ?, NULL, ?, 'Remote Phone', NULL, ?, NULL, datetime('now'), \
+              device_id, origin_addr, claimant_token, created_at, expires_at) \
+         VALUES (?, ?, NULL, ?, 'Remote Phone', NULL, ?, NULL, 'claim-token', \
+                 datetime('now'), \
                  datetime('now', '+5 minutes'))",
     )
     .bind(node_id)
@@ -473,13 +474,14 @@ async fn approving_an_iroh_claim_pairs_the_device() {
 
     // The session token and node id are persisted, not just returned: the node
     // id is what every later dial addresses.
-    let (stored_token, stored_node, outbound, listen_on): (
+    let (stored_token, stored_peer_token, stored_node, outbound, listen_on): (
+        String,
         String,
         Option<String>,
         i64,
         Option<String>,
     ) = livtet_data::sql::query_as(
-        "SELECT session_token, node_id, outbound, listen_on \
+        "SELECT session_token, peer_session_token, node_id, outbound, listen_on \
          FROM paired_devices WHERE device_id = ?",
     )
     .bind(remote_device_id.to_bytes().to_vec())
@@ -487,6 +489,10 @@ async fn approving_an_iroh_claim_pairs_the_device() {
     .await
     .expect("read back the pairing");
     assert_eq!(stored_token, session_token);
+    assert_eq!(
+        stored_peer_token, "claim-token",
+        "the claimant's token is the approver's outbound token"
+    );
     assert_eq!(stored_node.as_deref(), Some(remote_node_id));
     assert_eq!(outbound, 1, "an approved claim is mutual");
     assert_eq!(

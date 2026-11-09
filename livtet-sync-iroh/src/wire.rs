@@ -30,7 +30,7 @@ use livtet_sync::types::{Conflict, FullDump, PullResponse, PushResponse, SyncCha
 /// A peer that does not match is refused by the ALPN, and this value restates
 /// the revision in the handshake so a mismatch is visible in a log rather than
 /// only as a failed connection.
-pub const PROTOCOL_VERSION: u32 = 2;
+pub const PROTOCOL_VERSION: u32 = 3;
 
 /// Largest message this transport will accept, across all chunks.
 ///
@@ -95,9 +95,14 @@ pub enum Request {
         device_id: String,
         name: String,
         device_type: String,
+        /// The token this device minted for the approver; it becomes the
+        /// approver's outbound credential once the claim is approved.
+        session_token: String,
     },
     /// What became of a claim this device filed, named by the claim secret.
     PairStatus { claim: String },
+    /// Remove this device's pairing with the caller on the peer side.
+    Revoke { token: String },
     /// Unresolved conflicts.
     Conflicts { token: String },
     /// Resolution for one conflict.
@@ -179,6 +184,10 @@ pub enum Response {
     /// The pairing was refused, or could not be filed.
     Refused {
         reason: String,
+    },
+    /// The peer removed this device's pairing row.
+    Revoked {
+        removed: bool,
     },
     Conflicts(Vec<Conflict>),
     Resolved(bool),
@@ -344,6 +353,20 @@ pub enum WireError {
     Protocol(String),
     #[error("stream: {0}")]
     Stream(String),
+}
+
+/// Write one chunked JSON message.
+/// Serialize a request with the protocol revision in its envelope.
+///
+/// The field sits next to the internally tagged `op`. A peer that predates it
+/// sends no field, so the server can answer with a single update-required error
+/// instead of failing to decode.
+pub fn request_value(request: &Request) -> Result<serde_json::Value, serde_json::Error> {
+    let mut value = serde_json::to_value(request)?;
+    if let serde_json::Value::Object(map) = &mut value {
+        map.insert("protocol".to_string(), PROTOCOL_VERSION.into());
+    }
+    Ok(value)
 }
 
 /// Write one chunked JSON message.

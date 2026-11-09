@@ -44,7 +44,6 @@ END
     )
 }
 
-
 impl MigrationName for Migration {
     fn name(&self) -> &str {
         "client-0015-sync-reading-progress-annotations"
