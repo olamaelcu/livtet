@@ -2,7 +2,7 @@
 
 Date: 2026-11-08
 
-Status: Accepted.
+Status: Accepted; implemented (Stage B).
 
 ## Context
 

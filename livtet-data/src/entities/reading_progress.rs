@@ -16,6 +16,9 @@ pub struct Model {
     pub total_reading_time_secs: i64,
     pub annotations: Option<String>,
     pub created_at: time::PrimitiveDateTime,
+    /// Arbitration clock and device for the progress fields (Stage B).
+    pub updated_at: Option<String>,
+    pub updated_by: Option<String>,
 }
 
 #[cfg_attr(feature = "fake", derive(fake::Dummy))]

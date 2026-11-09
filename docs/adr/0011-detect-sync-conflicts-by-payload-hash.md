@@ -21,19 +21,14 @@ replayed anything.
   pulls or pushes update one row instead of inserting another.
 - Delete the existing conflict backlog once; it is duplicated and cannot be
   replayed.
-- A whole-row `reading_progress` apply may not erase notes. When the local row
-  has a non-empty `annotations` array and the incoming row carries a different
-  or empty array (or a DELETE), record a conflict and leave the row untouched,
-  even on the authoritative offer path. The guard reads the row directly, so a
-  progress row with no local change-log entry cannot bypass the hash check.
-- Until Stage B merges notes, `reading_progress` conflicts are read-only in the
-  UI with an explicit “notes merge in the next update”; Keep/Use/Merge actions
-  are disabled rather than pretending to resolve them.
+- Stage B ([ADR-0010](0010-notes-converge-by-id-with-tombstones.md)) merges
+  `reading_progress` rows on apply, so they no longer produce a conflict;
+  any rows left from before the upgrade can still be resolved in the UI.
 
 ## Consequences
 
 - Repeated sync becomes idempotent; conflict counts reflect real divergence.
 - Notes survive a pull that would otherwise replace the whole progress row;
   progress updates with equal notes still apply normally.
-- The hash covers the whole payload, so any field change is a conflict until a
-  field-level merge exists.
+- The hash covers the whole payload; for `reading_progress` the Stage B merge
+  runs first, so note and progress differences converge instead of conflicting.

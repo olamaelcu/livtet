@@ -22,6 +22,7 @@ pub mod m0018_drop_edition_specific_covers;
 pub mod m0019_author_name_parts;
 pub mod m0020_publisher_place;
 pub mod m0021_reading_annotations_view;
+pub mod m0022_reading_progress_stage_b;
 pub mod schema;
 
 pub use sea_orm_migration::MigratorTrait;
@@ -55,6 +56,7 @@ impl MigratorTrait for Migrator {
             Box::new(crate::migration::m0019_author_name_parts::Migration),
             Box::new(crate::migration::m0020_publisher_place::Migration),
             Box::new(crate::migration::m0021_reading_annotations_view::Migration),
+            Box::new(crate::migration::m0022_reading_progress_stage_b::Migration),
         ]
     }
 }

@@ -18,6 +18,7 @@
 //! All DB modules compile unconditionally. The `fake` feature enables
 //! [`seed`].
 
+pub mod annotations;
 pub mod constraint;
 pub mod db_error;
 pub mod error;

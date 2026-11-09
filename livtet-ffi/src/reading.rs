@@ -4,6 +4,7 @@
 //! None of these tables participate in the search index, so no index
 //! sync is needed here.
 
+use livtet_core::data::annotations;
 use livtet_core::data::entities::{
     current_work_status, editions, formats, reading_annotations, reading_list_book, reading_lists,
     reading_progress, reading_sessions,
@@ -122,6 +123,8 @@ impl LivtetStore {
         additional_seconds: i64,
     ) -> Result<ReadingProgress, LivtetError> {
         let db = self.state.db_conn();
+        let stamp = ts(&now_primitive());
+        let device = annotations::local_device_id(&db).await;
         let existing = reading_progress::Entity::find()
             .filter(reading_progress::Column::EditionId.eq(edition_id))
             .one(&db)
@@ -135,6 +138,8 @@ impl LivtetStore {
                 active.last_location = Set(last_location);
                 active.total_reading_time_secs =
                     Set(active.total_reading_time_secs.unwrap() + additional_seconds);
+                active.updated_at = Set(Some(stamp.clone()));
+                active.updated_by = Set(Some(device.clone()));
                 active.update(&db).await?
             }
             None => {
@@ -148,6 +153,8 @@ impl LivtetStore {
                     total_reading_time_secs: Set(additional_seconds.max(0)),
                     annotations: Set(None),
                     created_at: Set(now_primitive()),
+                    updated_at: Set(Some(stamp)),
+                    updated_by: Set(Some(device)),
                 };
                 reading_progress::Entity::insert(active)
                     .exec_with_returning(&db)
@@ -249,12 +256,16 @@ impl LivtetStore {
         let db = self.state.db_conn();
         let now = now_primitive();
         let created_at = ts(&now);
+        let stamp = ts(&now_primitive());
+        let device = annotations::local_device_id(&db).await;
         let id = DbId::new().to_string();
         let entry = serde_json::json!({
             "id": id,
             "text": content,
             "locator": location,
             "createdAt": created_at,
+            "updatedAt": stamp,
+            "updatedBy": device,
         });
 
         let existing = reading_progress::Entity::find()
@@ -266,8 +277,11 @@ impl LivtetStore {
             Some(row) => {
                 let mut notes = stored_notes(row.annotations.as_deref());
                 notes.push(entry);
+                notes = annotations::merge_notes(&notes, &[]);
                 let mut active: reading_progress::ActiveModel = row.into();
                 active.annotations = Set(Some(serde_json::Value::Array(notes).to_string()));
+                active.updated_at = Set(Some(ts(&now_primitive())));
+                active.updated_by = Set(Some(annotations::local_device_id(&db).await));
                 active.update(&db).await?;
             }
             None => {
@@ -282,6 +296,8 @@ impl LivtetStore {
                     total_reading_time_secs: Set(0),
                     annotations: Set(Some(serde_json::Value::Array(vec![entry]).to_string())),
                     created_at: Set(now),
+                    updated_at: Set(Some(ts(&now_primitive()))),
+                    updated_by: Set(Some(annotations::local_device_id(&db).await)),
                 }
                 .insert(&db)
                 .await?;
@@ -315,7 +331,7 @@ impl LivtetStore {
                 content: row.content,
                 location: row.location,
                 created_at: row.created_at,
-                updated_at: None,
+                updated_at: row.updated_at,
             })
             .collect())
     }
@@ -323,18 +339,27 @@ impl LivtetStore {
     /// Remove one note by its id. `false` when it did not exist.
     pub async fn delete_annotation(&self, id: String) -> Result<bool, LivtetError> {
         let db = self.state.db_conn();
+        let stamp = ts(&now_primitive());
+        let device = annotations::local_device_id(&db).await;
         let rows = reading_progress::Entity::find().all(&db).await?;
         let needle = id.as_str();
         let mut deleted = false;
         for row in rows {
             let mut notes = stored_notes(row.annotations.as_deref());
-            let before = notes.len();
-            notes.retain(|note| note.get("id").and_then(|value| value.as_str()) != Some(needle));
-            if notes.len() == before {
+            let visible = annotations::visible_notes(&notes);
+            let before = visible.len();
+            let visible: Vec<_> = visible
+                .into_iter()
+                .filter(|note| note.get("id").and_then(|value| value.as_str()) != Some(needle))
+                .collect();
+            if visible.len() == before {
                 continue;
             }
+            notes = annotations::replace_notes(&notes, &visible, &stamp, &device, true);
             let mut active: reading_progress::ActiveModel = row.into();
             active.annotations = Set(Some(serde_json::Value::Array(notes).to_string()));
+            active.updated_at = Set(Some(stamp.clone()));
+            active.updated_by = Set(Some(device.clone()));
             active.update(&db).await?;
             deleted = true;
         }

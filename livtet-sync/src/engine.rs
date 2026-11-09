@@ -3,6 +3,7 @@
 //! and the FFI — the desktop uses it for the HTTP layer's local
 //! queries, and the FFI uses it for the same on the mobile device.
 
+use livtet_data::annotations as note_merge;
 use livtet_data::orm::sea_query::Value as SqlValue;
 use livtet_data::orm::{
     ActiveModelTrait, ConnectionTrait, DatabaseBackend, Statement, TransactionTrait,
@@ -559,12 +560,12 @@ impl SyncEngine {
             // before these rows were applied, so the failure would lose the whole page. Skip it
             // and count it: the next pull after the edition arrives brings the progress along.
             if change.entity_type == "reading_progress" {
-                // A whole-row update is not automatically a note update: the row's
-                // annotations can differ while both sides still look like "the latest
-                // row". Preserve the local array and report a conflict instead of
-                // letting a peer erase notes. Merging is Stage B.
-                if let Some(conflict) = note_conflict(&txn, change).await? {
-                    outcome.conflicts.push(conflict);
+                // Stage B converges notes and progress instead of reporting a
+                // whole-row conflict. A row delete would drop every tombstone,
+                // so a progress delete is a no-op; book deletion travels as an
+                // edition delete and cascades locally.
+                if change.operation.eq_ignore_ascii_case("DELETE") {
+                    outcome.skipped += 1;
                     continue;
                 }
                 let edition = payload_edition_id(&change.payload);
@@ -581,6 +582,21 @@ impl SyncEngine {
                     outcome.skipped += 1;
                     continue;
                 }
+
+                let remote: Value = serde_json::from_str(&change.payload).map_err(|error| {
+                    SyncError::Deserialization {
+                        entity_type: change.entity_type.clone(),
+                        message: error.to_string(),
+                    }
+                })?;
+                let local_row = local_progress_row(&txn, &change.entity_id).await?;
+                let merged = merge_progress_payload(local_row.as_ref(), &remote);
+                let baseline = latest_version_in(&txn).await?;
+                upsert_payload(&txn, table, &merged).await?;
+                discard_echoes(&txn, change, baseline).await?;
+                insert_change_row(&txn, change).await?;
+                outcome.applied += 1;
+                continue;
             }
 
             let local = latest_change(&txn, &change.entity_type, &change.entity_id).await?;
@@ -726,23 +742,8 @@ struct LocalProgressRow {
     total_reading_time_secs: i64,
     annotations: Option<String>,
     created_at: Option<String>,
-}
-
-impl LocalProgressRow {
-    fn payload(&self) -> String {
-        serde_json::json!({
-            "id": self.id,
-            "edition_id": self.edition_id,
-            "format_id": self.format_id,
-            "progress": self.progress,
-            "progress_unit": self.progress_unit,
-            "last_location": self.last_location,
-            "total_reading_time_secs": self.total_reading_time_secs,
-            "annotations": self.annotations,
-            "created_at": self.created_at,
-        })
-        .to_string()
-    }
+    updated_at: Option<String>,
+    updated_by: Option<String>,
 }
 
 /// Load the local progress row without trusting the change log: a row written
@@ -759,6 +760,7 @@ async fn local_progress_row(
         "SELECT lower(hex(id)) AS id, lower(hex(edition_id)) AS edition_id, \
                 lower(hex(format_id)) AS format_id, progress, progress_unit, last_location, \
                 total_reading_time_secs, annotations, created_at \
+                , updated_at, updated_by \
          FROM reading_progress WHERE id = ?",
         [id.to_bytes().to_vec().into()],
     );
@@ -777,57 +779,96 @@ async fn local_progress_row(
             .unwrap_or_default(),
         annotations: row.try_get::<String>("", "annotations").ok(),
         created_at: row.try_get::<String>("", "created_at").ok(),
+        updated_at: row.try_get::<String>("", "updated_at").ok(),
+        updated_by: row.try_get::<String>("", "updated_by").ok(),
     }))
 }
 
-/// The remote row's annotation text. Missing annotations mean no notes: the
-/// row is the whole unit of state, so an old peer's payload must not silently
-/// keep a newer local array either.
-fn payload_annotations(payload: &str) -> String {
-    let Ok(value) = serde_json::from_str::<Value>(payload) else {
-        return "[]".to_string();
-    };
+fn text(value: &Value, key: &str) -> Option<String> {
+    value.get(key).and_then(Value::as_str).map(str::to_string)
+}
+
+fn notes(value: &Value) -> Vec<Value> {
     match value.get("annotations") {
-        Some(Value::String(raw)) => raw.clone(),
-        Some(Value::Array(items)) => Value::Array(items.clone()).to_string(),
-        Some(Value::Null) | None => "[]".to_string(),
-        Some(other) => other.to_string(),
+        Some(Value::String(raw)) => note_merge::parse_notes(Some(raw)),
+        Some(Value::Array(items)) => items.clone(),
+        _ => Vec::new(),
     }
 }
 
-fn has_notes(raw: &str) -> bool {
-    match serde_json::from_str::<Value>(raw) {
-        Ok(Value::Array(items)) => !items.is_empty(),
-        Ok(Value::Null) => false,
-        Ok(_) => !raw.trim().is_empty(),
-        Err(_) => !raw.trim().is_empty() && raw.trim() != "[]",
-    }
-}
+/// Converge a peer's progress row onto the local one (ADR 0010).
+///
+/// Notes union by id with tombstones final. Progress fields come from the
+/// greatest `(updated_at, updated_by)`; accumulated reading time takes the
+/// maximum and `created_at` stays local.
+fn merge_progress_payload(local: Option<&LocalProgressRow>, remote: &Value) -> Value {
+    let local_notes = local
+        .and_then(|row| row.annotations.as_deref())
+        .map(|raw| note_merge::parse_notes(Some(raw)))
+        .unwrap_or_default();
+    let merged_notes = note_merge::merge_notes(&local_notes, &notes(remote));
 
-/// Keep every local note when a peer's whole-row progress change would replace
-/// a non-empty array with different or empty notes.
-async fn note_conflict(
-    db: &impl ConnectionTrait,
-    change: &SyncChange,
-) -> Result<Option<Conflict>, SyncError> {
-    let Some(row) = local_progress_row(db, &change.entity_id).await? else {
-        return Ok(None);
-    };
-    let local_annotations = row.annotations.as_deref().unwrap_or("[]");
-    if !has_notes(local_annotations) {
-        return Ok(None);
-    }
-    let remote_annotations = if change.operation.eq_ignore_ascii_case("DELETE") {
-        "[]".to_string()
+    let local_at = local
+        .and_then(|row| row.updated_at.as_deref())
+        .unwrap_or(note_merge::EPOCH);
+    let local_by = local
+        .and_then(|row| row.updated_by.as_deref())
+        .unwrap_or("");
+    let remote_at = text(remote, "updated_at").unwrap_or_else(|| note_merge::EPOCH.to_string());
+    let remote_by = text(remote, "updated_by").unwrap_or_default();
+    let remote_wins =
+        local.is_none() || (remote_at.as_str(), remote_by.as_str()) > (local_at, local_by);
+
+    let local_progress = local.map(|row| row.progress).unwrap_or(0.0);
+    let remote_progress = remote
+        .get("progress")
+        .and_then(Value::as_f64)
+        .unwrap_or(0.0);
+    let progress = if remote_wins {
+        remote_progress
     } else {
-        payload_annotations(&change.payload)
+        local_progress
     };
-    if canonical_payload(local_annotations) == canonical_payload(&remote_annotations) {
-        return Ok(None);
-    }
-    let local_payload = row.payload();
-    record_conflict(db, change, &local_payload).await?;
-    fetch_latest_conflict(db, change, &local_payload).await
+    let unit = if remote_wins {
+        text(remote, "progress_unit")
+    } else {
+        local.and_then(|row| row.progress_unit.clone())
+    };
+    let last_location = if remote_wins {
+        text(remote, "last_location")
+    } else {
+        local.and_then(|row| row.last_location.clone())
+    };
+    let local_seconds = local.map(|row| row.total_reading_time_secs).unwrap_or(0);
+    let remote_seconds = remote
+        .get("total_reading_time_secs")
+        .and_then(Value::as_i64)
+        .unwrap_or(0);
+
+    serde_json::json!({
+        "id": local
+            .map(|row| row.id.clone())
+            .or_else(|| text(remote, "id"))
+            .unwrap_or_default(),
+        "edition_id": local
+            .map(|row| row.edition_id.clone())
+            .or_else(|| text(remote, "edition_id"))
+            .unwrap_or_default(),
+        "format_id": local
+            .map(|row| row.format_id.clone())
+            .or_else(|| text(remote, "format_id"))
+            .unwrap_or_default(),
+        "progress": progress,
+        "progress_unit": unit,
+        "last_location": last_location,
+        "total_reading_time_secs": local_seconds.max(remote_seconds),
+        "annotations": note_merge::notes_json(&merged_notes),
+        "created_at": local
+            .and_then(|row| row.created_at.clone())
+            .or_else(|| text(remote, "created_at")),
+        "updated_at": if remote_wins { remote_at } else { local_at.to_string() },
+        "updated_by": if remote_wins { remote_by } else { local_by.to_string() },
+    })
 }
 
 async fn record_conflict(
@@ -915,7 +956,22 @@ async fn insert_change_row(
     change: &SyncChange,
 ) -> Result<(), SyncError> {
     use livtet_data::client_entities::change_log;
-    use livtet_data::orm::Set;
+    use livtet_data::orm::{ColumnTrait, EntityTrait, QueryFilter, Set};
+
+    // A pull can re-offer a row after a cursor rewind (tests, resume). The
+    // change_log identity index rejects the duplicate, but it is not state:
+    // the row was already applied.
+    let duplicate = change_log::Entity::find()
+        .filter(change_log::Column::EntityType.eq(change.entity_type.clone()))
+        .filter(change_log::Column::EntityId.eq(change.entity_id.clone()))
+        .filter(change_log::Column::Operation.eq(change.operation.clone()))
+        .filter(change_log::Column::Version.eq(change.version))
+        .filter(change_log::Column::DeviceId.eq(change.device_id.clone()))
+        .one(db)
+        .await?;
+    if duplicate.is_some() {
+        return Ok(());
+    }
 
     let now = time::format_description::parse_borrowed::<2>(
         "[year]-[month]-[day] [hour]:[minute]:[second]",

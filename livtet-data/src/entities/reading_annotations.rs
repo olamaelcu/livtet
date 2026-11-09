@@ -17,6 +17,7 @@ pub struct Model {
     pub page_number: Option<i32>,
     pub color: Option<String>,
     pub created_at: String,
+    pub updated_at: Option<String>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

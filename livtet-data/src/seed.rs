@@ -822,6 +822,8 @@ async fn assign_reading_statuses(
             total_reading_time_secs: Set(rand::random_range(600i64..7200i64)),
             annotations: Set(None),
             created_at: Set(timestamp),
+            updated_at: Set(None),
+            updated_by: Set(None),
         };
         ReadingProgressEntity::insert(progress_model)
             .exec(pool)
@@ -867,6 +869,8 @@ async fn assign_reading_statuses(
             total_reading_time_secs: Set(rand::random_range(0i64..3600i64)),
             annotations: Set(None),
             created_at: Set(timestamp),
+            updated_at: Set(None),
+            updated_by: Set(None),
         };
         ReadingProgressEntity::insert(progress_model)
             .exec(pool)
@@ -915,6 +919,8 @@ async fn assign_reading_statuses(
             total_reading_time_secs: Set(rand::random_range(3600i64..14400i64)),
             annotations: Set(None),
             created_at: Set(timestamp),
+            updated_at: Set(None),
+            updated_by: Set(None),
         };
         ReadingProgressEntity::insert(progress_model)
             .exec(pool)

@@ -372,9 +372,9 @@ fn progress_payload(
 }
 
 #[tokio::test]
-async fn a_remote_progress_row_cannot_replace_local_notes() {
+async fn a_remote_progress_row_merges_notes_by_id() {
     let device = Device::seeded("receiver").await;
-    let (id, edition, format, local_annotations) = local_progress_with_note(&device).await;
+    let (id, edition, format, _local_annotations) = local_progress_with_note(&device).await;
     let remote = progress_payload(
         &id,
         &edition,
@@ -382,6 +382,10 @@ async fn a_remote_progress_row_cannot_replace_local_notes() {
         0.9,
         "[{\"id\":\"remote-note\",\"text\":\"other\"}]",
     );
+    let mut remote: serde_json::Value = serde_json::from_str(&remote).expect("payload");
+    remote["updated_at"] = serde_json::json!("2026-01-01T00:00:00Z");
+    remote["updated_by"] = serde_json::json!("remote-device");
+    let remote = remote.to_string();
 
     let outcome = device
         .engine
@@ -395,15 +399,10 @@ async fn a_remote_progress_row_cannot_replace_local_notes() {
         .await
         .expect("apply");
 
-    assert_eq!(outcome.applied, 0);
-    assert_eq!(outcome.conflicts.len(), 1);
-    assert_eq!(outcome.conflicts[0].entity_id, id);
-    assert!(
-        outcome.conflicts[0].local_payload.contains("keep me"),
-        "conflict must carry the local notes"
-    );
+    assert_eq!(outcome.applied, 1);
+    assert!(outcome.conflicts.is_empty());
 
-    // The row is untouched: neither notes nor progress were replaced.
+    // Both sides' notes survive, and the newer progress wins.
     let (progress, stored): (f64, String) = livtet_data::sql::query_as(
         "SELECT progress, annotations FROM reading_progress WHERE lower(hex(id)) = ?",
     )
@@ -411,10 +410,13 @@ async fn a_remote_progress_row_cannot_replace_local_notes() {
     .fetch_one(device.pool())
     .await
     .expect("progress row");
-    assert_eq!(progress, 0.25);
-    assert_eq!(stored, local_annotations);
+    assert_eq!(progress, 0.9);
+    let stored: Vec<serde_json::Value> = serde_json::from_str(&stored).expect("notes");
+    assert_eq!(stored.len(), 2);
+    assert!(stored.iter().any(|note| note["id"] == "local-note"));
+    assert!(stored.iter().any(|note| note["id"] == "remote-note"));
 
-    // A repeated pull dedupes to one open conflict.
+    // Re-applying the same row is idempotent.
     let again = device
         .engine
         .apply_changes(vec![change(
@@ -426,15 +428,16 @@ async fn a_remote_progress_row_cannot_replace_local_notes() {
         )])
         .await
         .expect("apply again");
-    assert_eq!(again.conflicts.len(), 1);
-    assert_eq!(
-        device
-            .count(&format!(
-                "conflicts WHERE entity_type = 'reading_progress' AND entity_id = '{id}' AND resolved = 0"
-            ))
-            .await,
-        1
-    );
+    assert_eq!(again.applied, 1);
+    assert!(again.conflicts.is_empty());
+    let count: i64 = livtet_data::sql::query_scalar(
+        "SELECT json_array_length(annotations) FROM reading_progress WHERE lower(hex(id)) = ?",
+    )
+    .bind(&id)
+    .fetch_one(device.pool())
+    .await
+    .expect("note count");
+    assert_eq!(count, 2);
 }
 
 #[tokio::test]
@@ -448,6 +451,10 @@ async fn a_remote_progress_row_with_equal_notes_still_applies() {
         ))
         .await;
     let remote = progress_payload(&id, &edition, &format, 0.9, &local_annotations);
+    let mut remote: serde_json::Value = serde_json::from_str(&remote).expect("payload");
+    remote["updated_at"] = serde_json::json!("2026-01-01T00:00:00Z");
+    remote["updated_by"] = serde_json::json!("remote-device");
+    let remote = remote.to_string();
 
     let outcome = device
         .engine
@@ -491,7 +498,8 @@ async fn a_remote_delete_cannot_drop_local_notes() {
         .expect("apply");
 
     assert_eq!(outcome.applied, 0);
-    assert_eq!(outcome.conflicts.len(), 1);
+    assert_eq!(outcome.skipped, 1);
+    assert!(outcome.conflicts.is_empty());
     let stored: String = livtet_data::sql::query_scalar(
         "SELECT annotations FROM reading_progress WHERE lower(hex(id)) = ?",
     )
@@ -500,4 +508,49 @@ async fn a_remote_delete_cannot_drop_local_notes() {
     .await
     .expect("progress row");
     assert_eq!(stored, local_annotations);
+}
+
+#[tokio::test]
+async fn a_tombstone_survives_a_newer_remote_edit() {
+    let device = Device::seeded("receiver").await;
+    let (id, edition, format, _) = local_progress_with_note(&device).await;
+    // The local note is tombstoned; a stale peer still carries the live text.
+    device
+        .execute(&format!(
+            "UPDATE reading_progress SET annotations = json_set(annotations, '$[0].deletedAt', \
+             '2026-01-01T00:00:00Z', '$[0].updatedAt', '2026-01-01T00:00:00Z') \
+             WHERE lower(hex(id)) = '{id}'"
+        ))
+        .await;
+    let remote = progress_payload(
+        &id,
+        &edition,
+        &format,
+        0.9,
+        "[{\"id\":\"local-note\",\"text\":\"resurrected?\",\"updatedAt\":\"2026-06-01T00:00:00Z\"}]",
+    );
+
+    device
+        .engine
+        .apply_changes(vec![change(
+            "reading_progress",
+            &id,
+            "UPDATE",
+            999_999,
+            &remote,
+        )])
+        .await
+        .expect("apply");
+
+    let stored: String = livtet_data::sql::query_scalar(
+        "SELECT annotations FROM reading_progress WHERE lower(hex(id)) = ?",
+    )
+    .bind(&id)
+    .fetch_one(device.pool())
+    .await
+    .expect("progress row");
+    let stored: Vec<serde_json::Value> = serde_json::from_str(&stored).expect("notes");
+    assert_eq!(stored.len(), 1);
+    assert_eq!(stored[0]["text"], "keep me");
+    assert!(stored[0]["deletedAt"].is_string());
 }
