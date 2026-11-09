@@ -897,8 +897,27 @@ async fn record_conflict(
 /// Stable text for equality: JSON object keys sort and whitespace disappears.
 fn canonical_payload(raw: &str) -> String {
     serde_json::from_str::<Value>(raw)
-        .map(|value| value.to_string())
+        .map(|value| canonical_value(&value).to_string())
         .unwrap_or_else(|_| raw.to_string())
+}
+
+/// Sort every object's keys, recursively. `serde_json`'s `preserve_order`
+/// feature makes plain `to_string()` depend on insertion order, which made
+/// identical rows arriving from different triggers compare unequal.
+fn canonical_value(value: &Value) -> Value {
+    match value {
+        Value::Object(map) => {
+            let mut keys: Vec<_> = map.keys().collect();
+            keys.sort_unstable();
+            let mut sorted = serde_json::Map::new();
+            for key in keys {
+                sorted.insert(key.clone(), canonical_value(&map[key]));
+            }
+            Value::Object(sorted)
+        }
+        Value::Array(items) => Value::Array(items.iter().map(canonical_value).collect()),
+        other => other.clone(),
+    }
 }
 
 async fn fetch_latest_conflict(

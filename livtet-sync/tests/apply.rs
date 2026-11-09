@@ -596,3 +596,26 @@ async fn newer_progress_wins_and_reading_time_takes_the_maximum() {
     assert_eq!(seconds, 100);
     assert_eq!(updated_by, "remote-device");
 }
+
+#[tokio::test]
+async fn reordered_object_keys_are_not_a_conflict() {
+    let device = Device::seeded("receiver").await;
+    let (id, payload, _) = latest(&device, "work").await;
+    let value: serde_json::Value = serde_json::from_str(&payload).expect("payload");
+    let object = value.as_object().expect("object");
+    let mut reversed = serde_json::Map::new();
+    for (key, value) in object.iter().rev() {
+        reversed.insert(key.clone(), value.clone());
+    }
+    let reordered = serde_json::Value::Object(reversed).to_string();
+
+    let outcome = device
+        .engine
+        .apply_changes(vec![change("work", &id, "UPDATE", 999_999, &reordered)])
+        .await
+        .expect("apply");
+
+    assert_eq!(outcome.applied, 0);
+    assert_eq!(outcome.skipped, 1);
+    assert!(outcome.conflicts.is_empty());
+}
