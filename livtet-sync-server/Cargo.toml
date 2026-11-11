@@ -50,6 +50,14 @@ mdns-sd = "0.21"
 keyring = "4"
 hex = { workspace = true }
 
+# `keyring`'s default `v1` feature enables `apple-native-keyring-store/keychain`,
+# which is the macOS store. That crate refuses to compile for iOS unless
+# `protected` is enabled too, so the iOS build names it here. Cargo unifies
+# features per package, so this turns the feature on for the same 1.x build
+# `keyring` already links; macOS is untouched.
+[target.'cfg(target_os = "ios")'.dependencies]
+apple-native-keyring-store = { version = "1", features = ["protected"] }
+
 [dev-dependencies]
 tokio = { workspace = true, features = [
   "macros",

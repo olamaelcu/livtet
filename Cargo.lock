@@ -4126,6 +4126,7 @@ dependencies = [
 name = "livtet-sync-server"
 version = "0.2.1"
 dependencies = [
+ "apple-native-keyring-store",
  "base64 0.22.1",
  "camino",
  "fs-err",
