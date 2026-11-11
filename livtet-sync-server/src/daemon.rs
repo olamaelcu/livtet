@@ -11,6 +11,7 @@ use livtet_data::orm::{
     Set,
 };
 use livtet_iroh::{DiscoveryService, NodeId, PeerIdentity, SecretKey};
+use livtet_rendezvous::RendezvousClient;
 use livtet_sync::SyncEngine;
 use livtet_types::{DbId, PairingStatus};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -22,8 +23,8 @@ use crate::pairing::{OfferDecisionSink, PairDecisions, PairWaiters, new_pair_dec
 use crate::requests::{self, Notifier, RequestLog, new_request_log};
 use crate::rpc::{
     self, DeviceNameParams, DeviceParams, OfferBookParams, OfferDecisionParams, OfferParams,
-    PairingBeginParams, PairingClaimParams, RebindParams, RequestsRecentParams, ResolveParams,
-    RpcResponse, TokenParams,
+    PairingBeginParams, PairingClaimCodeParams, PairingClaimParams, RebindParams,
+    RequestsRecentParams, ResolveParams, RpcResponse, TokenParams,
 };
 use crate::wire_state::{RequestCounters, WireState};
 use livtet_mdns::{Advertiser, NearbyPeer, browse_nearby};
@@ -68,6 +69,12 @@ pub struct DaemonState {
     pub discovery: Mutex<Option<Arc<DiscoveryService>>>,
     /// The mDNS discovery advertisement, while the daemon runs.
     pub advertiser: Mutex<Option<Advertiser>>,
+    /// The platform's pairing rendezvous, where short codes are published and
+    /// resolved.
+    ///
+    /// One client per daemon: it owns the TLS configuration and the connection
+    /// pool, and every code exchange has to use the same base the flags named.
+    pub rendezvous: RendezvousClient,
     /// The most recent answered requests, newest last.
     pub request_log: RequestLog,
     /// The pipe back to the desktop, for the requests only it can answer.
@@ -301,6 +308,12 @@ pub async fn run_async(config: ServerConfig) -> Result<(), ServerError> {
         );
     });
 
+    // Built before the state: a base the TLS setup or the URL cannot serve is
+    // a startup problem, and failing here names it once instead of on the
+    // first code the reader asks for.
+    let rendezvous = RendezvousClient::new(&config.rendezvous_url)
+        .map_err(|error| ServerError::Config(format!("rendezvous client: {error}")))?;
+
     let state = Arc::new(DaemonState {
         config,
         pool,
@@ -316,6 +329,7 @@ pub async fn run_async(config: ServerConfig) -> Result<(), ServerError> {
         lifecycle: tokio::sync::Mutex::new(()),
         discovery: Mutex::new(discovery),
         advertiser: Mutex::new(None),
+        rendezvous,
         request_log: new_request_log(),
         host: HostBridge::new(out_tx.clone()),
         requests_served: Arc::new(AtomicU64::new(0)),
@@ -601,6 +615,10 @@ async fn dispatch(
             finish(&request, handle_pairing_reject(&request, state).await)
         }
         rpc::method::PAIRING_CLAIM => finish(&request, handle_pairing_claim(&request, state).await),
+        rpc::method::RENDEZVOUS_PUBLISH => finish(&request, handle_rendezvous_publish(state).await),
+        rpc::method::PAIRING_CLAIM_CODE => {
+            finish(&request, handle_pairing_claim_code(&request, state).await)
+        }
         rpc::method::DEVICES_LIST => finish(&request, handle_devices_list(state).await),
         rpc::method::DEVICES_OFFER_BOOK => {
             finish(&request, handle_devices_offer_book(&request, state).await)
@@ -823,6 +841,70 @@ async fn handle_pairing_claim(
         }
     });
     Ok(serde_json::json!({ "status": "pending" }))
+}
+
+/// Publish this device under a short code the reader can type elsewhere.
+///
+/// The endpoint is bound on demand, as `pairing.begin` does: a code that names
+/// a node nothing is listening on would pair with nobody, and the bind is what
+/// turns the device id into an address the other device can dial.
+async fn handle_rendezvous_publish(
+    state: &Arc<DaemonState>,
+) -> Result<serde_json::Value, RpcFailure> {
+    let _ = discovery_identity(state, "desktop").await;
+    let node_id = discovery_node_id(state).await;
+    let name = advertised_name(state).await;
+    let published = state
+        .rendezvous
+        .publish(&node_id, Some(name.as_str()), "desktop")
+        .await
+        .map_err(|error| RpcFailure::from(ServerError::Server(error.to_string())))?;
+    Ok(serde_json::json!({
+        "code": published.code,
+        "expires_at": published.expires_at,
+    }))
+}
+
+/// Pair with the device a short code names.
+///
+/// The code is only a lookup: resolving it yields a node id, and from there the
+/// claim is the same iroh exchange a discovered peer gets — the rendezvous
+/// never carries the pairing itself.
+async fn handle_pairing_claim_code(
+    request: &rpc::RpcRequest,
+    state: &Arc<DaemonState>,
+) -> Result<serde_json::Value, RpcFailure> {
+    let params: PairingClaimCodeParams = parse_params(request)?;
+    let code = livtet_rendezvous::normalize_code(&params.code).map_err(code_failure)?;
+    let peer = state
+        .rendezvous
+        .resolve(&code)
+        .await
+        .map_err(code_failure)?;
+
+    let claim = PairingClaimParams {
+        node_id: peer.node_id,
+        device_name: params.device_name.or(peer.name),
+    };
+    let state = Arc::clone(state);
+    // Same shape as `pairing.claim`: the reader on the far side is the one who
+    // decides, so this returns and the answer arrives as a notification.
+    tokio::spawn(async move {
+        if let Err(error) = claim_peer(&state, claim).await {
+            tracing::warn!(%error, "pairing claim from a code failed");
+        }
+    });
+    Ok(serde_json::json!({ "status": "pending" }))
+}
+
+/// A code the platform would not accept or resolve.
+///
+/// `invalid_params`, not an internal error: nothing here failed — the code is
+/// simply not one, or no longer one, the platform knows. The client's own
+/// message is forwarded verbatim so the UI can say "that code has expired"
+/// rather than invent wording for it.
+fn code_failure(error: livtet_rendezvous::RendezvousError) -> RpcFailure {
+    invalid_params(error.to_string())
 }
 
 /// Claim a discovered peer, poll until it decides, and store the token it
@@ -1899,6 +1981,24 @@ pub(crate) async fn discovery_node_id(state: &Arc<DaemonState>) -> String {
         .as_ref()
         .map(|service| service.node_id().0.clone())
         .unwrap_or_else(|| state.device_id.clone())
+}
+
+/// The name this device advertises: the chosen one, else the generated
+/// fallback.
+///
+/// Normalized the way `livtet_mdns` does it — trimmed, blank counts as absent —
+/// so a rendezvous code carries the same name a nearby peer sees on this
+/// device, rather than the raw setting.
+async fn advertised_name(state: &Arc<DaemonState>) -> String {
+    state
+        .device_name
+        .lock()
+        .await
+        .as_deref()
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| livtet_mdns::friendly_name(&state.device_id))
 }
 
 /// Announce the sync endpoint for app discovery.

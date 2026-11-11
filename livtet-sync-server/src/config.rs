@@ -26,6 +26,14 @@ pub struct ServerConfig {
     /// The peer cannot push, so a shorter interval is the only way a book
     /// arrives sooner; it costs one dial and one query per peer per tick.
     pub pull_interval_secs: u64,
+    /// Base URL of the platform's pairing rendezvous, where a short code is
+    /// published next to this device's node id.
+    ///
+    /// Taken from `LIVTET_RENDEZVOUS_URL` when the environment sets it, else
+    /// [`livtet_rendezvous::DEFAULT_SERVER`]; `--rendezvous-url` wins over
+    /// both, so a test or a self-hosted deployment can point the daemon at a
+    /// stub without exporting anything to the process it spawns.
+    pub rendezvous_url: String,
 }
 
 impl Default for ServerConfig {
@@ -38,14 +46,16 @@ impl Default for ServerConfig {
             books_dir: None,
             covers_dir: None,
             pull_interval_secs: 60,
+            rendezvous_url: std::env::var("LIVTET_RENDEZVOUS_URL")
+                .unwrap_or_else(|_| livtet_rendezvous::DEFAULT_SERVER.to_string()),
         }
     }
 }
 
 impl ServerConfig {
     /// Parse `--db <path> --port <n> --device-id <id> --device-name <name>
-    /// --books-dir <path> --covers-dir <path>` from an argument iterator
-    /// (typically `std::env::args().skip(1)`).
+    /// --books-dir <path> --covers-dir <path> --rendezvous-url <url>` from an
+    /// argument iterator (typically `std::env::args().skip(1)`).
     pub fn from_args(args: impl Iterator<Item = String>) -> Result<Self, ServerError> {
         let mut config = Self::default();
         let mut args = args.peekable();
@@ -97,6 +107,12 @@ impl ServerConfig {
                         ServerError::Config("--covers-dir requires a path".to_string())
                     })?;
                     config.covers_dir = Some(Utf8PathBuf::from(value));
+                }
+                "--rendezvous-url" => {
+                    let value = args.next().ok_or_else(|| {
+                        ServerError::Config("--rendezvous-url requires a URL".to_string())
+                    })?;
+                    config.rendezvous_url = value;
                 }
                 other => {
                     return Err(ServerError::Config(format!("unknown argument: {other}")));

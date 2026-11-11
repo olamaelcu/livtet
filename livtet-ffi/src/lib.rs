@@ -34,8 +34,9 @@ pub use mutations::EditionPatch;
 pub use quotes::{EmptyMessage, Greeting};
 pub use store::LivtetStore;
 pub use sync::{
-    SyncPairingResult, SyncPeerIdentity, advertise_sync_device, pair_sync_device,
-    peer_sync_identity, stop_advertising_sync_device, sync_pairing_status,
+    SyncPairingResult, SyncPeerIdentity, advertise_sync_device, pair_sync_by_code,
+    pair_sync_device, peer_sync_identity, rendezvous_code, stop_advertising_sync_device,
+    sync_pairing_status,
 };
 pub use syncpull::{
     SyncOffer, SyncPullReport, SyncReceivedBook, sync_offer_accept, sync_offer_reject, sync_pull,

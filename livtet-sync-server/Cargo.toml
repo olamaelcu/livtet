@@ -24,6 +24,7 @@ livtet-sync-iroh = { workspace = true }
 livtet-mdns = { workspace = true }
 livtet-data = { workspace = true }
 livtet-types = { workspace = true }
+livtet-rendezvous = { workspace = true }
 tokio = { workspace = true, features = [
   "rt-multi-thread",
   "macros",
@@ -59,3 +60,4 @@ tokio = { workspace = true, features = [
   "io-std",
 ] }
 fs-err = { workspace = true }
+httpmock = "0.7"

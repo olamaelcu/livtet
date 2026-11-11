@@ -10,6 +10,7 @@ use std::time::Duration;
 
 use camino::{Utf8Path, Utf8PathBuf};
 use fs_err as fs;
+use httpmock::prelude::*;
 use livtet_iroh::{DiscoveryService, SecretKey};
 use livtet_sync_server::rpc::{self, StdioClient};
 use livtet_types::{DbId, PairingStatus};
@@ -40,6 +41,12 @@ fn cleanup(path: &Utf8Path) {
 }
 
 async fn spawn(db_path: &Utf8Path) -> StdioClient {
+    spawn_with_args(db_path, &[]).await
+}
+
+/// Spawn the daemon with flags the shared helper does not pass, e.g. a stub
+/// rendezvous URL.
+async fn spawn_with_args(db_path: &Utf8Path, extra: &[String]) -> StdioClient {
     let binary = env!("CARGO_BIN_EXE_livtet-sync-server");
     // The file directories are part of every pull's preconditions; without them
     // a pull stops before it dials anything, which would hide whether a pairing
@@ -49,7 +56,7 @@ async fn spawn(db_path: &Utf8Path) -> StdioClient {
     for dir in [&books, &covers] {
         let _ = fs::create_dir_all(dir);
     }
-    let args = vec![
+    let mut args = vec![
         "--db".to_string(),
         db_path.to_string(),
         "--port".to_string(),
@@ -59,6 +66,7 @@ async fn spawn(db_path: &Utf8Path) -> StdioClient {
         "--covers-dir".to_string(),
         covers.to_string(),
     ];
+    args.extend_from_slice(extra);
     match StdioClient::spawn_with_env(
         binary,
         &args,
@@ -747,5 +755,83 @@ async fn kill_terminates_a_daemon_that_is_not_asked_nicely() {
     let exited = tokio::time::timeout(Duration::from_secs(5), client.wait()).await;
     assert!(exited.is_ok(), "the killed daemon must be reaped");
 
+    cleanup(&db_path);
+}
+
+/// The rendezvous is an HTTP call the daemon makes itself, so a stub server
+/// plays the platform: what it receives proves the published code names this
+/// daemon's endpoint, and what it answers is what the reader is shown.
+#[tokio::test]
+async fn rendezvous_publish_names_this_endpoint_and_returns_its_code() {
+    let db_path = temp_db_path("rendezvous");
+    let platform = MockServer::start();
+    let mut client = spawn_with_args(
+        &db_path,
+        &["--rendezvous-url".to_string(), platform.base_url()],
+    )
+    .await;
+
+    let status = ok_result(&mut client, rpc::method::STATUS, serde_json::json!({})).await;
+    let node_id = status["node_id"].as_str().expect("node id").to_string();
+
+    let publish = platform.mock(|when, then| {
+        // Partial: the advertised name is generated from the device id, and
+        // this test is about the node id the other device will dial.
+        when.method(POST)
+            .path("/api/iroh/rendezvous")
+            .json_body_partial(
+                serde_json::json!({ "nodeId": node_id, "deviceType": "desktop" }).to_string(),
+            );
+        then.status(201).json_body(serde_json::json!({
+            "code": "AB2C34",
+            "expiresAt": 1_760_000_000_000_i64,
+        }));
+    });
+
+    let published = ok_result(
+        &mut client,
+        rpc::method::RENDEZVOUS_PUBLISH,
+        serde_json::json!({}),
+    )
+    .await;
+    publish.assert();
+    assert_eq!(published["code"].as_str(), Some("AB2C34"));
+    assert_eq!(published["expires_at"].as_i64(), Some(1_760_000_000_000));
+
+    // A code the platform no longer knows is the reader's to retype, not a
+    // daemon failure: the platform's wording reaches the UI as an invalid
+    // parameter rather than an internal error.
+    platform.mock(|when, then| {
+        when.method(GET).path("/api/iroh/rendezvous/AB2C34");
+        then.status(404)
+            .json_body(serde_json::json!({ "message": "no such code" }));
+    });
+    let response = client
+        .request(
+            rpc::method::PAIRING_CLAIM_CODE,
+            serde_json::json!({ "code": "ab-2c 34" }),
+        )
+        .await
+        .expect("claim_code transport");
+    let error = response.error.expect("an expired code is an error");
+    assert_eq!(error.code, rpc::error_code::INVALID_PARAMS);
+    assert!(
+        error.message.contains("expired"),
+        "the reader has to be told the code expired, got {:?}",
+        error.message
+    );
+
+    // A string that cannot be a code never reaches the platform at all.
+    assert_eq!(
+        error_code(
+            &mut client,
+            rpc::method::PAIRING_CLAIM_CODE,
+            serde_json::json!({ "code": "ABC" }),
+        )
+        .await,
+        rpc::error_code::INVALID_PARAMS
+    );
+
+    shutdown(&mut client).await;
     cleanup(&db_path);
 }

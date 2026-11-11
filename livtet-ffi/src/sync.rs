@@ -21,6 +21,7 @@ use livtet_core::data::migrator::Kind;
 use livtet_core::types::{DbId, DeviceType, now_primitive};
 use livtet_iroh::{DiscoveryService, SecretKey};
 use livtet_mdns::Advertiser;
+use livtet_rendezvous::RendezvousClient;
 use livtet_sync::SyncEngine;
 use livtet_sync_iroh::{Client, PairingOutcome, spawn_server};
 use livtet_sync_server::wire_state::WireState;
@@ -68,10 +69,35 @@ pub async fn pair_sync_device(
     device_type: String,
     wait_secs: u32,
 ) -> Result<SyncPairingResult, LivtetError> {
+    claim_peer_at(
+        secret_key_path,
+        &db_path,
+        peer_node_id,
+        &device_id,
+        &name,
+        &device_type,
+        wait_secs,
+    )
+    .await
+}
+
+/// File a claim with `peer_node_id` and wait for the reader's decision.
+///
+/// Shared by the discovered-peer path and the short-code path: a code only
+/// changes how the node id was found, never what happens once it is known.
+async fn claim_peer_at(
+    secret_key_path: String,
+    db_path: &str,
+    peer_node_id: String,
+    device_id: &str,
+    name: &str,
+    device_type: &str,
+    wait_secs: u32,
+) -> Result<SyncPairingResult, LivtetError> {
     let client = connect(secret_key_path, peer_node_id).await?;
     let claimant_token = DbId::new().to_string();
     let outcome = client
-        .pair(&device_id, &name, &device_type, &claimant_token)
+        .pair(device_id, name, device_type, &claimant_token)
         .await
         .map_err(|error| LivtetError::Sync(format!("could not file the pairing claim: {error}")))?;
 
@@ -93,8 +119,84 @@ pub async fn pair_sync_device(
         PairingOutcome::Refused { reason } => SyncPairingResult::Refused { reason },
     };
 
-    remember_if_paired(&db_path, &client, &result, &device_type, &claimant_token).await?;
+    remember_if_paired(db_path, &client, &result, device_type, &claimant_token).await?;
     Ok(result)
+}
+
+/// Publish this device under a short code a reader can type elsewhere.
+///
+/// The endpoint is the one [`advertise_sync_device`] binds: the code names the
+/// node id that advertisement carries, so advertising is what makes the code
+/// dial something. That call is idempotent, so a screen that already advertised
+/// keeps its identity — and the claims waiting on it.
+///
+/// `server_url` of `None` means the platform's own rendezvous.
+#[uniffi::export(async_runtime = "tokio")]
+pub async fn rendezvous_code(
+    secret_key_path: String,
+    db_path: String,
+    device_id: String,
+    name: String,
+    device_type: String,
+    server_url: Option<String>,
+) -> Result<String, LivtetError> {
+    let node_id = advertise_sync_device(
+        secret_key_path,
+        db_path,
+        device_id,
+        name.clone(),
+        device_type.clone(),
+    )
+    .await?;
+    let published = rendezvous_client(server_url.as_deref())?
+        .publish(&node_id, Some(name.as_str()), &device_type)
+        .await
+        .map_err(|error| LivtetError::Sync(format!("could not publish a pairing code: {error}")))?;
+    Ok(published.code)
+}
+
+/// Pair with the device a short code names.
+///
+/// The code is a lookup, not a transport: once it resolves to a node id, the
+/// claim and the poll are the same exchange a discovered peer gets, and so is
+/// the bookkeeping that records the pairing.
+// The shape is the mobile screens' call: every argument is one the claim needs,
+// so grouping them would only move the count into a struct.
+#[allow(clippy::too_many_arguments)]
+#[uniffi::export(async_runtime = "tokio")]
+pub async fn pair_sync_by_code(
+    secret_key_path: String,
+    db_path: String,
+    code: String,
+    device_id: String,
+    name: String,
+    device_type: String,
+    server_url: Option<String>,
+    wait_secs: u32,
+) -> Result<SyncPairingResult, LivtetError> {
+    let peer = rendezvous_client(server_url.as_deref())?
+        .resolve(&code)
+        .await
+        .map_err(|error| {
+            LivtetError::Sync(format!("could not resolve the pairing code: {error}"))
+        })?;
+    claim_peer_at(
+        secret_key_path,
+        &db_path,
+        peer.node_id,
+        &device_id,
+        &name,
+        &device_type,
+        wait_secs,
+    )
+    .await
+}
+
+/// A rendezvous client for `server_url`, or the default server.
+fn rendezvous_client(server_url: Option<&str>) -> Result<RendezvousClient, LivtetError> {
+    RendezvousClient::new(server_url.unwrap_or(livtet_rendezvous::DEFAULT_SERVER)).map_err(
+        |error| LivtetError::Sync(format!("could not build the rendezvous client: {error}")),
+    )
 }
 
 /// Continue waiting on a claim already filed by [`pair_sync_device`].

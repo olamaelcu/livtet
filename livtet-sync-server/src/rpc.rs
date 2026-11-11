@@ -39,6 +39,10 @@ pub mod method {
     pub const PAIRING_REJECT: &str = "pairing.reject";
     /// Dial a peer, file a claim, and poll until it is decided.
     pub const PAIRING_CLAIM: &str = "pairing.claim";
+    /// Publish this device's node id under a short rendezvous code.
+    pub const RENDEZVOUS_PUBLISH: &str = "rendezvous.publish";
+    /// Pair with the device a short rendezvous code names.
+    pub const PAIRING_CLAIM_CODE: &str = "pairing.claim_code";
     /// The most recent sync requests this daemon answered.
     pub const REQUESTS_RECENT: &str = "requests.recent";
     /// Rebind the iroh endpoint on a new UDP port without restarting.
@@ -223,6 +227,17 @@ pub struct PairingClaimParams {
     /// Peer node id from discovery, used as the pairing key.
     pub node_id: String,
     /// Friendly name the peer showed in discovery.
+    #[serde(default)]
+    pub device_name: Option<String>,
+}
+
+/// Parameters for [`method::PAIRING_CLAIM_CODE`].
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PairingClaimCodeParams {
+    /// The code as the reader typed it; normalized before it is resolved.
+    pub code: String,
+    /// Name to record for the peer, when the caller has a better one than the
+    /// name the code's publisher registered.
     #[serde(default)]
     pub device_name: Option<String>,
 }

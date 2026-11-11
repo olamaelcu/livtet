@@ -15,6 +15,7 @@ OPTIONS:
     --device-name <n>   Name advertised to nearby peers
     --books-dir <path>  Where received book files are written
     --covers-dir <path> Where received covers are written
+    --rendezvous-url <url>  Base URL of the pairing rendezvous (default: https://livtet.olamaelcu.net)
     --pull-interval-secs <n>  How often to pull from outbound peers (default: 60)
     -h, --help          Print this help
 ";

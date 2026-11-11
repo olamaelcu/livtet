@@ -25,9 +25,10 @@ pub use error::ServerError;
 pub use pairs::{ClaimApproval, ClaimError, CreatedOffer, PendingClaim};
 pub use requests::{Notifier, RequestLog, RequestRecord, notify, recent};
 pub use rpc::{
-    DeviceParams, JSONRPC, PairingBeginParams, RebindParams, RequestsRecentParams, ResolveParams,
-    RpcErrorObject, RpcMessage, RpcNotification, RpcRequest, RpcResponse, StdioClient, TokenParams,
-    encode_notification, encode_request, encode_response, error_code, method, parse_message,
+    DeviceParams, JSONRPC, PairingBeginParams, PairingClaimCodeParams, RebindParams,
+    RequestsRecentParams, ResolveParams, RpcErrorObject, RpcMessage, RpcNotification, RpcRequest,
+    RpcResponse, StdioClient, TokenParams, encode_notification, encode_request, encode_response,
+    error_code, method, parse_message,
 };
 pub use wire_state::{RequestCounters, WireState};
 

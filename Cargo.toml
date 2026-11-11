@@ -11,6 +11,7 @@ members = [
   "livtet-sync",
   "livtet-sync-iroh",
   "livtet-sync-server",
+  "livtet-rendezvous",
   "livtet-search",
   "livtet-cite",
   "livtet-mdns",
@@ -43,6 +44,7 @@ livtet-sync = { path = "livtet-sync" }
 livtet-sync-iroh = { path = "livtet-sync-iroh" }
 livtet-sync-server = { path = "livtet-sync-server" }
 livtet-ffi = { path = "livtet-ffi" }
+livtet-rendezvous = { path = "livtet-rendezvous" }
 livtet-search = { path = "livtet-search" }
 livtet-cite = { path = "livtet-cite" }
 livtet-mdns = { path = "livtet-mdns" }
