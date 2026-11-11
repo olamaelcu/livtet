@@ -18,6 +18,7 @@ pub use iroh::endpoint::Connection;
 pub use livtet_iroh::SYNC_ALPN;
 pub use server::{FileBody, Handler, Outcome, spawn as spawn_server};
 pub use wire::{
-    CoverImage, ErrorCode, FileHeader, FileMetadata, Identity, MAX_CHUNK_BYTES, MAX_MESSAGE_BYTES, OpdsHeaders,
-    OpdsResponse, PROTOCOL_VERSION, Request, Response, WireError, read_frame, write_frame,
+    CoverImage, ErrorCode, FileHeader, FileMetadata, Identity, MAX_CHUNK_BYTES, MAX_MESSAGE_BYTES,
+    OpdsHeaders, OpdsResponse, PROTOCOL_VERSION, Request, Response, WireError, read_frame,
+    write_frame,
 };

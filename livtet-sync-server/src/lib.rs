@@ -11,11 +11,11 @@ pub mod config;
 pub mod daemon;
 pub mod error;
 pub mod pairing;
+pub mod pairs;
 pub mod peer;
 pub mod rate_limit;
 pub mod requests;
 pub mod rpc;
-pub mod pairs;
 pub mod wire;
 pub mod wire_state;
 

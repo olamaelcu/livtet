@@ -304,7 +304,10 @@ mod tests {
         let name = "Jacky's desk & phone/2 + café";
         let link = PairLink::new(NODE, Some(name.to_string()));
         assert!(!link.to_uri().contains(' '), "spaces must be escaped");
-        assert_eq!(PairLink::parse(&link.to_uri()).unwrap().name.as_deref(), Some(name));
+        assert_eq!(
+            PairLink::parse(&link.to_uri()).unwrap().name.as_deref(),
+            Some(name)
+        );
     }
 
     #[test]

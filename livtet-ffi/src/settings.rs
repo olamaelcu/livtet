@@ -17,10 +17,7 @@ use crate::error::LivtetError;
 
 /// Read a stored preference, or `None` when it was never set.
 #[uniffi::export(async_runtime = "tokio")]
-pub async fn settings_get(
-    db_path: String,
-    key: String,
-) -> Result<Option<String>, LivtetError> {
+pub async fn settings_get(db_path: String, key: String) -> Result<Option<String>, LivtetError> {
     let state = SharedState::connect(&db_path, &[Kind::Business, Kind::Client])
         .await
         .map_err(|error| LivtetError::Database(error.to_string()))?;
@@ -35,11 +32,7 @@ pub async fn settings_get(
 
 /// Store a preference, replacing whatever was there.
 #[uniffi::export(async_runtime = "tokio")]
-pub async fn settings_set(
-    db_path: String,
-    key: String,
-    value: String,
-) -> Result<(), LivtetError> {
+pub async fn settings_set(db_path: String, key: String, value: String) -> Result<(), LivtetError> {
     let state = SharedState::connect(&db_path, &[Kind::Business, Kind::Client])
         .await
         .map_err(|error| LivtetError::Database(error.to_string()))?;
@@ -66,22 +59,39 @@ mod tests {
         let tmp = camino_tempfile::tempdir().unwrap();
         let db = tmp.path().join("livtet.db").to_string();
 
-        assert_eq!(settings_get(db.clone(), "reader.display".to_string()).await.unwrap(), None);
-
-        settings_set(db.clone(), "reader.display".to_string(), "SEPIA|1.1|1".to_string())
-            .await
-            .unwrap();
         assert_eq!(
-            settings_get(db.clone(), "reader.display".to_string()).await.unwrap(),
+            settings_get(db.clone(), "reader.display".to_string())
+                .await
+                .unwrap(),
+            None
+        );
+
+        settings_set(
+            db.clone(),
+            "reader.display".to_string(),
+            "SEPIA|1.1|1".to_string(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            settings_get(db.clone(), "reader.display".to_string())
+                .await
+                .unwrap(),
             Some("SEPIA|1.1|1".to_string())
         );
 
         // A second write replaces rather than duplicating the key.
-        settings_set(db.clone(), "reader.display".to_string(), "DARK|0.9|2".to_string())
-            .await
-            .unwrap();
+        settings_set(
+            db.clone(),
+            "reader.display".to_string(),
+            "DARK|0.9|2".to_string(),
+        )
+        .await
+        .unwrap();
         assert_eq!(
-            settings_get(db, "reader.display".to_string()).await.unwrap(),
+            settings_get(db, "reader.display".to_string())
+                .await
+                .unwrap(),
             Some("DARK|0.9|2".to_string())
         );
     }
@@ -94,16 +104,24 @@ mod tests {
         settings_set(db.clone(), "sync.cursor.abc".to_string(), "12".to_string())
             .await
             .unwrap();
-        settings_set(db.clone(), "reader.display".to_string(), "LIGHT|1.0|0".to_string())
-            .await
-            .unwrap();
+        settings_set(
+            db.clone(),
+            "reader.display".to_string(),
+            "LIGHT|1.0|0".to_string(),
+        )
+        .await
+        .unwrap();
 
         assert_eq!(
-            settings_get(db.clone(), "sync.cursor.abc".to_string()).await.unwrap(),
+            settings_get(db.clone(), "sync.cursor.abc".to_string())
+                .await
+                .unwrap(),
             Some("12".to_string())
         );
         assert_eq!(
-            settings_get(db, "reader.display".to_string()).await.unwrap(),
+            settings_get(db, "reader.display".to_string())
+                .await
+                .unwrap(),
             Some("LIGHT|1.0|0".to_string())
         );
     }
