@@ -27,6 +27,18 @@ pub use types::{
 /// them are ignored. Accepting an offer writes the receiver's own row instead.
 pub const DEVICE_LOCAL_ENTITY_TYPES: &[&str] = &["digital_inventory"];
 
+/// Entity types whose wire identity is a *value*, not a locally minted id.
+///
+/// `edition_identifiers` is a link table keyed by the identifier's value: every
+/// device mints its own `identifiers.id`, so the trigger keys the change log by
+/// `{edition_id, value}`. `SyncableEntityKind::entity_id` builds the id from the
+/// model, and the model holds only the locally minted `identifier_id`, so these
+/// types have no variant -- a variant's `entity_id` would name a row no peer has
+/// ever seen. `SyncEngine::apply` gives them their own branch; the
+/// [`SUPPORTED_ENTITY_TYPES`] entry plus [`entity_type_to_table`] is what pins
+/// them to a table and its audit triggers.
+pub const VALUE_KEYED_ENTITY_TYPES: &[&str] = &["edition_identifier"];
+
 /// Supported entity types for sync operations.
 pub const SUPPORTED_ENTITY_TYPES: &[&str] = &[
     "work",
@@ -48,5 +60,6 @@ pub const SUPPORTED_ENTITY_TYPES: &[&str] = &[
     "edition_genre",
     "edition_subject",
     "edition_publisher",
+    "edition_identifier",
     "reading_list_book",
 ];

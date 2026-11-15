@@ -274,7 +274,12 @@ async fn the_seed_reaches_every_registered_entity_type() {
     let unregistered: Vec<&str> = seen
         .iter()
         .copied()
-        .filter(|t| !SyncableEntityKind::ALL_VARIANTS.contains(t))
+        // A value-keyed type has no variant — see `VALUE_KEYED_ENTITY_TYPES` — so
+        // the registry cannot name it even though the trigger logs it.
+        .filter(|t| {
+            !SyncableEntityKind::ALL_VARIANTS.contains(t)
+                && !livtet_sync::VALUE_KEYED_ENTITY_TYPES.contains(t)
+        })
         .collect();
     assert!(
         unregistered.is_empty(),

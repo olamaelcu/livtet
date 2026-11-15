@@ -22,6 +22,7 @@ pub mod m0016_sync_reading_progress_suppression;
 pub mod m0017_pending_pairings_claimant_token;
 pub mod m0018_conflict_payload_index;
 pub mod m0019_sync_reading_progress_stage_b;
+pub mod m0020_sync_edition_identifiers;
 pub mod schema;
 
 pub use sea_orm_migration::MigratorTrait;
@@ -55,6 +56,7 @@ impl MigratorTrait for Migrator {
             Box::new(crate::client_migration::m0017_pending_pairings_claimant_token::Migration),
             Box::new(crate::client_migration::m0018_conflict_payload_index::Migration),
             Box::new(crate::client_migration::m0019_sync_reading_progress_stage_b::Migration),
+            Box::new(crate::client_migration::m0020_sync_edition_identifiers::Migration),
         ]
     }
 }

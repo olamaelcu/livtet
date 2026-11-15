@@ -8,7 +8,7 @@ use std::collections::BTreeSet;
 
 use livtet_sync::{
     DEVICE_LOCAL_ENTITY_TYPES, ENTITY_DUMP_TYPES, SUPPORTED_ENTITY_TYPES, SyncableEntityKind,
-    entity_type_to_table,
+    VALUE_KEYED_ENTITY_TYPES, entity_type_to_table,
 };
 use livtet_test_utils::sync::Device;
 
@@ -20,10 +20,21 @@ fn set(items: &[&'static str]) -> BTreeSet<&'static str> {
 
 #[test]
 fn supported_types_match_the_entity_kind_registry() {
-    assert_eq!(
-        set(SUPPORTED_ENTITY_TYPES),
-        set(SyncableEntityKind::ALL_VARIANTS)
-    );
+    // Value-keyed types sync without a `SyncableEntityKind` variant: their
+    // entity id is the identifier's value, which the model cannot reproduce.
+    let value_keyed = set(VALUE_KEYED_ENTITY_TYPES);
+    for entity_type in &value_keyed {
+        assert!(
+            SUPPORTED_ENTITY_TYPES.contains(entity_type),
+            "{entity_type} is value-keyed but not supported"
+        );
+    }
+    let supported: BTreeSet<&'static str> = SUPPORTED_ENTITY_TYPES
+        .iter()
+        .copied()
+        .filter(|t| !value_keyed.contains(t))
+        .collect();
+    assert_eq!(supported, set(SyncableEntityKind::ALL_VARIANTS));
 }
 
 #[test]
