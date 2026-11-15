@@ -439,6 +439,7 @@ pub fn entity_type_to_table(entity_type: &str) -> Option<&'static str> {
         "edition_author" => Some("edition_authors"),
         "edition_genre" => Some("edition_genres"),
         "edition_group" => Some("edition_groups"),
+        "edition_identifier" => Some("edition_identifiers"),
         "edition_loan" => Some("editions_loans"),
         "edition_publisher" => Some("edition_publishers"),
         "edition_subject" => Some("edition_subjects"),

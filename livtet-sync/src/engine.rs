@@ -483,6 +483,65 @@ pub async fn adopt_cover(
     Ok(())
 }
 
+/// Write an edition's link to an identifier value.
+///
+/// The value is the key, not the id: `identifiers.id` is minted locally per
+/// `(value, kind)`, so a peer's ISBN is very likely already present here under
+/// this device's own id. `ON CONFLICT(value)` is what stops that from failing the
+/// whole page.
+async fn attach_identifier(
+    db: &impl ConnectionTrait,
+    edition_id: DbId,
+    kind: &str,
+    value: &str,
+) -> Result<(), SyncError> {
+    db.execute_raw(Statement::from_sql_and_values(
+        DatabaseBackend::Sqlite,
+        "INSERT INTO identifiers (id, value, kind) VALUES (?, ?, ?) \
+         ON CONFLICT(value) DO NOTHING",
+        [
+            DbId::new().to_bytes().to_vec().into(),
+            value.to_string().into(),
+            kind.to_string().into(),
+        ],
+    ))
+    .await?;
+    db.execute_raw(Statement::from_sql_and_values(
+        DatabaseBackend::Sqlite,
+        "INSERT INTO edition_identifiers (edition_id, identifier_id) \
+         SELECT ?, id FROM identifiers WHERE value = ? \
+         ON CONFLICT DO NOTHING",
+        [
+            edition_id.to_bytes().to_vec().into(),
+            value.to_string().into(),
+        ],
+    ))
+    .await?;
+    Ok(())
+}
+
+/// Drop an edition's link to an identifier value.
+///
+/// The `identifiers` row stays: the peer still links it, and an unlinked value is
+/// invisible to every read. An absent value deletes nothing, which is the answer.
+async fn detach_identifier(
+    db: &impl ConnectionTrait,
+    edition_id: DbId,
+    value: &str,
+) -> Result<(), SyncError> {
+    db.execute_raw(Statement::from_sql_and_values(
+        DatabaseBackend::Sqlite,
+        "DELETE FROM edition_identifiers \
+         WHERE edition_id = ? AND identifier_id IN (SELECT id FROM identifiers WHERE value = ?)",
+        [
+            edition_id.to_bytes().to_vec().into(),
+            value.to_string().into(),
+        ],
+    ))
+    .await?;
+    Ok(())
+}
+
 /// What an apply pass did.
 #[derive(Debug, Default)]
 pub struct ApplyOutcome {
@@ -599,6 +658,43 @@ impl SyncEngine {
                 continue;
             }
 
+            // An edition's identifiers are a set and every device mints its own
+            // `identifiers` ids, so the row is keyed by its value and the ids never
+            // travel. Both sides keep their links; a differing set is not a conflict.
+            if change.entity_type == "edition_identifier" {
+                let payload: Value = serde_json::from_str(&change.payload).map_err(|error| {
+                    SyncError::Deserialization {
+                        entity_type: change.entity_type.clone(),
+                        message: error.to_string(),
+                    }
+                })?;
+                let Some(edition_id) = payload_edition_id(&change.payload) else {
+                    outcome.skipped += 1;
+                    continue;
+                };
+                let value = text(&payload, "value").unwrap_or_default();
+                if value.is_empty() || !edition_exists(&txn, edition_id).await? {
+                    outcome.skipped += 1;
+                    continue;
+                }
+                let baseline = latest_version_in(&txn).await?;
+                if change.operation.eq_ignore_ascii_case("DELETE") {
+                    detach_identifier(&txn, edition_id, &value).await?;
+                } else {
+                    attach_identifier(
+                        &txn,
+                        edition_id,
+                        &text(&payload, "kind").unwrap_or_default(),
+                        &value,
+                    )
+                    .await?;
+                }
+                discard_echoes(&txn, change, baseline).await?;
+                insert_change_row(&txn, change).await?;
+                outcome.applied += 1;
+                continue;
+            }
+
             let local = latest_change(&txn, &change.entity_type, &change.entity_id).await?;
             if !authoritative && let Some((_, local_payload, local_operation)) = local {
                 let local_deleted = local_operation.eq_ignore_ascii_case("DELETE");
@@ -653,8 +749,8 @@ fn apply_rank(entity_type: &str) -> u8 {
         "edition" => 1,
         "digital_inventory" | "owned_edition" | "work_author" | "work_genre" | "work_subject"
         | "work_publisher" | "work_tag" | "edition_author" | "edition_genre"
-        | "edition_subject" | "edition_publisher" | "edition_tag" | "series_entry"
-        | "reading_list_book" => 2,
+        | "edition_identifier" | "edition_subject" | "edition_publisher" | "edition_tag"
+        | "series_entry" | "reading_list_book" => 2,
         "edition_loan" | "annotation" => 3,
         "reading_progress" => 4,
         _ => 5,
