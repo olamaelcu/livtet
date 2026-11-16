@@ -21,6 +21,21 @@ fn path_all_succeeds() {
 }
 
 #[test]
+fn path_data_names_the_build_profile() {
+    let bundle = if cfg!(debug_assertions) {
+        "net.olamaelcu.livtet.dev"
+    } else {
+        "net.olamaelcu.livtet"
+    };
+    cmd()
+        .args(["path", "data"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(env!("CARGO_TARGET_TMPDIR")))
+        .stdout(predicate::str::contains(bundle));
+}
+
+#[test]
 fn path_unknown_kind_fails() {
     cmd()
         .args(["path", "nope"])

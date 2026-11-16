@@ -3,16 +3,27 @@
 //! Centralised so every crate (CLI, plugin host, Tauri parent, FFI
 //! bridge) resolves the same paths for data, config, and logs.
 //!
-//! `BUNDLE_ID` is the OS keyring service identifier and the per-OS
-//! subdirectory under the user's data/config roots. The
-//! `*_with_migration` helpers also look at the v1 location
-//! (`livtet`) so existing installs keep working after the rename.
+//! `BUNDLE_ID` is the per-OS subdirectory under the user's data and
+//! config roots. Debug builds select the `.dev` variant, so the
+//! resolved path names the build kind (`.../net.olamaelcu.livtet.dev`
+//! vs `.../net.olamaelcu.livtet`). The selection is
+//! `cfg(debug_assertions)`: it follows the Cargo profile that
+//! compiled this crate, not a runtime flag, so `cargo run`,
+//! `cargo test`, and `tauri dev` are dev while `cargo build
+//! --release` and packaged builds are production.
 
 use camino::Utf8PathBuf;
 
-/// Reverse-DNS bundle id used as the OS keyring service name and as
-/// the per-OS subdirectory under the user's data/config roots.
+/// Reverse-DNS bundle id used as the per-OS subdirectory under the
+/// user's data and config roots. Debug builds use the `.dev` variant
+/// so development data cannot collide with an installed release and
+/// the path itself identifies the build kind.
+#[cfg(not(debug_assertions))]
 pub const BUNDLE_ID: &str = "net.olamaelcu.livtet";
+
+/// Debug-build variant; see the release definition above.
+#[cfg(debug_assertions)]
+pub const BUNDLE_ID: &str = "net.olamaelcu.livtet.dev";
 
 /// Subdirectory names appended under the data dir.
 pub mod subdirs {
